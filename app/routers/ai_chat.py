@@ -142,6 +142,41 @@ def _generate_with_ai_chat_model(
 
     return model.generate_content(full_prompt)
 
+
+def _extract_ai_text(response) -> tuple[str, bool]:
+    """Return (text, truncated) for a model response; raise when there is no text at all.
+
+    Thinking models spend max_output_tokens on private reasoning BEFORE they speak, so an
+    exhausted budget comes back as finish_reason=MAX_TOKENS carrying either no content parts
+    at all (touching `.text` then raises) or a sentence cut off mid-word. Neither is usable,
+    and — crucially — neither raises at the point of the call: the SDK reports the request as
+    a success. That is why this classification lives here, to be called INSIDE the retry loop,
+    instead of `.text` being read after it. Reading `.text` after the loop is what turned one
+    truncated candidate into a 500 for the whole turn, with the healthy fallback models never
+    tried.
+    """
+    finish_reason = ""
+    try:
+        first_candidate = (getattr(response, "candidates", None) or [None])[0]
+        raw_reason = getattr(first_candidate, "finish_reason", None)
+        finish_reason = str(getattr(raw_reason, "name", raw_reason) or "").upper()
+    except Exception:  # noqa: BLE001 — introspection must never mask a usable reply
+        finish_reason = ""
+    truncated = finish_reason in ("MAX_TOKENS", "2")
+
+    try:
+        text = (response.text or "").strip()
+    except Exception as exc:  # `.text` raises when the candidate carries no content parts
+        raise RuntimeError(
+            f"model returned no usable reply (finish_reason={finish_reason or 'unknown'})"
+        ) from exc
+    if not text:
+        raise RuntimeError(
+            f"model returned an empty reply (finish_reason={finish_reason or 'unknown'})"
+        )
+    return text, truncated
+
+
 class ChatSessionAttachment(BaseModel):
     id: Optional[str] = None
     name: str
@@ -762,10 +797,10 @@ def generate_ai_response(
         # valuable. The 25-40s latency came from the general-chat default (3.1-pro), a heavy
         # *thinking* model that deliberates before every reply. We default turns to 2.5-pro: a
         # strong reasoner (keeps the intelligent probing) but far lighter latency than 3.1-pro's
-        # extended thinking. Tune via env: RILONO_INTERVIEW_MODEL=gemini-2.5-flash for max speed,
-        # or =gemini-3.1-pro to fully restore the heaviest model. The one-time final REPORT
-        # (source "mock_interview_report") is NOT matched here, so its deep analysis stays on the
-        # smart default model, with latency hidden behind the report progress bar.
+        # extended thinking. Tune via env: RILONO_INTERVIEW_MODEL=gemini-2.5-flash for max speed.
+        # The one-time final REPORT (source "mock_interview_report") is NOT matched here, so its
+        # deep analysis stays on the smart default model, with latency hidden behind the report
+        # progress bar.
         normalized_chat_source = (source or "").strip().lower()
         is_interview_turn = normalized_chat_source in ("mock_interview", "visa_prep")
         interview_generation_config = None
@@ -773,11 +808,20 @@ def generate_ai_response(
             model_candidates = gemini_utils.get_model_candidates(
                 primary_env="RILONO_INTERVIEW_MODEL",
                 candidates_env="RILONO_INTERVIEW_MODEL_CANDIDATES",
-                defaults=["gemini-2.5-pro", "gemini-2.5-flash", "gemini-3.1-pro"],
+                # `gemini-3.1-pro` (bare) is NOT served by v1beta and 404s — see the warning in
+                # gemini_service.DEFAULT_GEMINI_MODEL. Only live ids belong in a candidate chain.
+                defaults=["gemini-2.5-pro", "gemini-2.5-flash", "gemini-3.1-pro-preview"],
             )
-            # Officer questions are short; prep coaching needs a little more room. Capping output
-            # both speeds up the turn and keeps responses clipped and interview-like.
-            _default_cap = "300" if normalized_chat_source == "mock_interview" else "520"
+            # max_output_tokens is NOT a length limit on what the officer SAYS — on these thinking
+            # models it also has to cover the private reasoning that happens before the reply, and
+            # that reasoning dominates. Measured on a real interview prompt: ~600-1750 thinking
+            # tokens against 10-224 spoken ones. The old 300/520 caps were sized for the spoken
+            # half alone, so every model burned the whole budget thinking and returned MAX_TOKENS
+            # with an empty or half-finished sentence — 2.5-pro returned no text at all, which made
+            # `.text` raise and 500 the turn. Brevity is enforced by the system prompt, not by this
+            # number, so it only needs to be big enough to never truncate: 4096 leaves >2x headroom
+            # over the worst observed turn. Do not lower it without re-measuring thinking usage.
+            _default_cap = "4096"
             interview_generation_config = {
                 "max_output_tokens": int(os.getenv("RILONO_INTERVIEW_MAX_TOKENS", _default_cap) or _default_cap),
                 "temperature": 0.85,
@@ -849,24 +893,41 @@ Please provide a helpful response to the user's question:"""
         )
 
         response = None
+        response_text = None
+        used_model_name = None
+        # A truncated reply is kept aside rather than returned: we try the remaining candidates
+        # first, and fall back to it only if EVERY model truncates — so this degrades to partial
+        # text in the worst case, never to an error page.
+        partial = None
         last_model_error = None
         for model_name in model_candidates:
             try:
                 model = _build_ai_chat_model(provider, model_name, generation_config=interview_generation_config)
-                response = _generate_with_ai_chat_model(
+                candidate_response = _generate_with_ai_chat_model(
                     model=model,
                     provider=provider,
                     full_prompt=full_prompt,
                     inline_session_attachment_parts=inline_session_attachment_parts,
                 )
+                text, truncated = _extract_ai_text(candidate_response)
+                if truncated:
+                    if partial is None:
+                        partial = (candidate_response, text, model_name)
+                    raise RuntimeError("reply hit max_output_tokens and was cut off")
+                response, response_text, used_model_name = candidate_response, text, model_name
                 break
             except Exception as model_error:  # noqa: BLE001
                 last_model_error = model_error
                 print(f"Rilono AI model attempt failed [{model_name}] provider={provider}: {str(model_error)}")
 
+        if response is None and partial is not None:
+            response, response_text, used_model_name = partial
+            print(f"Rilono AI: every candidate truncated; returning partial reply from {used_model_name}")
+
         if response is None:
             raise RuntimeError(f"All configured Rilono AI chat models failed: {str(last_model_error)}")
 
+        model_name = used_model_name
         try:
             # Attribute Copilot (Chrome extension) chats to their own usage source so the
             # admin AI-cost analytics can break out extension spend from website chat.
@@ -880,7 +941,7 @@ Please provide a helpful response to the user's question:"""
             pass
 
         # Privacy: do not log the AI response content.
-        return sanitize_ai_response_for_public_display(response.text)
+        return sanitize_ai_response_for_public_display(response_text)
         
     except Exception as e:
         print(f"Error generating AI response: {str(e)}")
