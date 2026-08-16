@@ -359,8 +359,12 @@ def _process_single_user(user_id: int, model: Any, model_name: str, r2_client) -
             return False
 
         jc = _journey_context(user)
-        subject = (decision.email_subject or f"Action needed for your {jc['country_name']} study-abroad plan").strip()[:140]
-        in_app_message = (decision.in_app_message or subject).strip()[:180]
+        # User-visible AI text — same provider-identity scrub as every chat surface.
+        from app.ai_guardrails import sanitize_provider_disclosures
+        subject = sanitize_provider_disclosures(
+            decision.email_subject or f"Action needed for your {jc['country_name']} study-abroad plan"
+        ).strip()[:140]
+        in_app_message = sanitize_provider_disclosures(decision.in_app_message or subject).strip()[:180]
         if not in_app_message:
             in_app_message = f"New action item in your {jc['country_name']} study-abroad journey."
 
@@ -380,7 +384,7 @@ def _process_single_user(user_id: int, model: Any, model_name: str, r2_client) -
                 email=user.email,
                 full_name=user.full_name,
                 subject=subject,
-                html_body=decision.email_body,
+                html_body=sanitize_provider_disclosures(decision.email_body),
                 unsubscribe_url=unsubscribe_url,
             )
 

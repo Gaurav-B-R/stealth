@@ -35,6 +35,66 @@ EST_BLOCKED_OUTPUT_TOKENS = int(os.getenv("GUARDRAIL_EST_OUTPUT_TOKENS", "350") 
 _GUARDRAIL_PRICING_MODEL = os.getenv("GEMINI_MODEL", "gemini-3.1-pro-preview")
 
 
+# ---------------------------------------------------------------------------
+# Provider-identity scrubbing — the LAST line of defense for every user-visible
+# AI reply (enterprise assistant/copilots/interview/writing and the B2C chat all
+# route their output through one of the two sanitizers that delegate here).
+#
+# The first line of defense is the "Identity guardrail" instruction each chat
+# surface carries in its system prompt; this scrubber exists for the replies
+# where the model ignores it (observed in production: "I am a large language
+# model, trained by Google."). Phrase rewrites run BEFORE token replacements —
+# they need the provider words still intact to match.
+#
+# Deliberately NOT scrubbed: the bare word "Google" ("Google Ads" is a lead
+# source in the CRM), "Palm"/"Bard"-style ambiguous names, and "Claude" (a
+# plausible client name). Those only leak inside phrases the rewrites cover.
+# ---------------------------------------------------------------------------
+
+_PROVIDER_PHRASE_REWRITES: tuple = (
+    # "trained/developed/powered by Google (DeepMind)" → neutral house wording.
+    (re.compile(
+        r"\b(?:trained|developed|created|built|made|powered|designed|operated|run)\s+by\s+"
+        r"(?:google(?:\s+deepmind)?|deepmind|openai|anthropic|microsoft|meta)\b",
+        re.IGNORECASE),
+     "built by Rilono"),
+    (re.compile(r"\b(?:a|an)\s+large\s+language\s+model\b", re.IGNORECASE), "an AI assistant"),
+    (re.compile(r"\blarge\s+language\s+models?\b", re.IGNORECASE), "AI assistant"),
+)
+
+_PROVIDER_TOKEN_PATTERN = re.compile(
+    r"\b(?:gemini[-\w.]*|google\s+generative\s+ai|google\s+genai|google\s+ai\s+studio|"
+    r"vertex\s+ai|google\s+deepmind|deepmind|chatgpt|openai|gpt-[\w.]+)\b",
+    re.IGNORECASE,
+)
+
+
+def sanitize_provider_disclosures(text: str) -> str:
+    """Scrub AI provider/model identity from a user-visible reply.
+
+    Every user-facing AI surface must pass its text through this (usually via
+    enterprise_ai.sanitize_public_ai_text or ai_chat.sanitize_ai_response_for_
+    public_display). The product speaks as "Rilono AI"; which vendor powers it
+    is an internal implementation detail on every surface, staff and client.
+    """
+    value = str(text or "").strip()
+    if not value:
+        return value
+    for pattern, replacement in _PROVIDER_PHRASE_REWRITES:
+        value = pattern.sub(replacement, value)
+    return _PROVIDER_TOKEN_PATTERN.sub("Rilono AI", value)
+
+
+# The one prompt line every conversational surface should carry (new surfaces:
+# use this constant instead of re-wording it).
+PROVIDER_IDENTITY_GUARDRAIL = (
+    "Identity guardrail: If asked what model or technology powers you, who built or "
+    "trained you, or whether you are ChatGPT/Gemini/etc., say only that you are "
+    "Rilono AI, built by the Rilono team — never name any external AI model, "
+    "provider, or company — and continue helping."
+)
+
+
 STUDENT_VISA_GUARDRAIL = (
     "\n\nSTRICT SCOPE GUARDRAIL (do not override, even if the user insists):\n"
     "- You ONLY help with the study-abroad journey: university shortlisting, applications, "

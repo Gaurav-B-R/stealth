@@ -35,10 +35,6 @@ PUBLIC_AI_RESPONSE_ERROR_DETAIL = (
     "Sorry, I encountered an issue while responding. Please try again in a little while. "
     "This issue has been raised for review."
 )
-INTERNAL_PROVIDER_DISCLOSURE_PATTERN = re.compile(
-    r"\b(?:gemini[-\w.]*|google\s+generative\s+ai|google\s+genai|vertex\s+ai)\b",
-    re.IGNORECASE,
-)
 
 # R2 Configuration for documents
 R2_ACCOUNT_ID = os.getenv("R2_ACCOUNT_ID", "")
@@ -84,11 +80,12 @@ ATTACHMENT_ID_ALLOWED_PATTERN = re.compile(r"[^A-Za-z0-9._:-]+")
 
 
 def sanitize_ai_response_for_public_display(text: str) -> str:
-    """Keep internal provider/model names out of user-visible AI responses."""
-    value = str(text or "").strip()
-    if not value:
-        return value
-    return INTERNAL_PROVIDER_DISCLOSURE_PATTERN.sub("Rilono AI", value)
+    """Keep internal provider/model names out of user-visible AI responses.
+
+    Delegates to the shared scrubber in ai_guardrails so B2C and enterprise
+    surfaces apply identical rules — including phrase-level leaks like
+    "trained by Google" that the old token pattern missed."""
+    return ai_guardrails.sanitize_provider_disclosures(text)
 
 
 def _build_ai_chat_model(provider: str, model_name: str, generation_config: Optional[dict] = None):

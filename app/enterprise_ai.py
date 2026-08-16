@@ -51,10 +51,6 @@ MAX_TOOL_ROUNDS = max(1, int(os.getenv("ENTERPRISE_AI_MAX_TOOL_ROUNDS", "6") or 
 # than trusting each tool to bound itself.
 TOOL_RESULT_CHAR_CAP = max(2_000, int(os.getenv("ENTERPRISE_AI_TOOL_RESULT_CHARS", "14000") or "14000"))
 
-INTERNAL_PROVIDER_DISCLOSURE_PATTERN = re.compile(
-    r"\b(?:gemini[-\w.]*|google\s+generative\s+ai|google\s+genai|vertex\s+ai)\b",
-    re.IGNORECASE,
-)
 
 
 # ---------------------------------------------------------------------------
@@ -68,11 +64,14 @@ def is_ai_configured() -> bool:
 
 
 def sanitize_public_ai_text(text: str) -> str:
-    """Keep internal provider/model names out of user-visible assistant text."""
-    value = str(text or "").strip()
-    if not value:
-        return value
-    return INTERNAL_PROVIDER_DISCLOSURE_PATTERN.sub("Rilono AI", value)
+    """Keep internal provider/model names out of user-visible assistant text.
+
+    Delegates to the shared scrubber so every surface (this assistant, the
+    extension copilots, interviews, Writing Studio, Deep Scan, B2C chat) applies
+    the same rules — including phrase-level leaks like "trained by Google".
+    """
+    from app import ai_guardrails
+    return ai_guardrails.sanitize_provider_disclosures(text)
 
 
 # The assistant deliberately does NOT inherit the app-wide gemini-3.1-pro default.
@@ -904,6 +903,63 @@ def build_org_tools(db: Session, organization_id: int, ctx=None, viewer_user_id=
             "created_at": _iso(r.created_at),
         } for r in rows]}
 
+    def get_product_help(topic: Optional[str] = None) -> dict:
+        """Explain how to USE the Rilono portal itself — the product help guide.
+        Call this for ANY 'how do I…', 'where is…', 'what does X cost', 'can my
+        teammate…', 'why can't I…' question about Rilono's screens, features,
+        permissions, plans or billing, then answer from the returned guide, naming
+        the exact screens and buttons it names. Call with no topic (or an unknown
+        one) to get the list of available topic keys; call again with the closest
+        topic key to get that topic's full guide."""
+        from app import enterprise_help
+        entry = enterprise_help.render_topic(topic) if topic else None
+        if entry is None:
+            return {
+                "note": ("Pick the closest topic and call get_product_help again with "
+                         "its key."),
+                "topics": enterprise_help.topics_index(),
+            }
+        return entry
+
+    def get_my_access() -> dict:
+        """Get the signed-in user's OWN access: their role, which client records they
+        can see (data scope), their offices, and exactly which permissions they hold
+        or lack — including per-member 'Allow'/'Block' overrides on top of the role.
+        REQUIRED before answering any 'can I do X' / 'am I able to' / 'why can't I
+        see Y' question, and before any how-to that needs a specific permission:
+        answer from this data for THIS user, never generically. If they lack the
+        permission, say which one by name and that an admin can grant it via
+        Team → member ⋯ → Edit access. (Members can also see this themselves under
+        Team → "My access".)"""
+        if ctx is None:
+            return {"error": "Access details aren't available in this context."}
+        # Registry order, not alphabetical — matches the matrix the user sees.
+        ordered = [c["key"] for c in access.ALL_CAPABILITIES]
+        held = [k for k in ordered if ctx.has(k)]
+        missing = [k for k in ordered if not ctx.has(k)]
+        offices = []
+        if ctx.branch_ids:
+            offices = [name for (name,) in
+                       db.query(models.EnterpriseBranch.name).filter(
+                           models.EnterpriseBranch.organization_id == org_id,
+                           models.EnterpriseBranch.id.in_(ctx.branch_ids)).all()]
+        return {
+            "role": ctx.role_label,
+            "is_owner": bool(ctx.is_owner),
+            "data_scope": ctx.scope_label,
+            "data_scope_meaning": access.scope_desc(ctx.scope_kind),
+            "offices": offices,
+            "permissions_held": [access.label_for(k) for k in held],
+            "permissions_not_held": [
+                {"permission": access.label_for(k), "grants": access.capability_detail(k)}
+                for k in missing
+            ],
+            "extra_grants_beyond_role": [access.label_for(k) for k in ordered
+                                         if k in ctx.granted_capabilities],
+            "blocked_for_this_member": [access.label_for(k) for k in ordered
+                                        if k in ctx.denied_capabilities],
+        }
+
     def list_support_requests(limit: int = 15) -> dict:
         """List the help and feature requests this workspace has raised with Rilono support —
         subject, type, status (open / in progress / closed) and when it was raised."""
@@ -1406,6 +1462,11 @@ def build_org_tools(db: Session, organization_id: int, ctx=None, viewer_user_id=
         list_recent_activity,
         get_team_workload,
         list_upcoming_calendar_events,
+        # Deliberately ungated: the help guide is product documentation (no org data),
+        # and get_my_access only ever describes the CALLER's own access — the one thing
+        # every member may always see (Team → "My access" has no capability gate either).
+        get_product_help,
+        get_my_access,
     ]
     if ctx is None or ctx.has("documents.view"):
         tools.append(list_client_documents)
@@ -1460,6 +1521,12 @@ def build_org_tools(db: Session, organization_id: int, ctx=None, viewer_user_id=
 # System instruction + chat runner
 # ---------------------------------------------------------------------------
 
+def _identity_guardrail_line() -> str:
+    """The shared identity line (lazy import keeps module import light)."""
+    from app import ai_guardrails
+    return ai_guardrails.PROVIDER_IDENTITY_GUARDRAIL
+
+
 def _system_instruction(organization_name: str, user_name: str, role: str) -> str:
     today = datetime.utcnow().strftime("%A, %d %B %Y")
     stages = "\n".join(
@@ -1467,6 +1534,32 @@ def _system_instruction(organization_name: str, user_name: str, role: str) -> st
         for title, keys in _STAGE_PHASES
     )
     countries = ", ".join(c["name"] for c in catalog.COUNTRIES)
+    # Product-help topic keys, listed so the model knows what it can look up. Built
+    # per turn from the live guide (cheap: a stat + cached parse), so a new topic is
+    # offered the moment the guide file ships it.
+    try:
+        from app import enterprise_help
+        help_topics = enterprise_help.topics_overview_block()
+    except Exception:
+        logger.warning("Enterprise help topics unavailable", exc_info=True)
+        help_topics = ""
+    help_section = (
+        "You are ALSO the product help desk for the Rilono Enterprise portal itself. For any "
+        "question about HOW TO USE Rilono — 'how do I…', 'where do I find…', 'what does X "
+        "cost', 'what can my teammate see', 'why can't I do Y' — call get_product_help with "
+        "the closest of these topics and answer from the returned guide, quoting the exact "
+        "screen and button names it gives:\n"
+        f"{help_topics}\n"
+        "The guide is authoritative and current — trust it over your general knowledge. For "
+        "any 'can I…', 'am I able to…', 'why can't I…' question, and any how-to that needs a "
+        "specific permission, you MUST also call get_my_access and answer for THIS user "
+        "specifically — never guess or answer generically about what they can do. Lead with "
+        "the plain answer for them ('Yes, you can — you hold X' / 'Not with your current "
+        "access — you'd need X'), then give the steps; if they lack the permission, name it "
+        "and tell them an admin can grant it (Team → member ⋯ → Edit access). Combine help "
+        "answers with live workspace data where it helps (e.g. their plan, seat usage or "
+        "credit balance from the other tools).\n\n"
+    ) if help_topics else ""
     return (
         f"You are the Rilono AI Assistant inside the Rilono Enterprise portal for "
         f"the study-abroad consultancy \"{organization_name}\". You are helping {user_name} "
@@ -1497,6 +1590,7 @@ def _system_instruction(organization_name: str, user_name: str, role: str) -> st
         "reported as the admit count. 'on_hold' is a pause — the case keeps whatever "
         "stage it was paused at.\n"
         f"This consultancy handles study-abroad cases (STUDENT visas) for these destinations only: {countries}.\n\n"
+        f"{help_section}"
         "How to answer:\n"
         "- Be genuinely helpful and informative — give a complete, useful answer, never a bare one-liner. "
         "When the data supports it, write a few sentences or a short structured list rather than a single "
@@ -1527,13 +1621,15 @@ def _system_instruction(organization_name: str, user_name: str, role: str) -> st
         "point to the exact screen (e.g. 'open the client and use Send email', or '+ Add Client').\n"
         "- Never reveal data about any other organization; you only have access to this one.\n"
         "- Do not output raw JSON or tool names; answer in clean, friendly natural language.\n"
+        f"- {_identity_guardrail_line()}\n"
         "\n"
         "Scope — there are THREE cases, and only the third is a refusal:\n"
         "1. You have a tool for it → use the tool and answer properly.\n"
         "2. It is about this workspace, this consultancy's work, study-abroad casework (university "
         "shortlisting, applications, SOPs, finances, student visas), or the Rilono "
         "product, but NO tool covers it (or a permission puts it out of your reach) → do NOT "
-        "refuse. Say plainly that you can't see that here and name the screen that has it "
+        "refuse. (Remember: questions about how to USE Rilono are always covered — answer them "
+        "via get_product_help, never with a redirect.) Say plainly that you can't see that here and name the screen that has it "
         "(Course Finder, Finance, Credits & Billing, Team, Calendar, Help & Support), then offer "
         "what you CAN answer. Treat this as the default whenever a question is even loosely about "
         "the business — a legitimate question answered with a refusal is a worse failure than a "
