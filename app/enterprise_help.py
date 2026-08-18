@@ -129,6 +129,7 @@ def _record_scopes_block() -> str:
 def _plans_block() -> str:
     """Current plans with live limits and prices (env overrides included)."""
     billing = _billing_mod()
+    from app import money as money_mod
     lines: list[str] = []
     for key in billing.PLAN_ORDER:
         plan = billing.PLANS.get(key) or {}
@@ -138,13 +139,26 @@ def _plans_block() -> str:
                 price_paise = billing.plan_amount_paise(key)
             except Exception:
                 price_paise = 0
-        price = "Free" if not price_paise else f"₹{int(price_paise) / 100:,.0f}/month + GST"
+        # INR anchor price. The KB renders identically for every org (see the module
+        # rule), so it quotes the INR list price rather than any per-org currency; the
+        # ladder note below covers the rest.
+        price = (
+            "Free" if not price_paise
+            else f"{money_mod.format_money(price_paise, 'INR')}/month + GST"
+        )
         recur = "every month" if plan.get("credits_recur") else "one-time"
         lines.append(
             f"- **{plan.get('label', key)}** (`{key}`) — {price}. "
             f"{plan.get('max_seats')} team seats, up to {plan.get('max_clients')} active clients, "
             f"{plan.get('included_credits'):,} AI credits ({recur}). {plan.get('tagline', '')}"
         )
+    other_codes = [c for c in money_mod.supported_charge_currencies() if c != "INR"]
+    lines.append(
+        "Paid plans can also be billed in " + ", ".join(other_codes) + " at fixed "
+        "per-currency prices (pick the billing currency on the Plans & Billing screen "
+        "at checkout). GST applies only to INR billing; other currencies are zero-rated "
+        "exports with no tax line."
+    )
     lines.append(
         f"Plans renew every {billing.PLAN_PERIOD_DAYS} days with a {billing.PLAN_GRACE_DAYS}-day "
         "grace period. Managed under Credits & Billing by anyone with the \"Plans & subscription\" "

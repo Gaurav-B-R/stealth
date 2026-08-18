@@ -139,7 +139,7 @@ The subscription plans, what every AI action costs in credits, free allowances, 
 **Plans** (managed under **Plans & Billing**; needs the "Plans & subscription" permission to change):
 {{PLANS}}
 
-Plans are billed monthly in INR (18% GST added at checkout, payments via Razorpay). A new workspace starts on the 14-day sandbox; when it ends, everything already in the workspace stays readable — you just can't add clients or seats until a plan is chosen. If a paid plan isn't renewed within 3 days of its period ending, the workspace drops to sandbox limits (data is never deleted). Renewal is a manual re-purchase unless auto-renewal is on ("Turn off auto-renewal" on the Current plan card).
+Plans are billed monthly via Razorpay, in your choice of INR, USD, GBP, EUR, CAD, AUD, AED or SGD at fixed per-currency prices (18% GST is added at checkout for INR only; other currencies are billed tax-free as zero-rated exports). A new workspace starts on the 14-day sandbox; when it ends, everything already in the workspace stays readable — you just can't add clients or seats until a plan is chosen. If a paid plan isn't renewed within 3 days of its period ending, the workspace drops to sandbox limits (data is never deleted). Renewal is a manual re-purchase unless auto-renewal is on ("Turn off auto-renewal" on the Current plan card).
 
 **Credits** (the **Credits** screen, title "Credits & Billing"): Rilono Credits are the wallet that pays for AI actions. The wallet card shows the balance; **"Top up credits"** buys a pack. Plan credits arrive monthly with the subscription (sandbox credits are one-time); unspent PLAN credits expire when the period rolls over, while PURCHASED credits never expire.
 

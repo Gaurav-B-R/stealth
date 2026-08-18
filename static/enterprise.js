@@ -27,6 +27,10 @@
     // Monthly-only since 2026-08-02 (no annual tier is sold); kept so the /billing
     // request body stays shaped the way the server expects.
     billingCycle: "monthly",
+    // The billing currency picked on Plans & Billing. Stays null until a payload that
+    // actually offers a choice arrives (price_options / charge_currencies), so an old
+    // server keeps today's INR-shaped behaviour: no selector, no `currency` hint sent.
+    billingCurrency: null,
     activeClient: null,
     cal: null,
   };
@@ -1919,9 +1923,16 @@
     const left = Number(s.trial_days_left);
     // Only the last stretch, so the banner still reads as information rather than nagging.
     if (!Number.isFinite(left) || left > 7) return "";
+    // Quote the entry price from real plan data in the shown billing currency once the
+    // billing payload has been loaded; the hardcoded INR figure is only the fallback for
+    // a session that never opened Plans & Billing. "+ GST" exists only in INR — every
+    // other charge currency is a zero-rated export, so the listed price is the charge.
+    const start = billingStartPrice();
     return `<div class="trial-banner trial-banner-warn">
       <span><b>${left === 0 ? "Your sandbox ends today." : `${left} day${left === 1 ? "" : "s"} left in your sandbox.`}</b>
-      Plans start at ₹2,999/month + GST and include 1,000 AI credits a month.</span>
+      ${start
+        ? `Plans start at ${esc(start.display)}/month${start.currency === "INR" ? " + GST" : ""} and include ${start.credits ? start.credits.toLocaleString() : "1,000"} AI credits${start.recur ? " a month" : ""}.`
+        : "Plans start at ₹2,999/month + GST and include 1,000 AI credits a month."}</span>
       <button type="button" class="btn btn-sm btn-primary" onclick="__ent.go('billing')">See plans</button>
     </div>`;
   }
@@ -7070,7 +7081,8 @@
       const targetFields = `
         ${shortlistPicker}
         <label class="ws-lbl">Target university${isLor ? " (optional)" : ""}
-          <input class="ws-in" id="wsUniversity" value="${esc(ws.form.university)}" placeholder="e.g. University of Toronto" maxlength="200">
+          <input class="ws-in" id="wsUniversity" value="${esc(ws.form.university)}" placeholder="e.g. University of Toronto" maxlength="200" autocomplete="off">
+          <div id="wsUniSuggest" class="uni-suggest" style="display:none"></div>
         </label>
         <label class="ws-lbl">Program${isLor ? " (optional)" : ""}
           <input class="ws-in" id="wsProgram" value="${esc(ws.form.program)}" placeholder="e.g. MSc Computer Science" maxlength="200">
@@ -7254,6 +7266,46 @@
       wireWriting();
     }
 
+    /* Same registry+catalog typeahead as the Universities tab's manual-add box, scoped to
+       the client's destination country. Suggestions assist — free text stays valid, since
+       a legitimate target university may not be in the catalog yet. */
+    function wireWsUniAutocomplete(wrap, gen) {
+      const input = $("#wsUniversity", wrap);
+      const box = $("#wsUniSuggest", wrap);
+      if (!input || !box) return;
+      let timer = null;
+      const hide = () => { box.style.display = "none"; box.innerHTML = ""; };
+      input.addEventListener("input", () => {
+        const q = input.value.trim();
+        if (timer) clearTimeout(timer);
+        if (q.length < 2) return hide();
+        timer = setTimeout(async () => {
+          try {
+            const r = await api(`/clients/${cl.id}/universities/search?q=${encodeURIComponent(q)}`);
+            const results = r.results || [];
+            // Answers can land out of order (or after the box emptied) — only paint if
+            // this reply still matches what's in the input.
+            if (input.value.trim() !== q) return;
+            if (!results.length) return hide();
+            box.innerHTML = results.map((u) =>
+              `<button type="button" class="uni-sugg" data-name="${esc(u.name)}">${esc(u.name)}${u.location ? `<span>${esc(u.location)}</span>` : ""}</button>`).join("");
+            box.style.display = "block";
+            box.querySelectorAll(".uni-sugg").forEach((b) => {
+              b.onclick = () => {
+                input.value = b.dataset.name; hide();
+                // Assigning .value fires no input event — sync the form state and the
+                // Generate button's validity by hand (same idiom as the shortlist picker).
+                wsField("university", input.value);
+                if (gen && gen._syncValid) gen._syncValid();
+                const p = $("#wsProgram", wrap); if (p && !p.value) p.focus();
+              };
+            });
+          } catch (e) { hide(); }
+        }, 220);
+      });
+      input.addEventListener("blur", () => setTimeout(hide, 180));
+    }
+
     function wireWriting() {
       const wrap = $("#wsWrap");
       if (!wrap) return;
@@ -7309,6 +7361,7 @@
           : ((ws.form.university || "").trim() !== "" || (ws.form.program || "").trim() !== "");
       }, ws.docType === "lor" ? "Add the recommender's name first" : "Add the target university or program first");
       if (gen) gen.onclick = generateWritingNow;
+      wireWsUniAutocomplete(wrap, gen);
       const close = $("#wsComposerClose", wrap);
       if (close) close.onclick = () => { ws.composerOpen = false; drawWriting(); };
       const newBtn = $("#wsNewBtn", wrap);
@@ -9784,6 +9837,55 @@
   /* ============================================================
      BILLING
      ============================================================ */
+  // The price ladder the server published for a plan: `price_options` carries one
+  // owner-set EX-TAX price per launch currency, each with the server's own rendering of
+  // it — never an FX conversion. pkgOptions()-style fallback: a payload without a ladder
+  // (older server) still yields one option in the currency the plan was quoted in, so
+  // everything downstream keeps working unchanged.
+  function planOptions(p) {
+    const opts = ((p || {}).price_options || []).filter((o) => o && o.currency);
+    if (opts.length) return opts;
+    return [{
+      currency: (p || {}).currency || "INR",
+      amount_minor: Number((p || {}).monthly_paise || 0),
+      display: (p || {}).monthly_display || fmtMoney((p || {}).monthly_paise, (p || {}).currency || "INR"),
+    }];
+  }
+  // The option actually shown on a plan card: the selected billing currency's price,
+  // falling back to the plan's own quoted currency when there is no selection (old
+  // payload) or the plan has no price in that currency.
+  function planOption(p) {
+    const opts = planOptions(p);
+    return opts.find((o) => o.currency === state.billingCurrency) || opts[0];
+  }
+  // The `currency` hint for /billing/checkout and /coupons/validate. Same rule as the
+  // credit top-up flow (see creditCheckoutProceed): send the currency of the price the
+  // buyer was actually SHOWN for this plan — which planOption() may have fallen back
+  // from — and no hint at all on an old payload that never offered a choice. The server
+  // re-prices from its own book either way; the hint only picks which quote.
+  function billingCurrencyHint(planKey) {
+    if (!state.billingCurrency) return undefined;
+    const p = (state.billingPlans || []).find((x) => x.key === planKey);
+    return p ? planOption(p).currency : state.billingCurrency;
+  }
+  // Cheapest paid plan in the shown billing currency — feeds the sandbox banner's
+  // "Plans start at …" line once billing data has been loaded. Null until then.
+  function billingStartPrice() {
+    let best = null, bestPlan = null;
+    (state.billingPlans || []).forEach((p) => {
+      if (p.is_free || !(Number(p.monthly_paise) > 0)) return;
+      const o = planOption(p);
+      if (!best || Number(o.amount_minor) < Number(best.amount_minor)) { best = o; bestPlan = p; }
+    });
+    if (!best) return null;
+    return {
+      display: best.display || fmtMoney(best.amount_minor, best.currency),
+      currency: best.currency,
+      credits: Number(bestPlan.included_credits || 0),
+      recur: !!bestPlan.credits_recur,
+    };
+  }
+
   async function renderBilling() {
     const c = $("#content");
     c.innerHTML = '<div class="center-load"><div class="spinner dark"></div></div>';
@@ -9797,26 +9899,78 @@
     const cap = (v) => (v === -1 || v == null ? "∞" : Number(v).toLocaleString());
     state.billingCoupon = state.billingCoupon || null;
     state.billingPlans = d.plans || [];
+    // The live INR GST rate from the server; 18 only as the old-payload fallback.
+    state.billingGstPercent = Number(d.gst_percent) || 18;
     const bCoupon = state.billingCoupon;
 
-    // Prices are quoted EX-GST ("₹2,999/month + GST"), so the card shows the subtotal and
+    // ---- Billing currency (plan-grid analogue of the credit top-up selector) ----
+    // A currency is offered only when EVERY plan that carries a ladder prices it, so the
+    // whole grid re-quotes together; `charge_currencies` covers a payload with no
+    // ladders. An old server sends neither: the selector never renders, billingCurrency
+    // resets to null, and every plan falls back to its own quoted currency (INR, today's
+    // behaviour).
+    const ladders = (d.plans || [])
+      .map((p) => (p.price_options || []).map((o) => o.currency))
+      .filter((l) => l.length);
+    const currencies = ladders.length
+      ? ladders.reduce((acc, l) => acc.filter((cc) => l.indexOf(cc) !== -1))
+      : (d.charge_currencies || []);
+    if (!currencies.length) state.billingCurrency = null;
+    else if (!state.billingCurrency || currencies.indexOf(state.billingCurrency) === -1) {
+      // Default = the org's server-resolved billing currency; a pick made earlier in the
+      // session survives re-renders for as long as it is still on offer.
+      state.billingCurrency = currencies.indexOf(d.currency) !== -1 ? d.currency : currencies[0];
+    }
+    // What the grid is actually quoting in — drives the GST footnote below. GST exists
+    // only in INR; every other launch currency is a zero-rated export, so the listed
+    // price IS the charged price and no "+ GST" may appear.
+    const shownCur = state.billingCurrency || ((d.plans || [])[0] || {}).currency || "INR";
+
+    // Prices are quoted EX-tax ("₹2,999/month + GST"), so the card shows the subtotal and
     // names the tax rather than folding it in. The charged total is spelled out underneath
-    // so nobody meets it for the first time inside the Razorpay modal.
+    // so nobody meets it for the first time inside the Razorpay modal. Everything renders
+    // from the option planOption() resolved for the selected billing currency.
     const planPriceBlock = (p) => {
       if (p.is_free) return `<div class="price">${esc(p.monthly_display)}<small>/mo</small></div>
         <div class="price-off" style="color:var(--text-2)">${esc(p.price_note)}</div>`;
-      const taxLine = p.tax_minor
-        ? `<div class="price-tax">+ ${esc(p.tax_label || "tax")} · ${esc(p.total_display)}/mo charged</div>` : "";
+      const opt = planOption(p);
+      const cur = opt.currency;
+      const base = Number(opt.amount_minor || 0);
+      // Tax is INR-only. `p.tax_percent` is the rate for the currency the SERVER quoted
+      // the plan in — 0 whenever that wasn't INR — so an INR selection over a
+      // foreign-quoted payload uses the payload's own gst_percent. Preview only: the
+      // server re-derives the real figure from its own book at checkout.
+      const taxPct = cur === "INR" ? (Number(p.tax_percent) || state.billingGstPercent || 18) : 0;
+      // Prefer the server's own display strings whenever the shown currency is the one it
+      // quoted in, so client and server never render the same amount two different ways.
+      const listDisplay = cur === p.currency && p.monthly_display
+        ? p.monthly_display : (opt.display || fmtMoney(base, cur));
+      const chargedDisplay = (sub) => (cur === p.currency && !bCoupon && p.total_display
+        ? p.total_display : fmtMoney(sub + Math.round(sub * taxPct / 100), cur));
+      const taxLine = (sub) => (taxPct
+        ? `<div class="price-tax">+ ${esc(p.tax_label || "GST")} · ${esc(chargedDisplay(sub))}/mo charged</div>` : "");
       // `taxLine` already names the tax AND the charged total, so a separate "+ GST" note
       // above it would say the same thing twice.
-      if (!bCoupon) return `<div class="price">${esc(p.monthly_display)}<small>/mo</small></div>${taxLine}`;
+      if (!bCoupon) return `<div class="price">${esc(listDisplay)}<small>/mo</small></div>${taxLine(base)}`;
       // Discount applies to the ex-tax subtotal — same order as the server's
       // checkout_quote(), so the preview here and the order there always agree.
-      const sub2 = Math.max(0, Math.round(p.monthly_paise * (100 - bCoupon.percent) / 100));
-      const tax2 = Math.round(sub2 * (p.tax_percent || 0) / 100);
-      return `<div class="price">${fmtMoney(sub2, p.currency || "INR")}<small>/mo</small><span class="price-was">${esc(p.monthly_display)}</span></div>
+      const sub2 = Math.max(0, Math.round(base * (100 - bCoupon.percent) / 100));
+      return `<div class="price">${fmtMoney(sub2, cur)}<small>/mo</small><span class="price-was">${esc(listDisplay)}</span></div>
         <div class="price-off">${esc(bCoupon.percent_display)} off applied</div>
-        ${p.tax_percent ? `<div class="price-tax">+ ${esc(p.tax_label)} · ${esc(fmtMoney(sub2 + tax2, p.currency || "INR"))}/mo charged</div>` : ""}`;
+        ${taxLine(sub2)}`;
+    };
+
+    // "USD · from $39/mo" option labels for the selector — the cheapest paid plan's
+    // server-rendered price in that currency, mirroring the credit checkout's
+    // "USD · $49" style. Ex-tax by design, like every listed price on this page.
+    const fromIn = (cc) => {
+      let best = null;
+      (d.plans || []).forEach((p) => {
+        if (p.is_free) return;
+        const o = planOptions(p).find((x) => x.currency === cc);
+        if (o && (!best || Number(o.amount_minor) < Number(best.amount_minor))) best = o;
+      });
+      return best ? (best.display || fmtMoney(best.amount_minor, cc)) : null;
     };
 
     const planCard = (p) => {
@@ -9881,11 +10035,20 @@
         <div style="font-size:13px;color:var(--text-2);margin-top:4px">Everything in your workspace is intact and readable. Choose a plan below to start adding clients and team members again.</div>
       </div></div>` : "")}
       ${canManage && d.plans.length ? couponRow(bCoupon, "applyBillingCoupon", "removeBillingCoupon", "billingCouponInput", "plans") : ""}
+      ${currencies.length > 1 && d.plans.some((p) => !p.is_free) ? `<div class="field" style="max-width:280px;margin:0 auto 16px">
+        <label for="billingCurrencySel">Billing currency</label>
+        <select id="billingCurrencySel">${currencies.map((cc) => {
+          const from = fromIn(cc);
+          return `<option value="${esc(cc)}"${cc === state.billingCurrency ? " selected" : ""}>${esc(cc)}${from ? ` · from ${esc(from)}/mo` : ""}</option>`;
+        }).join("")}</select>
+      </div>` : ""}
       <div class="plan-grid">${d.plans.map(planCard).join("")}</div>
       ${!d.plans.length ? "" : `<p style="text-align:center;color:var(--muted);font-size:13px;margin-top:18px">
-        Prices are per month and exclusive of GST. Secure payments via Razorpay. Cancel anytime.<br>
+        Prices are per month${shownCur === "INR" ? " and exclusive of GST" : ""}. Secure payments via Razorpay. Cancel anytime.<br>
         Your plan's AI credits refresh each billing period; unused credits from the allowance don't carry over. Need more? Top up any time in <a href="#" onclick="__ent.go('credits');return false">Credits</a>.
       </p>`}`;
+    const curSel = $("#billingCurrencySel");
+    if (curSel) curSel.onchange = () => { state.billingCurrency = curSel.value; renderBilling(); };
   }
 
   async function cancelPlanRenewal(el) {
@@ -9919,7 +10082,10 @@
     await withBusy($("#billingCouponInputApply"), "", async () => {
       let res;
       try {
-        res = await api("/coupons/validate", { method: "POST", body: { code, context: "billing", plan: paid[0].key, billing_cycle: state.billingCycle } });
+        // Same `currency` hint as checkout() sends, so the validated preview and the
+        // eventual charge are quotes of the same price. undefined (old payload) is
+        // dropped by JSON.stringify, keeping the body old-server compatible.
+        res = await api("/coupons/validate", { method: "POST", body: { code, context: "billing", plan: paid[0].key, billing_cycle: state.billingCycle, currency: billingCurrencyHint(paid[0].key) } });
       } catch (ex) { toast(ex.message || "Invalid discount code.", "error"); return; }
       state.billingCoupon = { code: res.code, percent: res.percent_off, percent_display: res.percent_display };
       toast(res.percent_display + " discount applied.", "success");
@@ -9948,7 +10114,10 @@
     };
     let res;
     const couponCode = state.billingCoupon ? state.billingCoupon.code : undefined;
-    try { res = await api("/billing/checkout", { method: "POST", body: { plan, billing_cycle: state.billingCycle, coupon_code: couponCode } }); }
+    // `currency` is only a HINT — the server re-reads its price book and is the sole
+    // authority on the amount. Per billingCurrencyHint() it is the currency the buyer
+    // was actually SHOWN on the card, and it is absent entirely on an old payload.
+    try { res = await api("/billing/checkout", { method: "POST", body: { plan, billing_cycle: state.billingCycle, coupon_code: couponCode, currency: billingCurrencyHint(plan) } }); }
     catch (ex) { toast(ex.message, "error"); release(); return; }
     if (res.action === "contact_sales") { toast(res.message || "Please contact sales.", "error"); release(); return; }
     // A 100%-off coupon covers the whole charge, so there is no Razorpay step — the server
@@ -15863,7 +16032,7 @@
               <input id="cfClientSearch" class="docsel-input" placeholder="Search your clients…" autocomplete="off" value="${esc(cf.clientName)}" />
               <div class="docsel-menu hidden" id="cfClientMenu"></div>
             </div>
-            <span class="cf-f-hint">Optional — tailors picks to their profile</span>
+            <span class="cf-f-hint">Required — Rilono AI tailors the shortlist to their profile</span>
           </label>
           <label class="cf-f"><span>Destination</span>
             <select id="cfAiCountry">${(m.countries || []).map((x) => `<option value="${esc(x.code)}" ${x.code === cf.country ? "selected" : ""}>${esc(x.flag_emoji || "")} ${esc(x.name)}</option>`).join("")}</select>
@@ -15885,7 +16054,7 @@
           </label>
         </div>
         <div class="cf-ai-actions">
-          <button class="btn btn-primary" id="cfAiRun" ${(!canEdit || !m.ai_available || cf.aiBusy || !cfAiHasTarget()) ? "disabled" : ""} title="${cfAiHasTarget() ? "" : "Enter a field of study or pick a discipline first"}">${cf.aiBusy ? '<span class="spinner"></span> Rilono AI is researching…' : `Generate shortlist · ${esc(String(cost))} cr`}</button>
+          <button class="btn btn-primary" id="cfAiRun" ${(!canEdit || !m.ai_available || cf.aiBusy || cfAiBlocker()) ? "disabled" : ""} title="${esc(cfAiBlocker())}">${cf.aiBusy ? '<span class="spinner"></span> Rilono AI is researching…' : `Generate shortlist · ${esc(String(cost))} cr`}</button>
           ${!canEdit ? '<span class="hint">Viewers can browse, but only editors can run AI actions.</span>' : ""}
         </div>
       </div></div>
@@ -15929,6 +16098,7 @@
       const dest = (cl.destination_country_code || "").toUpperCase();
       const sel = $("#cfAiCountry");
       if (sel && dest && (cf.meta.countries || []).some((x) => x.code === dest)) sel.value = dest;
+      cfSyncAiRun();
     };
     const openMenu = async () => {
       const all = await cfEnsureClients();
@@ -15938,8 +16108,20 @@
       menu.classList.remove("hidden");
     };
     input.onfocus = openMenu;
-    input.oninput = () => { cf.clientId = ""; cf.clientName = ""; openMenu(); };
-    input.onblur = () => setTimeout(() => menu.classList.add("hidden"), 150);
+    input.oninput = () => { cf.clientId = ""; cf.clientName = ""; cfSyncAiRun(); openMenu(); };
+    input.onblur = () => setTimeout(() => {
+      if (document.activeElement === input) return; // refocused before the delay — still editing
+      menu.classList.add("hidden");
+      if (cf.clientId) return;
+      // Selection-only field: text that was never picked from the list is not a client.
+      // Typing an exact, unique name still counts as a pick; anything else is discarded
+      // so a made-up name can't sit in the box looking like the shortlist will use it.
+      const typed = input.value.trim().toLowerCase();
+      const hits = typed ? (cf.clients || []).filter((cl) => (cl.full_name || "").trim().toLowerCase() === typed) : [];
+      if (hits.length === 1) { pick(hits[0]); return; }
+      input.value = "";
+      cfSyncAiRun();
+    }, 150);
     input.onkeydown = (e) => {
       if (e.key === "Escape") { menu.classList.add("hidden"); input.blur(); }
       if (e.key === "Enter" && items.length) { e.preventDefault(); pick(items[0]); }
@@ -15955,12 +16137,20 @@
     const disc = d ? d.value : (cf.discipline || "");
     return String(field || "").trim() !== "" || String(disc || "") !== "";
   }
+  /* A shortlist is always FOR a client — with nobody picked there is no profile to tailor
+     to and no one to save picks onto. First unmet requirement, as the button tooltip. */
+  function cfAiBlocker() {
+    if (!cf.clientId) return "Pick a client from your list first";
+    if (!cfAiHasTarget()) return "Enter a field of study or pick a discipline first";
+    return "";
+  }
   function cfSyncAiRun() {
     const b = $("#cfAiRun");
     if (!b || cf.aiBusy) return;
-    const ok = cfAiHasTarget() && can("ai.coursefinder");
+    const blocker = cfAiBlocker();
+    const ok = !blocker && can("ai.coursefinder") && !!(cf.meta && cf.meta.ai_available);
     b.disabled = !ok;
-    b.title = cfAiHasTarget() ? "" : "Enter a field of study or pick a discipline first";
+    b.title = blocker;
   }
 
   async function cfRunRecommend() {
@@ -15976,6 +16166,7 @@
       notes: $("#cfAiNotes") ? $("#cfAiNotes").value.trim() || null : null,
       max_results: 6,
     };
+    if (!body.client_id) { toast("Pick a client from your list first — the shortlist is tailored to their profile.", "error"); return; }
     if (!body.field_of_study && !body.discipline) { toast("Add a field of study (or pick a discipline) first.", "error"); return; }
     cf.aiBusy = true;
     btn.disabled = true;

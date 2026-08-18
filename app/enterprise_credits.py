@@ -2193,7 +2193,10 @@ def build_revenue_analytics(db: Session) -> dict:
     # existed. Net of GST: tax collected is remitted to the government, never revenue.
     SP = models.EnterpriseSubscriptionPayment
     plan_rows = (
-        db.query(SP.amount_paise, SP.tax_paise, SP.currency, SP.refunded_amount_paise)
+        db.query(
+            SP.amount_paise, SP.tax_paise, SP.currency, SP.refunded_amount_paise,
+            SP.base_amount_paise, SP.fx_rate_used,
+        )
         .filter(SP.status.in_(REVENUE_PAYMENT_STATUSES))
         .all()
     )
@@ -2201,21 +2204,38 @@ def build_revenue_analytics(db: Session) -> dict:
     plan_tax_paise = 0
     plan_refunded_paise = 0
     plan_payment_count = 0
-    for amount, tax, cur, refunded in plan_rows:
-        # The plan book is INR-only, so a non-INR row here would be a bug, not a sale;
-        # skip it rather than adding cents to paise.
-        if (cur or "INR").strip().upper() != "INR":
-            continue
+    for amount, tax, cur, refunded, base_amount, fx_rate in plan_rows:
         plan_payment_count += 1
-        plan_gross_paise += max(0, _money_paise(amount) - _money_paise(tax))
-        plan_tax_paise += _money_paise(tax)
-        # A refund is issued against the gross charge, which included GST. Only the ex-tax
-        # portion was ever counted as revenue, so only that portion may be reversed out —
-        # subtracting the full refund would understate revenue by the tax we also returned.
-        gross = _money_paise(amount)
-        ref = min(_money_paise(refunded), gross)
-        if ref and gross > 0:
-            plan_refunded_paise += int(round(ref * (gross - _money_paise(tax)) / gross))
+        if (cur or "INR").strip().upper() == "INR":
+            # Prefer the settlement figure even for INR (charged == settled, so it is
+            # normally identical) because a webhook-first mandate seed row is stamped
+            # base 0: the money lives on the webhook-created renewal row, and summing
+            # the shell's amount_paise here counted that first charge twice.
+            charged = _money_paise(base_amount) if base_amount is not None else _money_paise(amount)
+            if charged <= 0:
+                continue
+            plan_gross_paise += max(0, charged - _money_paise(tax))
+            plan_tax_paise += _money_paise(tax)
+            # A refund is issued against the gross charge, which included GST. Only the
+            # ex-tax portion was ever counted as revenue, so only that portion may be
+            # reversed out — subtracting the full refund would understate revenue by the
+            # tax we also returned.
+            ref = min(_money_paise(refunded), charged)
+            if ref:
+                plan_refunded_paise += int(round(ref * (charged - _money_paise(tax)) / charged))
+            continue
+        # Non-INR plan sale: a zero-rated export (tax 0), so the settled INR figure IS the
+        # ex-tax revenue. Same settlement rule as _kind_money above — only Razorpay's own
+        # base_amount may be summed; a row whose figure hasn't landed contributes 0 and is
+        # reported by the unsettled counter below rather than silently dropped.
+        if base_amount is None:
+            continue
+        plan_gross_paise += max(0, _money_paise(base_amount))
+        # Refunds are recorded in the row's own currency; scale by the payment's own
+        # settlement rate (never our own FX) so a $39 refund is not subtracted as paise.
+        ref = min(_money_paise(refunded), _money_paise(amount))
+        if ref and fx_rate is not None:
+            plan_refunded_paise += int(round(float(ref) * float(fx_rate)))
     plan_revenue_paise = max(0, plan_gross_paise - plan_refunded_paise)
     # The `unsettled` count promised in _kind_money above: revenue-status foreign payments
     # that scored 0 because Razorpay's INR settlement figure has not landed on the row.
@@ -2227,6 +2247,15 @@ def build_revenue_analytics(db: Session) -> dict:
             P.status.in_(REVENUE_PAYMENT_STATUSES),
             P.base_amount_paise.is_(None),
             func.upper(func.coalesce(P.currency, "INR")) != "INR",
+        )
+        .scalar() or 0
+    ) + int(
+        # The plan table can hold foreign rows too now — same rule, same counter.
+        db.query(func.count(SP.id))
+        .filter(
+            SP.status.in_(REVENUE_PAYMENT_STATUSES),
+            SP.base_amount_paise.is_(None),
+            func.upper(func.coalesce(SP.currency, "INR")) != "INR",
         )
         .scalar() or 0
     )

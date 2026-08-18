@@ -1444,11 +1444,14 @@
         .enterprise-section { border-top-color: rgba(15, 23, 42, 0.08); }
 
         /* ---- Pricing tiers ------------------------------------------------
-           Four cards, one per published tier. Every price here is the EX-GST
-           subtotal and every card says "+ GST" — the same rule the product
-           enforces server-side (app/money.py::quote_with_tax). If these numbers
-           change, they change in app/money.py PRICE_BOOK and in
-           app/enterprise_billing.py PLANS too, or the page and the checkout
+           Four cards, one per published tier. Every price here is the INR
+           anchor from app/money.py PRICE_BOOK (version 2026-08-17), quoted
+           ex-GST. GST applies ONLY to INR billing in India; the other launch
+           currencies (USD, GBP, EUR, CAD, AUD, AED, SGD) are zero-rated
+           exports, so any "+ GST" copy must stay scoped to INR — the same
+           rule the product enforces server-side (app/money.py::quote_with_tax).
+           If these numbers change, they change in app/money.py PRICE_BOOK and
+           in app/enterprise_billing.py PLANS too, or the page and the checkout
            will quote different prices. */
         .ent-price-grid {
             display: grid;
@@ -1712,7 +1715,7 @@
                 "name": "What does Rilono Enterprise cost?",
                 "acceptedAnswer": {
                     "@type": "Answer",
-                    "text": "Plans are Starter at \u20b92,999/month, Growth at \u20b96,999/month and Scale at \u20b914,999/month, all exclusive of GST. They cover 10, 30 and 100 users and 100, 500 and 2,000 active clients respectively, and each includes a monthly AI credit allowance of 1,000, 3,500 and 10,000 credits. Every workspace starts on a free 14-day self-serve sandbox with 2 users, 10 active clients and 100 demo credits, and no card."
+                    "text": "Plans are Starter at \u20b92,999/month, Growth at \u20b96,999/month and Scale at \u20b914,999/month, plus GST on INR billing in India only. You can also pay in USD, GBP, EUR, CAD, AUD, AED or SGD, billed tax-free as exports. They cover 10, 30 and 100 users and 100, 500 and 2,000 active clients respectively, and each includes a monthly AI credit allowance of 1,000, 3,500 and 10,000 credits. Every workspace starts on a free 14-day self-serve sandbox with 2 users, 10 active clients and 100 demo credits, and no card."
                 }
             },
             {
@@ -1856,7 +1859,7 @@
                 <div class="enterprise-hero-copy-block">
                     <div class="enterprise-eyebrow">
                         <span class="enterprise-eyebrow-dot"></span>
-                        For study-abroad consultancies &middot; plans from &#8377;2,999/month + GST, AI credits included
+                        For study-abroad consultancies &middot; plans from &#8377;2,999/month + GST (India), AI credits included
                     </div>
                     <h1>
                         Run your study-abroad practice in one platform.
@@ -2227,7 +2230,7 @@
                     <div class="ent-price-card">
                         <div class="ent-price-name">Starter</div>
                         <div class="ent-price-amount">&#8377;2,999 <span>/month</span></div>
-                        <div class="ent-price-gst">+ GST</div>
+                        <div class="ent-price-gst">+ GST (India)</div>
                         <div class="ent-price-specs">
                             <div><span>Users</span><b>10</b></div>
                             <div><span>Active clients</span><b>100</b></div>
@@ -2239,7 +2242,7 @@
                         <div class="ent-price-tag">Most popular</div>
                         <div class="ent-price-name">Growth</div>
                         <div class="ent-price-amount">&#8377;6,999 <span>/month</span></div>
-                        <div class="ent-price-gst">+ GST</div>
+                        <div class="ent-price-gst">+ GST (India)</div>
                         <div class="ent-price-specs">
                             <div><span>Users</span><b>30</b></div>
                             <div><span>Active clients</span><b>500</b></div>
@@ -2250,7 +2253,7 @@
                     <div class="ent-price-card">
                         <div class="ent-price-name">Scale</div>
                         <div class="ent-price-amount">&#8377;14,999 <span>/month</span></div>
-                        <div class="ent-price-gst">+ GST</div>
+                        <div class="ent-price-gst">+ GST (India)</div>
                         <div class="ent-price-specs">
                             <div><span>Users</span><b>100</b></div>
                             <div><span>Active clients</span><b>2,000</b></div>
@@ -2260,8 +2263,9 @@
                     </div>
                 </div>
                 <p class="ent-price-foot">
-                    Per month, exclusive of GST, billed in INR via Razorpay. Plan credits refresh each billing period
-                    and don&rsquo;t carry over; top-up credits never expire. Catalog browsing is always free.
+                    Billed monthly via Razorpay in INR, USD, GBP, EUR, CAD, AUD, AED or SGD &mdash; GST applies to INR
+                    billing in India; other currencies are billed tax-free as exports. Plan credits refresh each
+                    billing period and don&rsquo;t carry over; top-up credits never expire. Catalog browsing is always free.
                 </p>
                 <div class="enterprise-actions" style="margin-top:1.6rem">
                     <a class="enterprise-btn enterprise-btn-primary" href="https://enterprise.rilono.com/enterprise">
@@ -2283,7 +2287,7 @@
                 <div class="enterprise-faq">
                     <details open>
                         <summary>What does Rilono Enterprise cost? <span class="chev">+</span></summary>
-                        <div class="ans">Plans are Starter at &#8377;2,999/month, Growth at &#8377;6,999/month and Scale at &#8377;14,999/month, all exclusive of GST. They cover 10, 30 and 100 users and 100, 500 and 2,000 active clients respectively, and each includes a monthly AI credit allowance of 1,000, 3,500 and 10,000 credits. Every workspace starts on a free 14-day self-serve sandbox with 2 users, 10 active clients and 100 demo credits, and no card.</div>
+                        <div class="ans">Plans are Starter at &#8377;2,999/month, Growth at &#8377;6,999/month and Scale at &#8377;14,999/month, plus GST on INR billing in India only. You can also pay in USD, GBP, EUR, CAD, AUD, AED or SGD, billed tax-free as exports. They cover 10, 30 and 100 users and 100, 500 and 2,000 active clients respectively, and each includes a monthly AI credit allowance of 1,000, 3,500 and 10,000 credits. Every workspace starts on a free 14-day self-serve sandbox with 2 users, 10 active clients and 100 demo credits, and no card.</div>
                     </details>
                     <details>
                         <summary>Are AI credits included in the plan or bought separately? <span class="chev">+</span></summary>

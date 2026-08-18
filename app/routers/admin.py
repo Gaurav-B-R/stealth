@@ -2268,15 +2268,27 @@ def enterprise_account_details_admin(
     infra_paid = _sum_collected("infra_fee")
     # Plan subscriptions live in their OWN table, so a founder looking at a paying Growth
     # account used to see "Total paid: ₹0" — the tiers are now the largest line and were
-    # invisible here. INR-only (the plan book is), and gross of GST because that is what
-    # actually left the customer's account.
+    # invisible here. Settled INR (the plan books sell in every launch currency now), and
+    # gross of GST because that is what actually left the customer's account.
     SP = models.EnterpriseSubscriptionPayment
+    _sp_settled_inr = case(
+        (SP.base_amount_paise.isnot(None), SP.base_amount_paise),
+        (func.upper(func.coalesce(SP.currency, "INR")) == "INR", SP.amount_paise),
+        else_=0,
+    )
+    # Refunds are recorded in the ORIGINAL currency; scale by the payment's own settlement
+    # rate so a partial refund of a $39 plan is not subtracted as though it were rupees.
+    # A non-INR row with no rate contributed 0 above, so its refund is skipped too.
+    _sp_refunded_inr = case(
+        (func.upper(func.coalesce(SP.currency, "INR")) == "INR", func.coalesce(SP.refunded_amount_paise, 0)),
+        (SP.fx_rate_used.isnot(None), func.coalesce(SP.refunded_amount_paise, 0) * SP.fx_rate_used),
+        else_=0,
+    )
     plan_paid = int(
-        db.query(func.coalesce(func.sum(SP.amount_paise - func.coalesce(SP.refunded_amount_paise, 0)), 0))
+        db.query(func.coalesce(func.sum(_sp_settled_inr - _sp_refunded_inr), 0))
         .filter(
             SP.organization_id == org.id,
             SP.status.in_(enterprise_credits.REVENUE_PAYMENT_STATUSES),
-            func.upper(func.coalesce(SP.currency, "INR")) == "INR",
         )
         .scalar() or 0
     )
@@ -2285,9 +2297,6 @@ def enterprise_account_details_admin(
         .filter(
             SP.organization_id == org.id,
             SP.status.in_(enterprise_credits.REVENUE_PAYMENT_STATUSES),
-            # Same INR filter as plan_paid above, or the count claims rows whose money was
-            # excluded from the total and the two figures disagree.
-            func.upper(func.coalesce(SP.currency, "INR")) == "INR",
         )
         .scalar() or 0
     )
@@ -2358,11 +2367,15 @@ def enterprise_account_details_admin(
     payment_currencies = sorted({
         money.normalize_currency(row[0], strict=False)
         for row in db.query(P.currency).filter(P.organization_id == org.id).distinct().all()
+    } | {
+        money.normalize_currency(row[0], strict=False)
+        for row in db.query(SP.currency).filter(SP.organization_id == org.id).distinct().all()
     })
     # Revenue-status foreign payments that `_settled_inr` scored as 0 because Razorpay's
     # INR settlement figure has not landed on the row. They are missing from
-    # credit_revenue/infra_revenue/total_paid, so the count has to travel with the totals
-    # — otherwise the screen shows a confident rupee number that is quietly short.
+    # credit_revenue/infra_revenue/plan_revenue/total_paid, so the count has to travel
+    # with the totals — otherwise the screen shows a confident rupee number that is
+    # quietly short. Both payment tables can hold such rows now.
     unsettled_payment_count = int(
         db.query(func.count(P.id))
         .filter(
@@ -2370,6 +2383,15 @@ def enterprise_account_details_admin(
             P.status.in_(enterprise_credits.REVENUE_PAYMENT_STATUSES),
             P.base_amount_paise.is_(None),
             func.upper(func.coalesce(P.currency, "INR")) != "INR",
+        )
+        .scalar() or 0
+    ) + int(
+        db.query(func.count(SP.id))
+        .filter(
+            SP.organization_id == org.id,
+            SP.status.in_(enterprise_credits.REVENUE_PAYMENT_STATUSES),
+            SP.base_amount_paise.is_(None),
+            func.upper(func.coalesce(SP.currency, "INR")) != "INR",
         )
         .scalar() or 0
     )

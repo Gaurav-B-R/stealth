@@ -3786,6 +3786,8 @@ def ensure_international_payment_columns():
     targets = [
         ("subscription_payments", True),
         ("enterprise_credit_payments", True),
+        # B2B plan tiers went multi-currency 2026-08-17; same settlement rules apply.
+        ("enterprise_subscription_payments", True),
         ("enterprise_student_payments", False),
     ]
 

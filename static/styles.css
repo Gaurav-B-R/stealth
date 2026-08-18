@@ -226,9 +226,8 @@ body.b2c-light .visa-mock-panel {
     -webkit-backdrop-filter: none;
 }
 body.b2c-light .visa-mock-console-title {
-    background: linear-gradient(135deg, #4f46e5, #7c3aed, #db2777);
-    -webkit-background-clip: text;
-    background-clip: text;
+    background: none;
+    color: var(--text-primary);
     text-shadow: none;
 }
 body.b2c-light .visa-mock-note {
@@ -238,9 +237,13 @@ body.b2c-light .visa-mock-note {
 }
 body.b2c-light .visa-mock-mode-picker { background: var(--bg-tertiary); }
 body.b2c-light .visa-mock-chat-composer {
-    background: var(--bg-tertiary);
-    border-color: var(--border-color);
-    box-shadow: 0 2px 10px rgba(15, 23, 42, 0.06);
+    background: #ffffff;
+    border-color: rgba(15, 23, 42, 0.16);
+    box-shadow: 0 1px 2px rgba(15, 23, 42, 0.05);
+}
+body.b2c-light .visa-mock-chat-composer:focus-within {
+    border-color: rgba(30, 64, 175, 0.55);
+    box-shadow: 0 0 0 3px rgba(30, 64, 175, 0.1);
 }
 body.b2c-light .visa-mock-log {
     background: var(--bg-tertiary);
@@ -263,13 +266,19 @@ body.b2c-light .visa-mock-log-item.system {
     -webkit-backdrop-filter: none;
 }
 body.b2c-light .visa-mock-log-item.pending {
-    background: rgba(79, 70, 229, 0.07);
-    border-color: rgba(79, 70, 229, 0.3);
-    color: var(--primary-dark);
+    background: #ffffff;
+    border-color: rgba(30, 64, 175, 0.25);
+    color: #1e40af;
 }
 body.b2c-light .visa-mock-log-item.system.report-done {
-    background: rgba(16, 185, 129, 0.10);
-    color: #047857;
+    background: #f2faf5;
+    border-color: rgba(22, 101, 52, 0.3);
+    color: #166534;
+}
+body.b2c-light .visa-mock-log-item.system.report-generating {
+    background: #f6f6fd;
+    border-color: rgba(67, 56, 202, 0.3);
+    color: #3730a3;
 }
 body.b2c-light .visa-hub-tag-muted {
     background: rgba(15, 23, 42, 0.06);
@@ -307,9 +316,9 @@ body.b2c-light #visaPrepInterviewStatus::before {
     background: currentColor; opacity: 0.75; flex: none;
 }
 body.b2c-light .visa-hub-tag-timer {
-    background: rgba(245, 158, 11, 0.12);
-    border-color: rgba(245, 158, 11, 0.35);
-    color: #b45309;
+    background: #ffffff;
+    border-color: rgba(15, 23, 42, 0.14);
+    color: var(--text-secondary);
     box-shadow: none;
 }
 body.b2c-light .visa-hub-tag-muted {
@@ -317,11 +326,30 @@ body.b2c-light .visa-hub-tag-muted {
     border-color: var(--border-color);
     color: var(--text-secondary);
 }
+/* State variants must sit AFTER .visa-hub-tag / .visa-hub-tag-muted at equal specificity:
+   the mode badge keeps visa-hub-tag-muted even when a mode class is added, so source
+   order is what lets these win. */
+body.b2c-light .visa-hub-tag-mode-voice {
+    color: #1e40af;
+    border-color: rgba(30, 64, 175, 0.28);
+    background: rgba(30, 64, 175, 0.06);
+}
+body.b2c-light .visa-hub-tag-mode-chat {
+    color: #166534;
+    border-color: rgba(22, 101, 52, 0.28);
+    background: rgba(22, 101, 52, 0.06);
+}
+body.b2c-light .visa-hub-tag-report-progress,
+body.b2c-light .visa-hub-tag.report-generating-badge {
+    color: #3730a3;
+    border-color: rgba(67, 56, 202, 0.3);
+    background: rgba(67, 56, 202, 0.07);
+}
 
 /* Info note */
 body.b2c-light .visa-mock-note {
-    background: linear-gradient(90deg, rgba(124, 58, 237, 0.08), rgba(124, 58, 237, 0.015));
-    border-left: 3px solid #7c3aed;
+    background: var(--bg-tertiary);
+    border-left: 3px solid #1e40af;
     border-radius: 0.65rem;
     padding: 0.85rem 1.05rem;
     font-size: 0.86rem;
@@ -337,7 +365,7 @@ body.b2c-light .visa-mock-mode-title {
     font-size: 0.72rem;
     text-transform: uppercase;
     letter-spacing: 0.06em;
-    color: var(--text-muted);
+    color: var(--text-secondary);
     font-weight: 800;
     margin-bottom: 0.35rem;
 }
@@ -380,15 +408,15 @@ body.b2c-light .visa-mock-mode-actions .btn small {
     color: var(--text-secondary); font-size: 0.76rem; font-weight: 500;
 }
 body.b2c-light .visa-mock-mode-actions .btn:hover {
-    transform: translateY(-3px);
-    border-color: rgba(124, 58, 237, 0.5);
-    box-shadow: 0 14px 30px rgba(124, 58, 237, 0.15);
+    transform: none;
+    border-color: rgba(30, 64, 175, 0.5);
+    box-shadow: 0 4px 12px rgba(15, 23, 42, 0.08);
 }
 body.b2c-light .visa-mock-mode-actions .btn:last-child:hover {
-    border-color: rgba(37, 99, 235, 0.5);
-    box-shadow: 0 14px 30px rgba(37, 99, 235, 0.15);
+    border-color: rgba(30, 64, 175, 0.5);
+    box-shadow: 0 4px 12px rgba(15, 23, 42, 0.08);
 }
-body.b2c-light .visa-mock-mode-actions .btn:active { transform: translateY(-1px); }
+body.b2c-light .visa-mock-mode-actions .btn:active { transform: none; }
 
 /* Transcript */
 body.b2c-light .visa-mock-transcript-label {
@@ -2984,7 +3012,7 @@ body.dashboard-active {
 }
 
 .visa-mock-panel:fullscreen {
-    background: #0f172a;
+    background: #f4f6fa;
     border-radius: 0;
     border: none;
     padding: 2.5rem;
@@ -3003,14 +3031,10 @@ body.dashboard-active {
 }
 
 .visa-mock-console-title {
-    font-size: 1.3rem;
-    font-weight: 800;
-    color: transparent;
-    background: linear-gradient(135deg, #e0e7ff, #a5b4fc, #c084fc);
-    -webkit-background-clip: text;
-    background-clip: text;
-    letter-spacing: 0.03em;
-    text-shadow: 0 4px 15px rgba(129, 140, 248, 0.3);
+    font-size: 1.25rem;
+    font-weight: 700;
+    color: var(--text-primary);
+    letter-spacing: -0.01em;
 }
 
 .visa-mock-state-pills {
@@ -3025,20 +3049,19 @@ body.dashboard-active {
     min-width: 0;
     padding: 0.18rem 0.6rem;
     border-radius: 999px;
-    border: 1px solid rgba(96, 165, 250, 0.45);
-    background: rgba(30, 64, 175, 0.32);
-    color: #dbeafe;
+    border: 1px solid rgba(15, 23, 42, 0.16);
+    background: #ffffff;
+    color: var(--text-secondary);
     font-size: 0.72rem;
-    font-weight: 700;
+    font-weight: 600;
     letter-spacing: 0.02em;
     line-height: 1.2;
-    box-shadow: 0 0 0 1px rgba(59, 130, 246, 0.14);
+    box-shadow: none;
 }
 
 .visa-fullscreen-toggle:hover:not([disabled]) {
-    transform: translateY(-1px);
-    border-color: rgba(96, 165, 250, 0.62);
-    background: rgba(37, 99, 235, 0.44);
+    border-color: rgba(15, 23, 42, 0.28);
+    background: #f8fafc;
 }
 
 .visa-fullscreen-toggle[disabled] {
@@ -3053,59 +3076,44 @@ body.dashboard-active {
 }
 
 .visa-hub-tag.report-generating-badge {
-    color: #e0d4fc;
-    border-color: rgba(139, 92, 246, 0.65);
-    background: linear-gradient(135deg, rgba(88, 28, 135, 0.45), rgba(67, 56, 202, 0.35));
-    animation: reportGenGlow 2s ease-in-out infinite;
+    color: #3730a3;
+    border-color: rgba(67, 56, 202, 0.3);
+    background: rgba(67, 56, 202, 0.07);
 }
 
 .visa-hub-tag-mode-voice {
-    color: #dbeafe;
-    border-color: rgba(96, 165, 250, 0.45);
-    background: rgba(30, 64, 175, 0.32);
+    color: #1e40af;
+    border-color: rgba(30, 64, 175, 0.28);
+    background: rgba(30, 64, 175, 0.06);
 }
 
 .visa-hub-tag-mode-chat {
-    color: #dcfce7;
-    border-color: rgba(34, 197, 94, 0.45);
-    background: rgba(22, 101, 52, 0.32);
+    color: #166534;
+    border-color: rgba(22, 101, 52, 0.28);
+    background: rgba(22, 101, 52, 0.06);
 }
 
 .visa-hub-tag-timer {
-    color: #fde68a;
-    border-color: rgba(245, 158, 11, 0.6);
-    background: rgba(120, 53, 15, 0.4);
+    color: var(--text-secondary);
+    border-color: rgba(15, 23, 42, 0.14);
+    background: #ffffff;
     font-variant-numeric: tabular-nums;
-    box-shadow: 0 0 10px rgba(245, 158, 11, 0.2);
-    animation: timerPulse 2s infinite;
+    box-shadow: none;
 }
 
 .visa-hub-tag-report-progress {
     align-items: center;
     gap: 0.4rem;
-    color: #e0d4fc;
-    border-color: rgba(139, 92, 246, 0.65);
-    background: linear-gradient(135deg, rgba(88, 28, 135, 0.45), rgba(67, 56, 202, 0.35));
+    color: #3730a3;
+    border-color: rgba(67, 56, 202, 0.3);
+    background: rgba(67, 56, 202, 0.07);
     font-variant-numeric: tabular-nums;
-    box-shadow: 0 0 12px rgba(139, 92, 246, 0.22);
+    box-shadow: none;
 }
 
 .visa-hub-tag-report-progress .report-generating-spinner {
     width: 0.65rem;
     height: 0.65rem;
-}
-
-@keyframes timerPulse {
-
-    0%,
-    100% {
-        box-shadow: 0 0 8px rgba(245, 158, 11, 0.2);
-    }
-
-    50% {
-        box-shadow: 0 0 16px rgba(245, 158, 11, 0.5);
-        border-color: rgba(245, 158, 11, 0.8);
-    }
 }
 
 .visa-mock-toolbar {
@@ -3127,19 +3135,23 @@ body.dashboard-active {
     flex: 0 0 auto;
 }
 
-.visa-mock-controls-main .btn:first-child {
+.visa-mock-controls-main > .btn:first-child {
     min-width: 170px;
-    background: linear-gradient(135deg, #7c8aff 0%, #c084fc 100%);
-    border: none;
-    box-shadow: 0 4px 15px rgba(124, 138, 255, 0.4);
-    font-weight: 700;
-    letter-spacing: 0.5px;
-    transition: all 0.3s ease;
+    background: #1e40af;
+    border: 1px solid #1e40af;
+    box-shadow: 0 1px 2px rgba(15, 23, 42, 0.08);
+    color: #ffffff;
+    font-weight: 600;
+    letter-spacing: 0.01em;
+    transition: background-color 0.2s ease, border-color 0.2s ease;
 }
 
-.visa-mock-controls-main .btn:first-child:hover {
-    box-shadow: 0 8px 25px rgba(124, 138, 255, 0.6);
-    transform: translateY(-2px);
+.visa-mock-controls-main > .btn:first-child:hover {
+    background: #1c398c;
+    border-color: #1c398c;
+    box-shadow: 0 1px 2px rgba(15, 23, 42, 0.08);
+    transform: none;
+    filter: none;
 }
 
 .visa-mock-secondary-controls {
@@ -3149,15 +3161,15 @@ body.dashboard-active {
 }
 
 .visa-mock-note {
-    background: linear-gradient(90deg, rgba(124, 138, 255, 0.1), transparent);
-    border: none;
-    border-left: 3px solid #7c8aff;
-    border-radius: 0.5rem 0.75rem 0.75rem 0.5rem;
+    background: var(--bg-tertiary, #f8fafc);
+    border: 1px solid var(--border-color, #e2e8f0);
+    border-left: 3px solid #1e40af;
+    border-radius: 0.5rem;
     padding: 0.75rem 1rem;
-    color: #cbd5e1;
+    color: var(--text-secondary);
     font-size: 0.85rem;
     line-height: 1.5;
-    box-shadow: inset 0 0 10px rgba(0, 0, 0, 0.1);
+    box-shadow: none;
 }
 
 .visa-mock-transcript-label {
@@ -3210,22 +3222,22 @@ body.dashboard-active {
     display: flex;
     gap: 0.5rem;
     align-items: center;
-    border: 1px solid rgba(129, 140, 248, 0.3);
-    border-radius: 2rem;
-    background: rgba(15, 23, 42, 0.7);
+    border: 1px solid rgba(15, 23, 42, 0.16);
+    border-radius: 0.75rem;
+    background: #ffffff;
     padding: 0.4rem 0.4rem 0.4rem 1rem;
-    box-shadow: 0 4px 15px rgba(0, 0, 0, 0.2);
-    transition: border-color 0.3s ease, box-shadow 0.3s ease;
+    box-shadow: 0 1px 2px rgba(15, 23, 42, 0.05);
+    transition: border-color 0.2s ease, box-shadow 0.2s ease;
 }
 
 .visa-mock-chat-composer.voice-mode {
-    border-color: rgba(245, 158, 11, 0.55);
-    box-shadow: 0 0 0 1px rgba(245, 158, 11, 0.25), 0 4px 15px rgba(0, 0, 0, 0.25);
+    border-color: rgba(15, 23, 42, 0.16);
+    box-shadow: 0 1px 2px rgba(15, 23, 42, 0.05);
 }
 
 .visa-mock-chat-composer:focus-within {
-    border-color: rgba(129, 140, 248, 0.8);
-    box-shadow: 0 0 0 2px rgba(129, 140, 248, 0.2), 0 4px 15px rgba(0, 0, 0, 0.3);
+    border-color: rgba(30, 64, 175, 0.55);
+    box-shadow: 0 0 0 3px rgba(30, 64, 175, 0.1);
 }
 
 .visa-mock-chat-composer input {
@@ -3246,40 +3258,40 @@ body.dashboard-active {
     width: auto !important;
     min-width: 80px;
     padding: 0.5rem 1.25rem;
-    border-radius: 1.5rem;
+    border-radius: 0.55rem;
     font-weight: 600;
-    background: linear-gradient(135deg, #7c8aff, #6366f1);
-    border: none;
-    box-shadow: 0 4px 12px rgba(79, 70, 229, 0.3);
+    background: #1e40af;
+    color: #ffffff;
+    border: 1px solid #1e40af;
+    box-shadow: 0 1px 2px rgba(15, 23, 42, 0.08);
 }
 
 .visa-mock-chat-composer .btn:hover:not([disabled]) {
-    transform: translateY(-1px);
-    box-shadow: 0 6px 16px rgba(79, 70, 229, 0.4);
+    background: #1c398c;
+    border-color: #1c398c;
+    transform: none;
+    box-shadow: 0 1px 2px rgba(15, 23, 42, 0.08);
 }
 
 .visa-mock-chat-composer .visa-speak-answer-cta {
     min-width: 150px;
-    border-radius: 1.5rem;
-    border: 1px solid rgba(251, 191, 36, 0.75);
-    background: linear-gradient(135deg, #f59e0b 0%, #f97316 100%);
-    color: #fff8eb;
-    font-weight: 700;
-    letter-spacing: 0.02em;
-    box-shadow: 0 0 0 1px rgba(245, 158, 11, 0.35), 0 10px 22px rgba(245, 158, 11, 0.28);
-    animation: visaSpeakPulse 1.8s ease-in-out infinite;
+    border-radius: 0.55rem;
+    border: 1px solid #1e40af;
+    background: #1e40af;
+    color: #ffffff;
+    font-weight: 600;
+    letter-spacing: 0.01em;
+    box-shadow: 0 1px 2px rgba(15, 23, 42, 0.08);
 }
 
 .visa-mock-chat-composer .visa-speak-answer-cta.is-listening {
-    animation: none;
-    background: linear-gradient(135deg, #ef4444 0%, #f97316 100%);
-    border-color: rgba(248, 113, 113, 0.95);
-    box-shadow: 0 0 0 2px rgba(248, 113, 113, 0.3), 0 10px 24px rgba(239, 68, 68, 0.3);
+    background: #b91c1c;
+    border-color: #b91c1c;
+    box-shadow: 0 1px 2px rgba(15, 23, 42, 0.08);
 }
 
 .visa-mock-chat-composer .visa-speak-answer-cta[disabled] {
-    animation: none;
-    opacity: 0.65;
+    opacity: 0.6;
     box-shadow: none;
 }
 
@@ -3288,11 +3300,11 @@ body.dashboard-active {
     align-items: center;
     gap: 0.42rem;
     border-radius: 999px;
-    border: 1px solid rgba(148, 163, 184, 0.42);
-    background: rgba(15, 23, 42, 0.82);
-    color: #cbd5e1;
+    border: 1px solid rgba(15, 23, 42, 0.14);
+    background: #ffffff;
+    color: var(--text-secondary);
     font-size: 0.8rem;
-    font-weight: 600;
+    font-weight: 500;
     letter-spacing: 0.01em;
     padding: 0.44rem 0.72rem;
     white-space: nowrap;
@@ -3303,75 +3315,57 @@ body.dashboard-active {
     height: 0.5rem;
     border-radius: 999px;
     background: #94a3b8;
-    box-shadow: 0 0 0 3px rgba(148, 163, 184, 0.2);
 }
 
 .visa-mock-chat-composer .visa-mic-status.is-connected {
-    border-color: rgba(34, 197, 94, 0.45);
-    background: rgba(6, 78, 59, 0.45);
-    color: #dcfce7;
+    border-color: rgba(22, 101, 52, 0.3);
+    background: #ffffff;
+    color: #166534;
 }
 
 .visa-mock-chat-composer .visa-mic-status.is-connected .visa-mic-status-dot {
-    background: #22c55e;
-    box-shadow: 0 0 0 3px rgba(34, 197, 94, 0.22);
+    background: #16a34a;
 }
 
 .visa-mock-chat-composer .visa-mic-status.is-listening {
-    border-color: rgba(251, 191, 36, 0.72);
-    background: rgba(120, 53, 15, 0.55);
-    color: #fde68a;
+    border-color: rgba(180, 83, 9, 0.35);
+    background: #ffffff;
+    color: #92400e;
 }
 
 .visa-mock-chat-composer .visa-mic-status.is-listening .visa-mic-status-dot {
-    background: #f59e0b;
-    box-shadow: 0 0 0 4px rgba(245, 158, 11, 0.2);
-    animation: visaMicDotPulse 1.1s ease-in-out infinite;
+    background: #d97706;
+    animation: visaMicDotPulse 1.4s ease-in-out infinite;
 }
 
 .visa-mock-chat-composer .visa-mic-status.is-pending {
-    border-color: rgba(245, 158, 11, 0.45);
-    background: rgba(120, 53, 15, 0.35);
-    color: #fcd34d;
+    border-color: rgba(180, 83, 9, 0.3);
+    background: #ffffff;
+    color: #92400e;
 }
 
 .visa-mock-chat-composer .visa-mic-status.is-pending .visa-mic-status-dot {
-    background: #f59e0b;
-    box-shadow: 0 0 0 3px rgba(245, 158, 11, 0.2);
+    background: #d97706;
 }
 
 .visa-mock-chat-composer .visa-mic-status.is-blocked {
-    border-color: rgba(248, 113, 113, 0.75);
-    background: rgba(127, 29, 29, 0.55);
-    color: #fee2e2;
+    border-color: rgba(185, 28, 28, 0.35);
+    background: #ffffff;
+    color: #b91c1c;
 }
 
 .visa-mock-chat-composer .visa-mic-status.is-blocked .visa-mic-status-dot {
-    background: #ef4444;
-    box-shadow: 0 0 0 3px rgba(239, 68, 68, 0.22);
+    background: #dc2626;
 }
 
 .visa-mock-chat-composer .visa-mic-status.is-unsupported {
-    border-color: rgba(148, 163, 184, 0.5);
-    background: rgba(30, 41, 59, 0.65);
-    color: #e2e8f0;
+    border-color: rgba(15, 23, 42, 0.16);
+    background: #ffffff;
+    color: var(--text-secondary);
 }
 
 .visa-mock-chat-composer .visa-mic-status.is-unsupported .visa-mic-status-dot {
     background: #94a3b8;
-    box-shadow: 0 0 0 3px rgba(148, 163, 184, 0.18);
-}
-
-@keyframes visaSpeakPulse {
-
-    0%,
-    100% {
-        box-shadow: 0 0 0 1px rgba(245, 158, 11, 0.3), 0 8px 18px rgba(245, 158, 11, 0.22);
-    }
-
-    50% {
-        box-shadow: 0 0 0 3px rgba(251, 191, 36, 0.22), 0 14px 26px rgba(245, 158, 11, 0.35);
-    }
 }
 
 @keyframes visaMicDotPulse {
@@ -3387,10 +3381,10 @@ body.dashboard-active {
 }
 
 .visa-mock-log {
-    border: 1px solid rgba(255, 255, 255, 0.05);
-    border-radius: 1rem;
-    background: linear-gradient(180deg, rgba(8, 11, 22, 0.7), rgba(15, 23, 42, 0.4));
-    box-shadow: inset 0 4px 15px rgba(0, 0, 0, 0.5);
+    border: 1px solid var(--border-color, #e2e8f0);
+    border-radius: 0.75rem;
+    background: var(--bg-tertiary, #f8fafc);
+    box-shadow: none;
     height: clamp(320px, 52vh, 520px);
     overflow-y: auto;
     padding: 1.25rem;
@@ -3445,20 +3439,20 @@ body.dashboard-active {
 
 .visa-mock-log-item.user {
     align-self: flex-end;
-    border-radius: 1.25rem 1.25rem 0 1.25rem;
-    background: linear-gradient(135deg, #3b82f6, #2563eb);
+    border-radius: 0.75rem 0.75rem 0.2rem 0.75rem;
+    background: #1e40af;
     color: #ffffff;
-    box-shadow: 0 4px 15px rgba(37, 99, 235, 0.2);
+    box-shadow: 0 1px 2px rgba(15, 23, 42, 0.08);
     border: none;
 }
 
 .visa-mock-log-item.assistant {
     align-self: flex-start;
-    border-radius: 1.25rem 1.25rem 1.25rem 0;
-    background: rgba(30, 41, 59, 0.8);
-    border: 1px solid rgba(255, 255, 255, 0.08);
-    color: #e2e8f0;
-    box-shadow: 0 4px 15px rgba(0, 0, 0, 0.1);
+    border-radius: 0.75rem 0.75rem 0.75rem 0.2rem;
+    background: #ffffff;
+    border: 1px solid var(--border-color, #e2e8f0);
+    color: var(--text-primary);
+    box-shadow: 0 1px 2px rgba(15, 23, 42, 0.05);
 }
 
 .visa-mock-log-item.assistant strong {
@@ -3478,10 +3472,10 @@ body.dashboard-active {
 
 .visa-mock-log-item.pending {
     align-self: flex-start;
-    border-radius: 1.25rem 1.25rem 1.25rem 0;
-    background: rgba(30, 41, 59, 0.5);
-    border: 1px solid rgba(59, 130, 246, 0.3);
-    color: #93c5fd;
+    border-radius: 0.75rem 0.75rem 0.75rem 0.2rem;
+    background: #ffffff;
+    border: 1px solid rgba(30, 64, 175, 0.25);
+    color: #1e40af;
     display: flex;
     align-items: center;
     gap: 0.6rem;
@@ -3493,7 +3487,7 @@ body.dashboard-active {
     width: 0.5rem;
     height: 0.5rem;
     border-radius: 999px;
-    background: #60a5fa;
+    background: #1e40af;
     animation: visaPendingPulse 1.1s ease-in-out infinite;
     flex: 0 0 0.5rem;
 }
@@ -3514,24 +3508,22 @@ body.dashboard-active {
 
 .visa-mock-log-item.system {
     align-self: center;
-    background: rgba(30, 41, 59, 0.6);
-    border: 1px solid rgba(148, 163, 184, 0.2);
-    border-radius: 1rem;
-    color: #94a3b8;
+    background: #ffffff;
+    border: 1px solid var(--border-color, #e2e8f0);
+    border-radius: 0.6rem;
+    color: var(--text-secondary);
     font-size: 0.85rem;
     max-width: 90%;
     text-align: center;
     padding: 0.85rem 1.25rem;
-    box-shadow: 0 4px 15px rgba(0, 0, 0, 0.2);
-    backdrop-filter: blur(10px);
-    -webkit-backdrop-filter: blur(10px);
+    box-shadow: none;
 }
 
 .visa-mock-log-item.system.report-done {
     border-style: solid;
-    border-color: rgba(16, 185, 129, 0.5);
-    background: linear-gradient(135deg, rgba(6, 95, 70, 0.25), rgba(16, 185, 129, 0.12));
-    color: #a7f3d0;
+    border-color: rgba(22, 101, 52, 0.3);
+    background: #f2faf5;
+    color: #166534;
     font-weight: 600;
     display: flex;
     align-items: center;
@@ -3546,8 +3538,8 @@ body.dashboard-active {
     width: 1.1rem;
     height: 1.1rem;
     border-radius: 50%;
-    background: rgba(16, 185, 129, 0.3);
-    color: #34d399;
+    background: rgba(22, 163, 74, 0.15);
+    color: #15803d;
     font-size: 0.7rem;
     font-weight: 700;
     flex-shrink: 0;
@@ -3555,37 +3547,25 @@ body.dashboard-active {
 
 .visa-mock-log-item.system.report-generating {
     border-style: solid;
-    border-color: rgba(139, 92, 246, 0.6);
-    background: linear-gradient(135deg, rgba(88, 28, 135, 0.28), rgba(67, 56, 202, 0.22));
-    color: #e0d4fc;
+    border-color: rgba(67, 56, 202, 0.3);
+    background: #f6f6fd;
+    color: #3730a3;
     font-weight: 600;
     font-size: 0.88rem;
     display: flex;
     align-items: center;
     gap: 0.65rem;
     padding: 0.72rem 0.85rem;
-    animation: reportGenGlow 2s ease-in-out infinite;
     position: relative;
     overflow: hidden;
-}
-
-.visa-mock-log-item.system.report-generating::before {
-    content: '';
-    position: absolute;
-    top: 0;
-    left: -100%;
-    width: 100%;
-    height: 100%;
-    background: linear-gradient(90deg, transparent, rgba(139, 92, 246, 0.12), transparent);
-    animation: reportGenShimmer 2.2s ease-in-out infinite;
 }
 
 .report-generating-spinner {
     width: 0.85rem;
     height: 0.85rem;
     border-radius: 50%;
-    border: 2px solid rgba(139, 92, 246, 0.3);
-    border-top-color: #a78bfa;
+    border: 2px solid rgba(67, 56, 202, 0.25);
+    border-top-color: #4338ca;
     animation: reportGenSpin 0.8s linear infinite;
     flex-shrink: 0;
 }
@@ -3600,33 +3580,9 @@ body.dashboard-active {
 }
 
 .report-generating-copy small {
-    color: #c4b5fd;
+    color: #4338ca;
     font-size: 0.72rem;
     font-weight: 500;
-}
-
-@keyframes reportGenGlow {
-
-    0%,
-    100% {
-        box-shadow: 0 0 6px rgba(139, 92, 246, 0.15), inset 0 0 6px rgba(139, 92, 246, 0.05);
-        border-color: rgba(139, 92, 246, 0.5);
-    }
-
-    50% {
-        box-shadow: 0 0 16px rgba(139, 92, 246, 0.3), inset 0 0 10px rgba(139, 92, 246, 0.08);
-        border-color: rgba(139, 92, 246, 0.75);
-    }
-}
-
-@keyframes reportGenShimmer {
-    0% {
-        left: -100%;
-    }
-
-    100% {
-        left: 100%;
-    }
 }
 
 @keyframes reportGenSpin {
@@ -3636,13 +3592,10 @@ body.dashboard-active {
 }
 
 .visa-mock-report {
-    border: 1px solid rgba(45, 212, 191, 0.32);
-    border-radius: 1rem;
-    background:
-        radial-gradient(circle at 10% 0%, rgba(15, 118, 110, 0.24), transparent 42%),
-        radial-gradient(circle at 85% 10%, rgba(30, 64, 175, 0.24), transparent 46%),
-        linear-gradient(180deg, rgba(5, 20, 46, 0.92), rgba(7, 30, 58, 0.9));
-    box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.04), 0 14px 30px rgba(2, 6, 23, 0.32);
+    border: 1px solid var(--border-color, #e2e8f0);
+    border-radius: 0.75rem;
+    background: #ffffff;
+    box-shadow: 0 1px 3px rgba(15, 23, 42, 0.06);
     padding: 1rem;
     display: grid;
     gap: 0.95rem;
@@ -3655,7 +3608,7 @@ body.dashboard-active {
     gap: 1rem;
     flex-wrap: wrap;
     padding-bottom: 0.8rem;
-    border-bottom: 1px solid rgba(103, 212, 241, 0.2);
+    border-bottom: 1px solid var(--border-color, #e2e8f0);
 }
 
 .visa-mock-report-title-wrap {
@@ -3665,20 +3618,20 @@ body.dashboard-active {
 }
 
 .visa-mock-report-title {
-    font-size: 1.22rem;
-    font-weight: 800;
-    color: #e0f2fe;
-    letter-spacing: 0.01em;
+    font-size: 1.15rem;
+    font-weight: 700;
+    color: var(--text-primary);
+    letter-spacing: 0;
 }
 
 .visa-mock-report-subtitle {
-    color: #a5f3fc;
+    color: var(--text-secondary);
     font-size: 0.84rem;
     line-height: 1.4;
 }
 
 .visa-mock-report-generated-at {
-    color: rgba(203, 213, 225, 0.78);
+    color: var(--text-muted);
     font-size: 0.72rem;
     letter-spacing: 0.02em;
 }
@@ -3688,23 +3641,23 @@ body.dashboard-active {
     min-width: auto !important;
     padding: 0.48rem 0.9rem !important;
     font-size: 0.78rem !important;
-    border-radius: 0.62rem !important;
-    border-color: rgba(45, 212, 191, 0.42) !important;
-    background: linear-gradient(135deg, rgba(13, 148, 136, 0.28), rgba(29, 78, 216, 0.28)) !important;
-    color: #ccfbf1 !important;
-    font-weight: 700;
+    border-radius: 0.5rem !important;
+    border: 1px solid rgba(15, 23, 42, 0.16) !important;
+    background: #ffffff !important;
+    color: #1e40af !important;
+    font-weight: 600;
     letter-spacing: 0.01em;
-    transition: all 0.2s ease;
+    transition: background-color 0.2s ease, border-color 0.2s ease;
 }
 
 .visa-mock-report-download-btn:hover {
-    background: linear-gradient(135deg, rgba(20, 184, 166, 0.38), rgba(37, 99, 235, 0.36)) !important;
-    border-color: rgba(94, 234, 212, 0.6) !important;
-    color: #ecfeff !important;
+    background: #f8fafc !important;
+    border-color: rgba(30, 64, 175, 0.4) !important;
+    color: #1c398c !important;
 }
 
 .visa-mock-report-body {
-    color: #e2e8f0;
+    color: var(--text-primary);
     font-size: 0.9rem;
     line-height: 1.58;
     word-break: break-word;
@@ -3718,9 +3671,9 @@ body.dashboard-active {
 }
 
 .visa-mock-report-summary {
-    border: 1px solid rgba(125, 211, 252, 0.24);
-    border-radius: 0.82rem;
-    background: rgba(15, 23, 42, 0.36);
+    border: 1px solid var(--border-color, #e2e8f0);
+    border-radius: 0.6rem;
+    background: var(--bg-tertiary, #f8fafc);
     padding: 0.72rem 0.85rem;
     display: grid;
     gap: 0.4rem;
@@ -3734,9 +3687,9 @@ body.dashboard-active {
 }
 
 .visa-mock-report-verdict {
-    border: 1px solid rgba(148, 163, 184, 0.32);
-    border-radius: 0.8rem;
-    background: rgba(15, 23, 42, 0.58);
+    border: 1px solid var(--border-color, #e2e8f0);
+    border-radius: 0.6rem;
+    background: #ffffff;
     padding: 0.78rem;
     display: grid;
     gap: 0.3rem;
@@ -3746,41 +3699,41 @@ body.dashboard-active {
     font-size: 0.71rem;
     text-transform: uppercase;
     letter-spacing: 0.08em;
-    color: #94a3b8;
-    font-weight: 700;
+    color: var(--text-muted);
+    font-weight: 600;
 }
 
 .visa-mock-report-verdict-value {
     font-size: 1.06rem;
-    font-weight: 800;
-    color: #f8fafc;
+    font-weight: 700;
+    color: var(--text-primary);
     line-height: 1.25;
 }
 
 .visa-mock-report-verdict-note {
     font-size: 0.8rem;
     line-height: 1.45;
-    color: #cbd5e1;
+    color: var(--text-secondary);
 }
 
 .visa-mock-report-verdict.is-positive {
-    border-color: rgba(34, 197, 94, 0.42);
-    background: linear-gradient(145deg, rgba(6, 78, 59, 0.62), rgba(15, 23, 42, 0.62));
+    border-color: rgba(22, 101, 52, 0.3);
+    background: #f2faf5;
 }
 
 .visa-mock-report-verdict.is-moderate {
-    border-color: rgba(245, 158, 11, 0.44);
-    background: linear-gradient(145deg, rgba(120, 53, 15, 0.54), rgba(15, 23, 42, 0.62));
+    border-color: rgba(180, 83, 9, 0.3);
+    background: #fffbeb;
 }
 
 .visa-mock-report-verdict.is-critical {
-    border-color: rgba(248, 113, 113, 0.42);
-    background: linear-gradient(145deg, rgba(127, 29, 29, 0.52), rgba(15, 23, 42, 0.62));
+    border-color: rgba(185, 28, 28, 0.3);
+    background: #fef2f2;
 }
 
 .visa-mock-report-verdict.is-neutral {
-    border-color: rgba(148, 163, 184, 0.34);
-    background: linear-gradient(145deg, rgba(30, 41, 59, 0.7), rgba(15, 23, 42, 0.62));
+    border-color: var(--border-color, #e2e8f0);
+    background: var(--bg-tertiary, #f8fafc);
 }
 
 .visa-mock-report-metrics {
@@ -3791,44 +3744,45 @@ body.dashboard-active {
 
 .visa-mock-report-metric-card {
     --metric-value: 0%;
-    border: 1px solid rgba(148, 163, 184, 0.3);
-    border-radius: 0.8rem;
-    background: rgba(15, 23, 42, 0.54);
+    border: 1px solid var(--border-color, #e2e8f0);
+    border-radius: 0.6rem;
+    background: #ffffff;
     padding: 0.72rem 0.78rem;
     display: grid;
     gap: 0.36rem;
-    box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.03);
+    box-shadow: none;
 }
 
 .visa-mock-report-metric-card-approval {
-    border-color: rgba(16, 185, 129, 0.38);
-    background: linear-gradient(150deg, rgba(5, 46, 22, 0.52), rgba(15, 23, 42, 0.58));
+    border-color: rgba(22, 101, 52, 0.3);
+    background: #ffffff;
 }
 
 .visa-mock-report-metric-card-rejection {
-    border-color: rgba(248, 113, 113, 0.36);
-    background: linear-gradient(150deg, rgba(69, 10, 10, 0.48), rgba(15, 23, 42, 0.58));
+    border-color: rgba(185, 28, 28, 0.3);
+    background: #ffffff;
 }
 
 .visa-mock-report-metric-label {
-    color: #94a3b8;
+    color: var(--text-muted);
     font-size: 0.72rem;
     text-transform: uppercase;
     letter-spacing: 0.08em;
-    font-weight: 700;
+    font-weight: 600;
 }
 
 .visa-mock-report-metric-value {
-    color: #ecfeff;
+    color: var(--text-primary);
     font-size: 1.42rem;
-    font-weight: 800;
+    font-weight: 700;
     line-height: 1.2;
+    font-variant-numeric: tabular-nums;
 }
 
 .visa-mock-report-metric-meter {
     height: 0.45rem;
     border-radius: 999px;
-    background: rgba(148, 163, 184, 0.2);
+    background: rgba(15, 23, 42, 0.08);
     overflow: hidden;
 }
 
@@ -3841,15 +3795,15 @@ body.dashboard-active {
 }
 
 .visa-mock-report-metric-card-approval .visa-mock-report-metric-fill {
-    background: linear-gradient(90deg, #34d399, #2dd4bf);
+    background: #16a34a;
 }
 
 .visa-mock-report-metric-card-rejection .visa-mock-report-metric-fill {
-    background: linear-gradient(90deg, #f59e0b, #ef4444);
+    background: #dc2626;
 }
 
 .visa-mock-report-metric-helper {
-    color: rgba(203, 213, 225, 0.82);
+    color: var(--text-muted);
     font-size: 0.73rem;
     line-height: 1.35;
 }
@@ -3861,11 +3815,11 @@ body.dashboard-active {
 }
 
 .visa-mock-report-section-card {
-    --section-accent: #67d4f1;
-    border: 1px solid rgba(148, 163, 184, 0.25);
-    border-radius: 0.82rem;
-    background: rgba(15, 23, 42, 0.45);
-    padding: 0.72rem 0.78rem;
+    --section-accent: #1e40af;
+    border: 1px solid var(--border-color, #e2e8f0);
+    border-radius: 0.6rem;
+    background: #ffffff;
+    padding: 0.72rem 0.78rem 0.72rem 0.95rem;
     display: grid;
     gap: 0.52rem;
     position: relative;
@@ -3884,24 +3838,24 @@ body.dashboard-active {
 }
 
 .visa-mock-report-section-card.section-drivers {
-    --section-accent: #67d4f1;
+    --section-accent: #1e40af;
 }
 
 .visa-mock-report-section-card.section-strengths {
-    --section-accent: #22c55e;
+    --section-accent: #16a34a;
 }
 
 .visa-mock-report-section-card.section-risks {
-    --section-accent: #ef4444;
+    --section-accent: #dc2626;
 }
 
 .visa-mock-report-section-card.section-improvements {
-    --section-accent: #f59e0b;
+    --section-accent: #d97706;
     grid-column: 1 / -1;
 }
 
 .visa-mock-report-section-card.section-note {
-    --section-accent: #a78bfa;
+    --section-accent: #6366f1;
     grid-column: 1 / -1;
 }
 
@@ -3915,15 +3869,15 @@ body.dashboard-active {
 .visa-mock-report-section-title {
     margin: 0;
     font-size: 0.95rem;
-    color: #dbeafe;
+    color: var(--text-primary);
     font-weight: 700;
     letter-spacing: 0.01em;
 }
 
 .visa-mock-report-section-count {
     font-size: 0.69rem;
-    color: #94a3b8;
-    border: 1px solid rgba(148, 163, 184, 0.35);
+    color: var(--text-muted);
+    border: 1px solid rgba(15, 23, 42, 0.16);
     border-radius: 999px;
     padding: 0.15rem 0.45rem;
     white-space: nowrap;
@@ -3931,7 +3885,7 @@ body.dashboard-active {
 
 .visa-mock-report-paragraph {
     margin: 0;
-    color: #e2e8f0;
+    color: var(--text-secondary);
     line-height: 1.55;
 }
 
@@ -3939,7 +3893,7 @@ body.dashboard-active {
     margin: 0;
     padding: 0;
     list-style: none;
-    color: #e2e8f0;
+    color: var(--text-secondary);
     display: grid;
     gap: 0.42rem;
 }
@@ -3959,7 +3913,6 @@ body.dashboard-active {
     height: 0.34rem;
     border-radius: 999px;
     background: var(--section-accent);
-    box-shadow: 0 0 0 2px rgba(148, 163, 184, 0.24);
 }
 
 @media (max-width: 1080px) {
@@ -15723,137 +15676,132 @@ svg {
 .decision-btn.ghost { color: #64748b; }
 
 /* ===================== The Consulate Window (US voice mock interview) =====================
-   Deliberately a DARK embassy booth in both themes — the drama is the point. All selectors
-   carry a `body` prefix so, appended last, they win specificity ties against the
-   body.b2c-light light-theme overrides. Stylized motifs only (★ badge), never a real seal. */
+   Professional consular-services styling: flat light surfaces, navy accents, restrained
+   motion. All selectors carry a `body` prefix so, appended last, they win specificity
+   ties against the body.b2c-light overrides. Stylized motifs only (★ badge), never a
+   real seal. */
 
 body .visa-mock-panel.consulate-active {
-    background: radial-gradient(circle at 20% 0%, rgba(30, 58, 138, 0.55), transparent 55%),
-                linear-gradient(180deg, #0b1229 0%, #101a38 100%);
-    border-color: rgba(148, 163, 184, 0.25);
-    box-shadow: 0 18px 50px rgba(2, 6, 23, 0.55), inset 0 1px 1px rgba(255, 255, 255, 0.06);
+    background: #ffffff;
+    border-color: var(--border-color, #e2e8f0);
+    box-shadow: 0 8px 28px rgba(15, 23, 42, 0.08);
 }
 
 body .consulate-booth {
     position: relative;
-    border: 1px solid rgba(148, 163, 184, 0.22);
-    border-radius: 1rem;
-    background: linear-gradient(180deg, rgba(15, 23, 42, 0.85), rgba(9, 14, 32, 0.9));
-    padding: 1rem 1.1rem 0.9rem;
+    border: 1px solid var(--border-color, #e2e8f0);
+    border-radius: 0.75rem;
+    background: #f8fafc;
+    padding: 1.15rem 1.25rem 1rem;
     display: grid;
-    gap: 0.85rem;
+    gap: 0.9rem;
+    overflow: hidden;
 }
 
 body .consulate-stripes {
     position: absolute;
     top: 0; left: 0; right: 0;
-    height: 4px;
+    height: 3px;
     display: flex;
-    border-radius: 1rem 1rem 0 0;
     overflow: hidden;
 }
 body .consulate-stripes i { flex: 1; }
 body .consulate-stripes i:nth-child(1) { background: #b91c1c; }
-body .consulate-stripes i:nth-child(2) { background: #f8fafc; }
-body .consulate-stripes i:nth-child(3) { background: #1d4ed8; }
+body .consulate-stripes i:nth-child(2) { background: #ffffff; }
+body .consulate-stripes i:nth-child(3) { background: #1e40af; }
 
-body .consulate-plate-row { display: flex; align-items: center; gap: 0.8rem; flex-wrap: wrap; }
+body .consulate-plate-row { display: flex; align-items: center; gap: 0.8rem; flex-wrap: wrap; padding-top: 0.2rem; }
 body .consulate-crest {
-    width: 44px; height: 44px; flex: none;
+    width: 40px; height: 40px; flex: none;
     border-radius: 50%;
     display: grid; place-items: center;
-    font-size: 20px; color: #0b1229;
-    background: radial-gradient(circle at 35% 30%, #fde68a, #d4a017 70%);
-    border: 2px solid rgba(253, 230, 138, 0.5);
-    box-shadow: 0 4px 14px rgba(212, 160, 23, 0.35);
+    font-size: 17px; color: #ffffff;
+    background: #1e3a8a;
+    border: none;
+    box-shadow: none;
 }
 body .consulate-plate { flex: 1; min-width: 180px; }
 body .consulate-plate-title {
-    font-weight: 800; font-size: 1.02rem; color: #f1f5f9; letter-spacing: 0.02em;
+    font-weight: 700; font-size: 1rem; color: var(--text-primary); letter-spacing: 0;
 }
-body .consulate-plate-sub { font-size: 0.78rem; color: #94a3b8; letter-spacing: 0.04em; margin-top: 2px; }
+body .consulate-plate-sub { font-size: 0.78rem; color: var(--text-muted); letter-spacing: 0.02em; margin-top: 2px; }
 
 body .consulate-voice-chip {
-    font-size: 0.72rem; font-weight: 700; color: #cbd5e1;
-    border: 1px solid rgba(148, 163, 184, 0.3);
-    background: rgba(30, 41, 59, 0.6);
+    font-size: 0.72rem; font-weight: 600; color: var(--text-secondary);
+    border: 1px solid rgba(15, 23, 42, 0.14);
+    background: #ffffff;
     border-radius: 999px; padding: 0.3rem 0.7rem; white-space: nowrap;
 }
-body .consulate-voice-chip a { color: #a5b4fc; text-decoration: none; }
+body .consulate-voice-chip a { color: #1e40af; text-decoration: none; }
 body .consulate-voice-chip.pass {
-    color: #d9f99d; border-color: rgba(132, 204, 22, 0.4); background: rgba(63, 98, 18, 0.3);
+    color: #166534; border-color: rgba(22, 101, 52, 0.3); background: #ffffff;
 }
 
-/* --- The orb: the officer's presence --- */
+/* --- The officer status indicator --- */
 body .consulate-orb-zone { display: grid; justify-items: center; gap: 0.55rem; padding: 0.4rem 0 0.2rem; }
 body .consulate-orb {
-    width: 96px; height: 96px; border-radius: 50%;
+    width: 64px; height: 64px; border-radius: 50%;
     position: relative;
     display: grid; place-items: center;
-    background: radial-gradient(circle at 35% 30%, #475569 0%, #1e293b 62%);
-    border: 2px solid rgba(148, 163, 184, 0.35);
-    transition: border-color 0.3s ease, box-shadow 0.3s ease;
+    background: #ffffff;
+    border: 2px solid rgba(15, 23, 42, 0.16);
+    transition: border-color 0.3s ease;
 }
 body .consulate-orb-core {
-    width: 42px; height: 42px; border-radius: 50%;
-    background: radial-gradient(circle at 40% 35%, #93c5fd, #3b82f6 70%);
-    opacity: 0.55;
-    transition: all 0.3s ease;
+    width: 24px; height: 24px; border-radius: 50%;
+    background: #94a3b8;
+    opacity: 0.7;
+    transition: background-color 0.3s ease, opacity 0.3s ease;
 }
-body .consulate-orb.speaking { border-color: rgba(96, 165, 250, 0.9); box-shadow: 0 0 0 0 rgba(96, 165, 250, 0.4); animation: consulateSpeakPulse 1.3s ease-out infinite; }
-body .consulate-orb.speaking .consulate-orb-core { opacity: 1; animation: consulateCoreBeat 0.65s ease-in-out infinite alternate; }
-body .consulate-orb.listening { border-color: rgba(52, 211, 153, 0.85); }
-body .consulate-orb.listening .consulate-orb-core { background: radial-gradient(circle at 40% 35%, #6ee7b7, #10b981 70%); opacity: 0.95; animation: consulateBreathe 1.8s ease-in-out infinite; }
-body .consulate-orb.thinking { border-color: rgba(251, 191, 36, 0.75); }
+body .consulate-orb.speaking { border-color: rgba(30, 64, 175, 0.6); }
+body .consulate-orb.speaking .consulate-orb-core { background: #1e40af; opacity: 1; animation: consulateCoreBeat 1s ease-in-out infinite alternate; }
+body .consulate-orb.listening { border-color: rgba(21, 128, 61, 0.55); }
+body .consulate-orb.listening .consulate-orb-core { background: #16a34a; opacity: 1; animation: consulateBreathe 2s ease-in-out infinite; }
+body .consulate-orb.thinking { border-color: rgba(15, 23, 42, 0.16); }
 body .consulate-orb.thinking::after {
-    content: ''; position: absolute; inset: -7px; border-radius: 50%;
-    border: 2px solid transparent; border-top-color: rgba(251, 191, 36, 0.8);
+    content: ''; position: absolute; inset: -2px; border-radius: 50%;
+    border: 2px solid transparent; border-top-color: #1e40af;
     animation: consulateSpin 1.1s linear infinite;
 }
-body .consulate-orb.nudged { border-color: rgba(251, 146, 60, 0.95); animation: consulateNudgeFlash 1s ease-in-out infinite; }
-body .consulate-orb.idle { opacity: 0.75; }
+body .consulate-orb.nudged { border-color: rgba(180, 83, 9, 0.6); }
+body .consulate-orb.idle { opacity: 0.7; }
 
-@keyframes consulateSpeakPulse { 0% { box-shadow: 0 0 0 0 rgba(96,165,250,0.4); } 100% { box-shadow: 0 0 0 22px rgba(96,165,250,0); } }
-@keyframes consulateCoreBeat { from { transform: scale(0.92); } to { transform: scale(1.12); } }
-@keyframes consulateBreathe { 0%,100% { transform: scale(0.94); } 50% { transform: scale(1.08); } }
+@keyframes consulateCoreBeat { from { transform: scale(0.94); } to { transform: scale(1.06); } }
+@keyframes consulateBreathe { 0%,100% { transform: scale(0.96); } 50% { transform: scale(1.04); } }
 @keyframes consulateSpin { to { transform: rotate(360deg); } }
-@keyframes consulateNudgeFlash { 0%,100% { box-shadow: 0 0 0 0 rgba(251,146,60,0.4); } 50% { box-shadow: 0 0 0 14px rgba(251,146,60,0); } }
 
-body .consulate-orb-status { font-size: 0.86rem; font-weight: 600; color: #cbd5e1; letter-spacing: 0.01em; }
+body .consulate-orb-status { font-size: 0.86rem; font-weight: 500; color: var(--text-secondary); letter-spacing: 0.01em; }
 body .consulate-nudge {
-    font-size: 0.82rem; font-weight: 700; color: #fdba74;
-    border: 1px solid rgba(251, 146, 60, 0.45);
-    background: rgba(124, 45, 18, 0.35);
+    font-size: 0.8rem; font-weight: 600; color: #92400e;
+    border: 1px solid rgba(180, 83, 9, 0.3);
+    background: #fffbeb;
     border-radius: 999px; padding: 0.35rem 0.9rem;
-    animation: consulateBreathe 1.6s ease-in-out infinite;
 }
 
 body .consulate-footer-row {
     display: flex; align-items: center; justify-content: space-between; gap: 0.6rem; flex-wrap: wrap;
-    border-top: 1px solid rgba(148, 163, 184, 0.14);
+    border-top: 1px solid var(--border-color, #e2e8f0);
     padding-top: 0.65rem;
 }
 body .consulate-disclaimer {
-    font-size: 0.7rem; font-weight: 700; letter-spacing: 0.05em; text-transform: uppercase;
-    color: #94a3b8;
+    font-size: 0.68rem; font-weight: 600; letter-spacing: 0.05em; text-transform: uppercase;
+    color: var(--text-muted);
 }
 body .consulate-transcript-toggle {
-    border: 1px solid rgba(148, 163, 184, 0.3); background: rgba(30, 41, 59, 0.6);
-    color: #cbd5e1; font-size: 0.75rem; font-weight: 700;
+    border: 1px solid rgba(15, 23, 42, 0.16); background: #ffffff;
+    color: var(--text-secondary); font-size: 0.75rem; font-weight: 600;
     border-radius: 999px; padding: 0.3rem 0.8rem; cursor: pointer;
 }
-body .consulate-transcript-toggle:hover { border-color: rgba(148, 163, 184, 0.55); }
+body .consulate-transcript-toggle:hover { border-color: rgba(15, 23, 42, 0.3); background: #f8fafc; }
 
 /* Transcript is secondary in the booth: collapsed by default, expandable on demand */
 body .visa-mock-panel.consulate-active .visa-mock-log {
     height: auto;
     max-height: 150px;
-    opacity: 0.92;
-    background: rgba(8, 11, 22, 0.6);
+    background: var(--bg-tertiary, #f8fafc);
 }
 body .visa-mock-panel.consulate-active.transcript-expanded .visa-mock-log {
     max-height: 46vh;
-    opacity: 1;
 }
 body .visa-mock-panel.consulate-active .visa-mock-transcript-label { display: none; }
 
@@ -15862,30 +15810,28 @@ body .consulate-intro {
     position: absolute; inset: 0; z-index: 30;
     display: grid; place-items: center;
     border-radius: inherit;
-    background: linear-gradient(180deg, rgba(7, 11, 26, 0.97), rgba(11, 18, 41, 0.97));
+    background: rgba(255, 255, 255, 0.98);
     transition: opacity 0.45s ease;
 }
 body .consulate-intro.fade-out { opacity: 0; }
 body .consulate-intro-inner { display: grid; justify-items: center; gap: 0.7rem; text-align: center; padding: 1rem; }
 body .consulate-intro-crest {
-    width: 64px; height: 64px; border-radius: 50%;
-    display: grid; place-items: center; font-size: 30px; color: #0b1229;
-    background: radial-gradient(circle at 35% 30%, #fde68a, #d4a017 70%);
-    border: 2px solid rgba(253, 230, 138, 0.5);
-    box-shadow: 0 8px 26px rgba(212, 160, 23, 0.4);
+    width: 56px; height: 56px; border-radius: 50%;
+    display: grid; place-items: center; font-size: 24px; color: #ffffff;
+    background: #1e3a8a;
+    border: none;
+    box-shadow: none;
 }
-body .consulate-intro-title { font-weight: 800; font-size: 1.05rem; color: #e2e8f0; letter-spacing: 0.06em; text-transform: uppercase; }
-body .consulate-intro-line { font-size: 0.98rem; color: #93c5fd; font-weight: 600; min-height: 1.4em; }
-body .consulate-intro-disclaimer { font-size: 0.68rem; font-weight: 700; letter-spacing: 0.08em; text-transform: uppercase; color: #64748b; }
+body .consulate-intro-title { font-weight: 700; font-size: 1rem; color: var(--text-primary); letter-spacing: 0.04em; text-transform: uppercase; }
+body .consulate-intro-line { font-size: 0.95rem; color: var(--text-secondary); font-weight: 500; min-height: 1.4em; }
+body .consulate-intro-disclaimer { font-size: 0.68rem; font-weight: 600; letter-spacing: 0.08em; text-transform: uppercase; color: var(--text-muted); }
 
-/* --- Decision slip reveal --- */
+/* --- Decision notice reveal --- */
 body .consulate-slip-overlay {
     position: absolute; inset: 0; z-index: 32;
     display: grid; place-items: center;
     border-radius: inherit;
-    background: rgba(4, 7, 18, 0.72);
-    backdrop-filter: blur(3px);
-    -webkit-backdrop-filter: blur(3px);
+    background: rgba(15, 23, 42, 0.4);
     cursor: pointer;
     transition: opacity 0.55s ease;
 }
@@ -15895,26 +15841,26 @@ body .consulate-slip {
     border-radius: 0.6rem;
     padding: 1.15rem 1.3rem;
     display: grid; gap: 0.4rem;
-    transform-origin: center;
-    animation: consulateSlipIn 0.55s cubic-bezier(0.2, 0.9, 0.3, 1.15);
-    box-shadow: 0 24px 60px rgba(2, 6, 23, 0.7);
+    background: #ffffff;
+    animation: consulateSlipIn 0.4s ease-out;
+    box-shadow: 0 18px 44px rgba(15, 23, 42, 0.25);
 }
-body .consulate-slip.approved { background: linear-gradient(180deg, #052e1c, #064e2b); border: 1.5px solid rgba(52, 211, 153, 0.65); }
-body .consulate-slip.refused { background: linear-gradient(180deg, #3f0a12, #5f1220); border: 1.5px solid rgba(248, 113, 113, 0.6); }
-body .consulate-slip-header { font-size: 0.68rem; font-weight: 700; letter-spacing: 0.09em; text-transform: uppercase; color: rgba(241, 245, 249, 0.65); }
-body .consulate-slip-verdict { font-size: 1.5rem; font-weight: 900; letter-spacing: 0.04em; }
-body .consulate-slip.approved .consulate-slip-verdict { color: #6ee7b7; }
-body .consulate-slip.refused .consulate-slip-verdict { color: #fca5a5; }
-body .consulate-slip-pct { font-size: 0.92rem; font-weight: 700; color: #e2e8f0; }
-body .consulate-slip-note { font-size: 0.7rem; font-weight: 700; letter-spacing: 0.04em; text-transform: uppercase; color: rgba(226, 232, 240, 0.55); margin-top: 0.3rem; }
+body .consulate-slip.approved { border: 1px solid var(--border-color, #e2e8f0); border-top: 4px solid #16a34a; }
+body .consulate-slip.refused { border: 1px solid var(--border-color, #e2e8f0); border-top: 4px solid #dc2626; }
+body .consulate-slip-header { font-size: 0.68rem; font-weight: 600; letter-spacing: 0.09em; text-transform: uppercase; color: var(--text-muted); }
+body .consulate-slip-verdict { font-size: 1.4rem; font-weight: 700; letter-spacing: 0.02em; }
+body .consulate-slip.approved .consulate-slip-verdict { color: #15803d; }
+body .consulate-slip.refused .consulate-slip-verdict { color: #b91c1c; }
+body .consulate-slip-pct { font-size: 0.92rem; font-weight: 600; color: var(--text-primary); }
+body .consulate-slip-note { font-size: 0.7rem; font-weight: 600; letter-spacing: 0.04em; text-transform: uppercase; color: var(--text-muted); margin-top: 0.3rem; }
 @keyframes consulateSlipIn {
-    from { transform: translateX(-130%) rotate(-5deg); opacity: 0.4; }
-    to   { transform: translateX(0) rotate(0deg); opacity: 1; }
+    from { transform: translateY(14px); opacity: 0; }
+    to   { transform: translateY(0); opacity: 1; }
 }
 
 @media (max-width: 640px) {
-    body .consulate-orb { width: 74px; height: 74px; }
-    body .consulate-orb-core { width: 32px; height: 32px; }
+    body .consulate-orb { width: 56px; height: 56px; }
+    body .consulate-orb-core { width: 20px; height: 20px; }
     body .consulate-plate-row { gap: 0.55rem; }
     body .consulate-voice-chip { white-space: normal; }
 }

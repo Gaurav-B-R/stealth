@@ -317,11 +317,13 @@ def resolve_plan_currency(plan_key: str, currency: str | None = None) -> str:
     """The currency a plan can ACTUALLY be charged in — never merely the one requested.
 
     This exists to close a 100× overcharge. `CURRENCY` is env-driven
-    (ENTERPRISE_PLAN_CURRENCY), but the plan price book is INR-only. Setting that env var
-    to USD used to mean the amount stayed 299900 (paise) while the Razorpay order was
+    (ENTERPRISE_PLAN_CURRENCY), and when the plan price book was INR-only, setting that
+    env var to USD meant the amount stayed 299900 (paise) while the Razorpay order was
     created in USD — billing a ₹2,999 plan as $2,999. Price and currency must be resolved
     together, from the same lookup, or they can disagree; every caller therefore takes the
-    currency from here rather than reading `CURRENCY` directly.
+    currency from here rather than reading `CURRENCY` directly. The plan books now carry
+    the full launch ladder, so a requested launch currency resolves to itself; anything
+    the book lacks still falls back to INR.
     """
     plan = get_plan(plan_key)
     product = (plan or {}).get("price_product")
@@ -347,11 +349,37 @@ def plan_price_minor(plan_key: str, currency: str | None = None) -> int:
 def plan_amount_paise(plan_key: str, billing_cycle: str | None = None) -> int:
     """Back-compat shim: the ex-GST monthly subtotal in INR paise.
 
+    Pinned to INR explicitly (not CURRENCY): now that the plan books carry non-INR
+    ladders, ENTERPRISE_PLAN_CURRENCY=USD would otherwise make this return cents while
+    its remaining callers (the help KB's rupee price line) treat the figure as paise.
+
     NOTE FOR CALLERS: this is the LIST price, not the charged amount. A plan order must
     be created for `checkout_quote(...)["total_minor"]`, which adds GST. Passing this
     figure to Razorpay undercharges every customer by the tax.
     """
-    return plan_price_minor(plan_key, CURRENCY)
+    return plan_price_minor(plan_key, "INR")
+
+
+def fallback_charge_currency(billing_currency: str | None, country_code: str | None) -> str:
+    """The no-hint part of deciding what currency to charge an org in: the currency they
+    were last billed in (if we can charge it) -> their country's currency -> INR.
+
+    Shared by routers.enterprise._resolve_charge_currency (which adds strict validation
+    of an explicit buyer hint on top) and build_subscription_state (which has no request
+    to take a hint from), so the two can never rank the fallbacks differently.
+    """
+    stored = (billing_currency or "").strip()
+    if stored and money.is_chargeable(stored):
+        return money.normalize_currency(stored, strict=True)
+    country = (country_code or "").strip().upper()
+    if country:
+        # Lazy import: routers.pricing imports nothing from this module, but keeping the
+        # top-level import graph acyclic is why this lives here rather than at the top.
+        from app.routers import pricing as pricing_fx
+        guess = pricing_fx._COUNTRY_TO_CURRENCY.get(country)
+        if guess and money.is_chargeable(guess):
+            return money.normalize_currency(guess, strict=True)
+    return money.DEFAULT_CURRENCY
 
 
 def included_credits_for(plan_key: str | None) -> int:
@@ -415,7 +443,7 @@ def _format_inr(paise: int) -> str:
 
 
 def public_plans_payload(currency: str | None = None) -> list[dict]:
-    """The tier cards, priced in `currency` (INR — see the PRICE_BOOK note).
+    """The tier cards, priced in `currency` (any launch currency; INR when omitted).
 
     Every price field is the EX-GST subtotal, and `tax_*`/`total_*` carry what checkout
     will actually charge, so a card can render "₹2,999/mo + GST" and a breakdown without
@@ -602,11 +630,16 @@ def build_subscription_state(db: Session, organization_id: int) -> dict:
     # The ORG's creation date decides the ramp — see is_grandfathered. Legacy orgs have no
     # subscription row until this very request creates one, so the subscription's own age is
     # always "just now" for exactly the accounts that must be protected.
-    org_created_at = (
-        db.query(models.EnterpriseOrganization.created_at)
+    org_row = (
+        db.query(
+            models.EnterpriseOrganization.created_at,
+            models.EnterpriseOrganization.billing_currency,
+            models.EnterpriseOrganization.country_code,
+        )
         .filter(models.EnterpriseOrganization.id == int(organization_id))
-        .scalar()
+        .first()
     )
+    org_created_at = org_row[0] if org_row else None
     grandfathered = is_grandfathered(sub, org_created_at)
     can_add_client = (max_clients == UNLIMITED or clients_used < max_clients) and not trial_expired
     can_add_seat = (max_seats == UNLIMITED or seats_used < max_seats) and not trial_expired
@@ -615,7 +648,35 @@ def build_subscription_state(db: Session, organization_id: int) -> dict:
         # them while the platform was free keeps working while it picks a tier.
         can_add_client = True
         can_add_seat = True
-    quote = checkout_quote(plan_key, CURRENCY)
+    # Quote in the currency this org is ACTUALLY billed in. For an org that has ever paid
+    # for a plan, that is the currency of its latest verified plan payment — a Razorpay
+    # mandate keeps charging the currency it was opened in forever, so deriving the chip
+    # from the sticky-choice/country fallback would restyle a live ₹3,538.82 mandate as
+    # "$39/mo" (or flip a $39 mandate to rupees after an INR credit top-up). The fallback
+    # chain is only for prospective pricing: sandbox and never-paid orgs. The reported
+    # `currency` below comes from the quote so the two can never disagree.
+    billed_currency = (
+        db.query(models.EnterpriseSubscriptionPayment.currency)
+        .filter(
+            models.EnterpriseSubscriptionPayment.organization_id == int(organization_id),
+            models.EnterpriseSubscriptionPayment.status.in_(
+                ("verified", "partially_refunded", "refunded")
+            ),
+        )
+        .order_by(models.EnterpriseSubscriptionPayment.id.desc())
+        .limit(1)
+        .scalar()
+    )
+    if billed_currency and money.is_chargeable(billed_currency):
+        quote_currency = resolve_plan_currency(
+            plan_key, money.normalize_currency(billed_currency, strict=False)
+        )
+    else:
+        quote_currency = resolve_plan_currency(
+            plan_key,
+            fallback_charge_currency(org_row[1] if org_row else None, org_row[2] if org_row else None),
+        )
+    quote = checkout_quote(plan_key, quote_currency)
 
     # A LAPSED PAYING CUSTOMER IS NOT A NEW SANDBOX ORG. effective_plan_key drops them to
     # sandbox limits, but without saying so every surface would present a consultancy that
@@ -668,7 +729,7 @@ def build_subscription_state(db: Session, organization_id: int) -> dict:
         # need a second round trip to /billing/plans.
         "included_credits": plan["included_credits"],
         "credits_recur": plan["credits_recur"],
-        "currency": CURRENCY,
+        "currency": quote["currency"],
         "monthly_minor": quote["list_minor"],
         "monthly_display": quote["list_display"],
         "tax_label": quote["tax_label"],

@@ -374,6 +374,23 @@ const PASS_PRICE_LADDER_FALLBACK = Object.freeze([
     { currency: 'AED', amount_minor: 4900 },
     { currency: 'SGD', amount_minor: 1699 }
 ]);
+// The Enterprise plan ladders — one owner-chosen price per currency per plan, mirroring
+// app/money.py PRICE_BOOK["plan_starter"/"plan_growth"/"plan_scale"]; the two must be
+// updated together. Same deal as PASS_PRICE_LADDER_FALLBACK above: this copy exists only
+// so the PUBLIC pricing page can show real prices, it is display-only, and the amount
+// charged is always resolved server-side. Amounts are ex-tax minor units; GST (+18%)
+// applies ONLY to INR — every other currency is a zero-rated export, so the listed price
+// IS the charged price and "+ GST" must never be shown next to a non-INR amount.
+const ENTERPRISE_PLAN_LADDER_FALLBACK = Object.freeze({
+    INR: { plan_starter: 299900, plan_growth: 699900, plan_scale: 1499900 },
+    USD: { plan_starter: 3900, plan_growth: 8900, plan_scale: 19500 },
+    GBP: { plan_starter: 2900, plan_growth: 6900, plan_scale: 14500 },
+    EUR: { plan_starter: 3500, plan_growth: 7900, plan_scale: 17500 },
+    CAD: { plan_starter: 5200, plan_growth: 11900, plan_scale: 25900 },
+    AUD: { plan_starter: 5900, plan_growth: 13900, plan_scale: 29500 },
+    AED: { plan_starter: 14500, plan_growth: 33900, plan_scale: 72500 },
+    SGD: { plan_starter: 4900, plan_growth: 11500, plan_scale: 24500 }
+});
 // The currency the buyer is being quoted, shared by the pricing page and the paywall so
 // the two can never show different prices for the same product.
 const PASS_CURRENCY_STORAGE_KEY = 'rilono_pass_currency';
@@ -8739,8 +8756,8 @@ function enterConsulateMode() {
     booth.id = 'consulateBooth';
     booth.className = 'consulate-booth';
     const voiceChip = clientHasVisaPass()
-        ? '<span class="consulate-voice-chip pass">🔊 Immersive officer voice</span>'
-        : '<span class="consulate-voice-chip">🔈 Standard voice · <a href="/visa-pass" target="_blank" rel="noopener">Pass unlocks the real officer voice</a></span>';
+        ? '<span class="consulate-voice-chip pass">Immersive officer voice</span>'
+        : '<span class="consulate-voice-chip">Standard voice · <a href="/visa-pass" target="_blank" rel="noopener">Pass unlocks the real officer voice</a></span>';
     booth.innerHTML = `
         <div class="consulate-stripes" aria-hidden="true"><i></i><i></i><i></i></div>
         <div class="consulate-plate-row">
@@ -9792,6 +9809,31 @@ function updatePricingByCurrency(currencyCode) {
     if (hintEl) {
         hintEl.textContent = 'Each currency has its own fixed price — nothing is converted at checkout.';
     }
+
+    // Enterprise card. Plans are priced per currency in ENTERPRISE_PLAN_LADDER_FALLBACK;
+    // with no ladder entry for this currency, fall back to INR for THIS card only (the
+    // INR markup is the no-JS fallback, so re-rendering it in INR is always safe).
+    // "+ GST" is INR-only: every other currency is a zero-rated export, so the listed
+    // price is exactly what is charged.
+    const enterpriseCurrency = ENTERPRISE_PLAN_LADDER_FALLBACK[currency] ? currency : 'INR';
+    const enterprisePlans = ENTERPRISE_PLAN_LADDER_FALLBACK[enterpriseCurrency];
+    const enterprisePriceEl = document.getElementById('pricingEnterprisePrice');
+    if (enterprisePriceEl && enterprisePlans) {
+        const enterpriseSuffix = enterpriseCurrency === 'INR' ? '&nbsp;/month + GST' : '&nbsp;/month';
+        enterprisePriceEl.innerHTML =
+            `${escapeHtml(formatMoneyMinor(enterprisePlans.plan_starter, enterpriseCurrency))}<span>${enterpriseSuffix}</span>`;
+    }
+    const enterpriseTierEls = {
+        plan_starter: document.getElementById('pricingEnterpriseTierStarter'),
+        plan_growth: document.getElementById('pricingEnterpriseTierGrowth'),
+        plan_scale: document.getElementById('pricingEnterpriseTierScale')
+    };
+    Object.keys(enterpriseTierEls).forEach((planKey) => {
+        const tierEl = enterpriseTierEls[planKey];
+        if (tierEl && enterprisePlans) {
+            tierEl.textContent = formatMoneyMinor(enterprisePlans[planKey], enterpriseCurrency);
+        }
+    });
 }
 
 // The single money formatter for the student app. `minor` is an integer in the MINOR unit

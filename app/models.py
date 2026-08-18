@@ -1342,6 +1342,16 @@ class EnterpriseSubscriptionPayment(Base):
     tax_percent = Column(Numeric(5, 2), nullable=True)
     tax_label = Column(String, nullable=True)  # 'GST' domestically, null on zero-rated exports
     currency = Column(String, nullable=False, default="INR")
+    # --- Settlement (mirrors EnterpriseCreditPayment) ---------------------------------
+    # Razorpay settles every charge to INR and reports the converted figure as
+    # `base_amount`; that — never amount_paise — is the only number the revenue readers
+    # may sum once plan rows carry mixed currencies. NULL means "settlement figure not
+    # landed yet"; such rows are counted, not silently dropped.
+    base_amount_paise = Column(Integer, nullable=True)     # Razorpay's INR settlement figure
+    base_currency = Column(String, nullable=False, default="INR")
+    fx_rate_used = Column(Numeric(18, 6), nullable=True)
+    is_international = Column(Boolean, nullable=False, default=False)
+    price_book_version = Column(String, nullable=True)
     # AI credits this payment entitles the org to for the period it opens. Snapshotted so
     # a later change to the plan's allowance cannot alter what an org already bought.
     included_credits = Column(Integer, nullable=False, default=0, server_default="0")

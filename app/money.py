@@ -248,7 +248,7 @@ def charm_minor(round_minor: int, currency: str = DEFAULT_CURRENCY) -> int:
 # Bump PRICE_BOOK_VERSION whenever a number below changes. It is stamped into the
 # Razorpay order notes and onto the payment row, so an in-flight price change stays
 # reconcilable after the fact.
-PRICE_BOOK_VERSION = "2026-08-02"
+PRICE_BOOK_VERSION = "2026-08-17"
 
 
 def _env_minor(env_key: str, default_minor: int) -> int:
@@ -308,24 +308,47 @@ PRICE_BOOK: dict[str, dict[str, int]] = {
     },
     # B2B — the monthly platform subscription tiers (app/enterprise_billing.py).
     #
-    # INR-ONLY BY DESIGN, and that is a product decision rather than an oversight. The
-    # published tier card quotes rupees exclusive of GST; an owner-chosen ladder for the
-    # other seven launch currencies has not been set, and FX-converting at request time is
-    # exactly what the module docstring forbids. `price_options()` therefore returns a
-    # single INR option for these, and the plan checkout quotes INR to everyone — Razorpay
-    # accepts international cards against an INR order, so a foreign consultancy can still
-    # subscribe. Adding a currency later is one line per plan here plus nothing else.
+    # Owner-chosen ladders since 2026-08-17 (they were INR-only before that; the pricing
+    # page showed ₹ to everyone while the rest of the page followed the currency
+    # selector). Starter mirrors the credits_pro ladder — both anchor to ₹2,999 — and
+    # Scale is 5× Starter per currency, matching ₹14,999 ≈ 5 × ₹2,999 (CAD alone is
+    # charm-nudged to C$259 instead of the exact C$260), with Growth at the same ~2.33×
+    # ratio the INR tiers encode. Still never FX-converted at request time.
     #
-    # These are the EX-GST subtotals. GST is added at checkout (see gst_minor / quote_with_tax)
-    # and is never baked into the listed number, because the tier card says "+ GST".
+    # These are the EX-TAX subtotals. For INR, GST is added at checkout (see gst_minor /
+    # quote_with_tax) and is never baked into the listed number, because the tier card
+    # says "+ GST". A non-INR plan sale is an export of services (zero-rated under LUT):
+    # quote_with_tax returns tax 0 and no tax label, so the listed price IS the charged
+    # price — any card rendering these must show "+ GST" only for INR.
     "plan_starter": {
-        "INR": _env_minor("ENTERPRISE_STARTER_MONTHLY_PAISE", 299_900),    # ₹2,999/mo
+        "INR": _env_minor("ENTERPRISE_STARTER_MONTHLY_PAISE", 299_900),        # ₹2,999/mo
+        "USD": _env_minor("ENTERPRISE_STARTER_MONTHLY_USD_MINOR", 3_900),      # $39
+        "GBP": _env_minor("ENTERPRISE_STARTER_MONTHLY_GBP_MINOR", 2_900),      # £29
+        "EUR": _env_minor("ENTERPRISE_STARTER_MONTHLY_EUR_MINOR", 3_500),      # €35
+        "CAD": _env_minor("ENTERPRISE_STARTER_MONTHLY_CAD_MINOR", 5_200),      # C$52
+        "AUD": _env_minor("ENTERPRISE_STARTER_MONTHLY_AUD_MINOR", 5_900),      # A$59
+        "AED": _env_minor("ENTERPRISE_STARTER_MONTHLY_AED_MINOR", 14_500),     # AED 145
+        "SGD": _env_minor("ENTERPRISE_STARTER_MONTHLY_SGD_MINOR", 4_900),      # S$49
     },
     "plan_growth": {
-        "INR": _env_minor("ENTERPRISE_GROWTH_MONTHLY_PAISE", 699_900),     # ₹6,999/mo
+        "INR": _env_minor("ENTERPRISE_GROWTH_MONTHLY_PAISE", 699_900),         # ₹6,999/mo
+        "USD": _env_minor("ENTERPRISE_GROWTH_MONTHLY_USD_MINOR", 8_900),       # $89
+        "GBP": _env_minor("ENTERPRISE_GROWTH_MONTHLY_GBP_MINOR", 6_900),       # £69
+        "EUR": _env_minor("ENTERPRISE_GROWTH_MONTHLY_EUR_MINOR", 7_900),       # €79
+        "CAD": _env_minor("ENTERPRISE_GROWTH_MONTHLY_CAD_MINOR", 11_900),      # C$119
+        "AUD": _env_minor("ENTERPRISE_GROWTH_MONTHLY_AUD_MINOR", 13_900),      # A$139
+        "AED": _env_minor("ENTERPRISE_GROWTH_MONTHLY_AED_MINOR", 33_900),      # AED 339
+        "SGD": _env_minor("ENTERPRISE_GROWTH_MONTHLY_SGD_MINOR", 11_500),      # S$115
     },
     "plan_scale": {
-        "INR": _env_minor("ENTERPRISE_SCALE_MONTHLY_PAISE", 1_499_900),    # ₹14,999/mo
+        "INR": _env_minor("ENTERPRISE_SCALE_MONTHLY_PAISE", 1_499_900),        # ₹14,999/mo
+        "USD": _env_minor("ENTERPRISE_SCALE_MONTHLY_USD_MINOR", 19_500),       # $195
+        "GBP": _env_minor("ENTERPRISE_SCALE_MONTHLY_GBP_MINOR", 14_500),       # £145
+        "EUR": _env_minor("ENTERPRISE_SCALE_MONTHLY_EUR_MINOR", 17_500),       # €175
+        "CAD": _env_minor("ENTERPRISE_SCALE_MONTHLY_CAD_MINOR", 25_900),       # C$259
+        "AUD": _env_minor("ENTERPRISE_SCALE_MONTHLY_AUD_MINOR", 29_500),       # A$295
+        "AED": _env_minor("ENTERPRISE_SCALE_MONTHLY_AED_MINOR", 72_500),       # AED 725
+        "SGD": _env_minor("ENTERPRISE_SCALE_MONTHLY_SGD_MINOR", 24_500),       # S$245
     },
     # B2B — monthly infrastructure server fee. RETIRED 2026-08-02 when the tiered plans
     # above replaced it; kept in the book so historical `kind="infra_fee"` payment rows

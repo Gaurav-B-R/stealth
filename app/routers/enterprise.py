@@ -2783,6 +2783,9 @@ class EnterpriseBillingCheckoutRequest(BaseModel):
     plan: str = Field(..., min_length=2, max_length=30)
     billing_cycle: str = Field(default="monthly", max_length=12)
     coupon_code: Optional[str] = Field(default=None, max_length=40)
+    # Presentment currency HINT. The server maps it to a price from app/money.py; the
+    # client never sends an amount. See _resolve_charge_currency.
+    currency: Optional[str] = Field(default=None, max_length=3)
 
 
 class EnterpriseBillingVerifyRequest(BaseModel):
@@ -2809,6 +2812,9 @@ class EnterpriseCouponValidateRequest(BaseModel):
     package: Optional[str] = Field(default=None, max_length=30)
     plan: Optional[str] = Field(default=None, max_length=30)
     billing_cycle: Optional[str] = Field(default="monthly", max_length=12)
+    # Presentment currency HINT — must match what the buyer has selected in the UI, so
+    # this preview prices exactly the way the checkout it previews will.
+    currency: Optional[str] = Field(default=None, max_length=3)
 
 
 class EnterpriseCreditVerifyRequest(BaseModel):
@@ -6793,16 +6799,10 @@ def _resolve_charge_currency(hint: Optional[str], organization) -> str:
                     + ", ".join(money.supported_charge_currencies()) + "."
                 ),
             )
-    stored = (getattr(organization, "billing_currency", None) or "").strip()
-    if stored and money.is_chargeable(stored):
-        return money.normalize_currency(stored, strict=True)
-    country = (getattr(organization, "country_code", None) or "").strip().upper()
-    if country:
-        from app.routers import pricing as pricing_fx
-        guess = pricing_fx._COUNTRY_TO_CURRENCY.get(country)
-        if guess and money.is_chargeable(guess):
-            return money.normalize_currency(guess, strict=True)
-    return money.DEFAULT_CURRENCY
+    return billing.fallback_charge_currency(
+        getattr(organization, "billing_currency", None),
+        getattr(organization, "country_code", None),
+    )
 
 
 def _razorpay_request(method: str, path: str, json_payload: dict | None = None) -> dict:
@@ -8015,6 +8015,14 @@ def _reconcile_plan_payment(db: Session, *, plan_row, entity: dict, order_id: st
     plan_row.status = "verified"
     plan_row.verified_at = now
     plan_row.error_message = None
+    # The payment entity is already in hand — stamp Razorpay's INR settlement figure so
+    # a non-INR plan sale reconciled by webhook is summable for revenue.
+    base_minor, fx_rate = money.settled_inr_minor(entity)
+    if base_minor is not None:
+        plan_row.base_amount_paise = base_minor
+        plan_row.fx_rate_used = fx_rate
+    plan_row.base_currency = "INR"
+    plan_row.is_international = bool(entity.get("international"))
 
     period_days = 365 if plan_row.billing_cycle == "yearly" else billing.PLAN_PERIOD_DAYS
     sub = billing.get_or_create_org_subscription(db, plan_row.organization_id, commit=False)
@@ -8086,12 +8094,17 @@ def _handle_subscription_charged(db: Session, *, event: dict, payment_entity: di
         return {"status": "ignored", "reason": "missing_ids"}
 
     sub = _sub_by_mandate(db, subscription_id)
-    seed_row = (
+    seed_query = (
         db.query(models.EnterpriseSubscriptionPayment)
         .filter(models.EnterpriseSubscriptionPayment.razorpay_subscription_id == subscription_id)
         .order_by(models.EnterpriseSubscriptionPayment.id.asc())
-        .first()
     )
+    # Serialize against /billing/verify, which locks this same seed row for its whole run:
+    # the payment-id idempotency check below is only safe if webhook and browser verify
+    # cannot both pass it concurrently.
+    if db.bind and db.bind.dialect.name != "sqlite":
+        seed_query = seed_query.with_for_update()
+    seed_row = seed_query.first()
     if sub is None and seed_row is None:
         return {"status": "ignored", "reason": "mandate_not_found"}
     org_id = int(sub.organization_id if sub is not None else seed_row.organization_id)
@@ -8112,6 +8125,8 @@ def _handle_subscription_charged(db: Session, *, event: dict, payment_entity: di
     # row: a price change between periods must not be reported with the old period's tax.
     subtotal = money.tax_inclusive_net_minor(amount, currency) if amount else 0
     tax = max(0, amount - subtotal)
+    # Razorpay's INR settlement figure for this renewal charge (entity in hand).
+    base_minor, fx_rate = money.settled_inr_minor(entity)
 
     db.add(models.EnterpriseSubscriptionPayment(
         organization_id=org_id,
@@ -8125,6 +8140,10 @@ def _handle_subscription_charged(db: Session, *, event: dict, payment_entity: di
         tax_label=(seed_row.tax_label if seed_row else None),
         included_credits=billing.included_credits_for(plan_key),
         currency=currency,
+        base_amount_paise=base_minor,
+        base_currency="INR",
+        fx_rate_used=fx_rate,
+        is_international=bool(entity.get("international")),
         # Each renewal needs its own unique "order" key; the payment id is unique per charge.
         razorpay_order_id=payment_id,
         razorpay_payment_id=payment_id,
@@ -8601,9 +8620,17 @@ def enterprise_billing_plans(
     current_user: models.User = Depends(get_current_active_user),
 ):
     _, organization, role = _require_enterprise_membership(db=db, user=current_user, request=request)
+    # Tier cards priced in the org's own billing currency (sticky choice -> country ->
+    # INR). Each plan also carries its full `price_options` ladder so the UI can offer a
+    # currency selector without a second round trip.
+    org_currency = _resolve_charge_currency(None, organization)
     return {
-        "plans": billing.public_plans_payload(),
-        "currency": billing.CURRENCY,
+        "plans": billing.public_plans_payload(org_currency),
+        "currency": org_currency,
+        "charge_currencies": list(money.supported_charge_currencies()),
+        # The live INR GST rate, so the SPA's cross-currency preview (INR selected over a
+        # foreign-quoted payload) never has to hardcode 18.
+        "gst_percent": float(money.GST_PERCENT),
         "checkout_enabled": _razorpay_enabled(),
         "razorpay_key_id": os.getenv("RAZORPAY_KEY_ID", "").strip() or None,
         "permissions": _enterprise_permissions_for_role(role),
@@ -8618,10 +8645,14 @@ def enterprise_billing_subscription(
     current_user: models.User = Depends(get_current_active_user),
 ):
     _, organization, role = _require_enterprise_membership(db=db, user=current_user, request=request)
+    org_currency = _resolve_charge_currency(None, organization)
     return {
         "permissions": _enterprise_permissions_for_role(role),
         "subscription": _serialize_subscription_state(billing.build_subscription_state(db, organization.id)),
-        "plans": billing.public_plans_payload(),
+        "plans": billing.public_plans_payload(org_currency),
+        "currency": org_currency,
+        "charge_currencies": list(money.supported_charge_currencies()),
+        "gst_percent": float(money.GST_PERCENT),
     }
 
 
@@ -8719,6 +8750,13 @@ def _activate_free_plan(
         tax_label=quote.get("tax_label"),
         included_credits=int(plan.get("included_credits") or 0),
         currency=currency,
+        # A fully-discounted order never reached a gateway, so there is no settlement to
+        # look up. It is worth 0 either way, and stating that explicitly keeps the
+        # revenue sums (which read base_amount_paise) from falling back to a non-INR
+        # amount_paise.
+        base_amount_paise=0,
+        base_currency="INR",
+        price_book_version=money.PRICE_BOOK_VERSION,
         razorpay_order_id=f"free_{organization.id}_{secrets.token_hex(8)}"[:40],
         status="verified",
         coupon_code=coupon_code,
@@ -8758,12 +8796,33 @@ def enterprise_billing_checkout(
     if not plan or plan["key"] not in billing.PAID_PLAN_KEYS:
         raise HTTPException(status_code=400, detail="Please choose a valid paid plan.")
     cycle = billing.normalize_billing_cycle(payload.billing_cycle)
-    # Price and currency resolve together. Reading billing.CURRENCY here instead would let
-    # a misconfigured ENTERPRISE_PLAN_CURRENCY create a USD order for a rupee amount.
-    plan_currency = billing.resolve_plan_currency(plan["key"], billing.CURRENCY)
+    # The buyer's selected currency (validated strictly; falls back to the org's sticky
+    # choice, then country, then INR), clamped by resolve_plan_currency so price and
+    # currency still come from the same PRICE_BOOK entry. Reading billing.CURRENCY here
+    # instead would let a misconfigured ENTERPRISE_PLAN_CURRENCY create a USD order for
+    # a rupee amount.
+    requested_currency = _resolve_charge_currency(payload.currency, organization)
+    plan_currency = billing.resolve_plan_currency(plan["key"], requested_currency)
+    if payload.currency and plan_currency != requested_currency:
+        # The hint was chargeable in general but this plan's book has no entry for it
+        # (possible only when an env override strips a ladder entry). Silently charging
+        # INR would bill a currency the buyer did not pick — refuse instead.
+        raise HTTPException(
+            status_code=400,
+            detail=f"{plan['label']} is not sold in {requested_currency} yet. Please pick another currency.",
+        )
     list_amount = billing.plan_price_minor(plan["key"], plan_currency)
     if list_amount <= 0:
         raise HTTPException(status_code=400, detail="This plan is not available for online checkout.")
+
+    def _remember_billing_currency():
+        # Sticky: later wallet displays, coupon previews and checkouts follow this choice
+        # (same rule as the credit top-up path). Called only on the success paths, right
+        # before their commit — NOT up here: _ensure_razorpay_plan_id commits mid-request,
+        # and setting the org field early would persist the choice for a checkout that
+        # then failed to create anything.
+        if (organization.billing_currency or "").strip().upper() != plan_currency:
+            organization.billing_currency = plan_currency
 
     # Per-account discount code (admin-managed). It reduces the TAXABLE subtotal, so it is
     # resolved before the GST quote below — never applied to a tax-inclusive figure.
@@ -8791,6 +8850,7 @@ def enterprise_billing_checkout(
     # hard-failed with a 400 at the moment they clicked pay. Activate it directly instead —
     # this mirrors what the credits top-up path already does for a 100%-off coupon.
     if amount < money.min_charge_minor(plan_currency):
+        _remember_billing_currency()
         _activate_free_plan(
             db, organization=organization, user=current_user, plan=plan, cycle=cycle,
             subtotal=subtotal, tax=tax, quote=quote, currency=plan_currency,
@@ -8818,6 +8878,7 @@ def enterprise_billing_checkout(
         "billing_cycle": cycle,
         "user_id": str(current_user.id),
         "coupon_code": coupon_code or "",
+        "currency": plan_currency,
         "subtotal_paise": str(subtotal),
         "tax_paise": str(tax),
         "tax_label": quote["tax_label"] or "",
@@ -8848,6 +8909,7 @@ def enterprise_billing_checkout(
         subscription_id = str(sub_data.get("id") or "").strip()
         if not subscription_id.startswith("sub_"):
             raise HTTPException(status_code=502, detail="Could not start the subscription.")
+        _remember_billing_currency()
         # The payment row keys on razorpay_order_id (unique), and for the recurring flow the
         # subscription id plays that role until the first charge arrives.
         db.add(models.EnterpriseSubscriptionPayment(
@@ -8862,6 +8924,7 @@ def enterprise_billing_checkout(
             tax_label=quote.get("tax_label"),
             included_credits=billing.included_credits_for(plan["key"]),
             currency=plan_currency,
+            price_book_version=money.PRICE_BOOK_VERSION,
             razorpay_order_id=subscription_id,
             razorpay_subscription_id=subscription_id,
             coupon_code=coupon_code,
@@ -8911,6 +8974,7 @@ def enterprise_billing_checkout(
     if not order_id:
         raise HTTPException(status_code=502, detail="Could not create the payment order.")
 
+    _remember_billing_currency()
     db.add(models.EnterpriseSubscriptionPayment(
         organization_id=organization.id,
         created_by_user_id=current_user.id,
@@ -8928,6 +8992,7 @@ def enterprise_billing_checkout(
         coupon_code=coupon_code,
         coupon_percent_off=coupon_percent,
         currency=plan_currency,
+        price_book_version=money.PRICE_BOOK_VERSION,
         razorpay_order_id=order_id,
         status="created",
     ))
@@ -9020,14 +9085,21 @@ def enterprise_billing_verify(
     if not key_id or not key_secret:
         raise HTTPException(status_code=503, detail="Payment verification is not configured.")
 
-    payment_row = (
+    payment_query = (
         db.query(models.EnterpriseSubscriptionPayment)
         .filter(
             models.EnterpriseSubscriptionPayment.razorpay_order_id == payload.razorpay_order_id.strip(),
             models.EnterpriseSubscriptionPayment.organization_id == organization.id,
         )
-        .first()
     )
+    # Lock the row (Postgres) for the whole verify, exactly like _verify_credit_payment_or_402:
+    # the entity fetch below takes hundreds of ms, and the payment webhook locks this same
+    # row before reconciling — without this lock both sides pass their idempotency checks
+    # during the fetch and one charge extends the period twice (or the mandate flow trips
+    # the unique payment-id index and 500s a buyer whose payment just succeeded).
+    if db.bind and db.bind.dialect.name != "sqlite":
+        payment_query = payment_query.with_for_update()
+    payment_row = payment_query.first()
     if not payment_row:
         raise HTTPException(status_code=404, detail="Payment order not found for this organization.")
 
@@ -9080,6 +9152,13 @@ def enterprise_billing_verify(
     if already is not None:
         payment_row.status = "verified"
         payment_row.verified_at = payment_row.verified_at or datetime.utcnow()
+        # The money for this charge lives on the webhook-created renewal row; this seed is
+        # a bookkeeping shell. Stamp a zero settlement so the settled-INR revenue sums
+        # don't count the charge twice and the unsettled counters don't report a foreign
+        # row that will never settle.
+        if payment_row.base_amount_paise is None:
+            payment_row.base_amount_paise = 0
+            payment_row.base_currency = "INR"
         db.commit()
         return {
             "message": "This payment has already been applied.",
@@ -9087,11 +9166,42 @@ def enterprise_billing_verify(
             "wallet": credits.wallet_state(db, organization.id),
         }
 
+    # The signature proves only that "order|payment" (or "payment|subscription") came from
+    # Razorpay — it binds neither the amount nor the currency, and says nothing about
+    # capture. Re-fetch the payment entity and assert against what we stored at checkout,
+    # exactly as _verify_credit_payment_or_402 does; this is also the only place the
+    # browser-verify path can learn Razorpay's INR settlement figure for a non-INR charge.
+    payment_data = _razorpay_request("GET", f"/payments/{charge_id}")
+
+    def _reject_plan_payment(detail: str):
+        payment_row.status = "failed"
+        payment_row.error_message = detail
+        db.commit()
+        raise HTTPException(status_code=400, detail=detail)
+
+    expected_currency = money.normalize_currency(payment_row.currency, strict=False)
+    if int(payment_data.get("amount", 0) or 0) != int(payment_row.amount_paise):
+        _reject_plan_payment("Payment amount mismatch.")
+    if money.normalize_currency(payment_data.get("currency"), strict=False) != expected_currency:
+        _reject_plan_payment("Payment currency mismatch.")
+    if not is_recurring and str(payment_data.get("order_id") or "") != payment_row.razorpay_order_id:
+        _reject_plan_payment("Payment does not belong to this order.")
+    if not bool(payment_data.get("captured")):
+        _reject_plan_payment("This payment has not been captured yet.")
+
     now = datetime.utcnow()
     payment_row.razorpay_payment_id = charge_id
     payment_row.status = "verified"
     payment_row.verified_at = now
     payment_row.error_message = None
+    # Razorpay's own INR settlement figure — the only amount that may be summed for
+    # revenue once plan rows carry mixed currencies.
+    base_minor, fx_rate = money.settled_inr_minor(payment_data)
+    if base_minor is not None:
+        payment_row.base_amount_paise = base_minor
+        payment_row.fx_rate_used = fx_rate
+    payment_row.base_currency = "INR"
+    payment_row.is_international = bool(payment_data.get("international"))
 
     # Monthly only (billing.normalize_billing_cycle collapses everything to "monthly"), but
     # an in-flight order created before that change may still carry "yearly" — honour it.
@@ -9564,18 +9674,27 @@ def enterprise_coupon_validate(
         # This is a PREVIEW of a specific checkout, so it must price the item exactly the
         # way that checkout will. Reading PACKAGES[...]["amount_paise"] quoted the INR list
         # price to every org: a USD buyer saw "₹999 → ₹499" and was then charged
-        # $12.99 → $6.49. Same resolver, same price book, same currency as the order.
-        currency = _resolve_charge_currency(None, organization)
+        # $12.99 → $6.49. Same resolver, same price book, same currency as the order —
+        # including the buyer's selected currency when the UI passes it along.
+        currency = _resolve_charge_currency(payload.currency, organization)
         base_amount = credits.package_price_minor(package["key"], currency)
     else:
         plan = billing.get_plan(payload.plan)
         if not plan or plan["key"] not in billing.PAID_PLAN_KEYS:
             raise HTTPException(status_code=400, detail="Please choose a valid paid plan.")
         cycle = billing.normalize_billing_cycle(payload.billing_cycle)
-        # The SaaS plan book is still INR-only (billing.plan_amount_paise has no currency
-        # dimension), so this branch is genuinely rupees. Say so rather than inheriting it.
-        currency = "INR"
-        base_amount = billing.plan_amount_paise(plan["key"], cycle)
+        # Same resolver, same price book, same currency as /billing/checkout — this is a
+        # PREVIEW of that checkout and must price exactly the way it will, including the
+        # explicit-hint refusal, or the card shows one discount and Razorpay charges
+        # another (the credits branch above records the same bug class).
+        requested = _resolve_charge_currency(payload.currency, organization)
+        currency = billing.resolve_plan_currency(plan["key"], requested)
+        if payload.currency and currency != requested:
+            raise HTTPException(
+                status_code=400,
+                detail=f"{plan['label']} is not sold in {requested} yet. Please pick another currency.",
+            )
+        base_amount = billing.plan_price_minor(plan["key"], currency)
     if base_amount <= 0:
         raise HTTPException(status_code=400, detail="This item is not available for checkout.")
 
@@ -13858,17 +13977,35 @@ def enterprise_client_universities_search(
         .limit(take * 6)
         .all()
     )
-    # One university can hold several rows (the registry PK is the email domain), so
-    # dedupe by name, then surface prefix matches before mid-string matches.
+    # The legacy registry only covers the launch countries — the course catalog is the
+    # roster that spans every CRM destination, so the typeahead searches both.
+    catalog_rows = (
+        db.query(models.CourseCatalogUniversity)
+        .filter(
+            models.CourseCatalogUniversity.country_code == code,
+            models.CourseCatalogUniversity.is_active.is_(True),
+            models.CourseCatalogUniversity.name.ilike(f"%{term}%"),
+        )
+        .order_by(
+            models.CourseCatalogUniversity.qs_rank_numeric.is_(None),
+            models.CourseCatalogUniversity.qs_rank_numeric.asc(),
+        )
+        .limit(take * 6)
+        .all()
+    )
+    # One university can hold several rows (the registry PK is the email domain, and the
+    # catalog can re-list a registry school), so dedupe by name, then surface prefix
+    # matches before mid-string matches.
     seen, prefix, contains = set(), [], []
     lowered = term.lower()
-    for row in rows:
-        name = (row.university_name or "").strip()
+    candidates = [(r.university_name, r.location) for r in rows] + [(c.name, c.city) for c in catalog_rows]
+    for raw_name, location in candidates:
+        name = (raw_name or "").strip()
         key = name.lower()
         if not name or key in seen:
             continue
         seen.add(key)
-        item = {"name": name, "location": row.location}
+        item = {"name": name, "location": location}
         (prefix if key.startswith(lowered) else contains).append(item)
     return {"country_code": code, "results": (prefix + contains)[:take]}
 
@@ -15338,9 +15475,11 @@ def enterprise_course_finder_recommend(
     _, organization, role = _require_enterprise_membership(
         db=db, user=current_user, request=request, require_capability=("ai.coursefinder", "credits.spend")
     )
-    client = None
-    if payload.client_id:
-        client = _get_org_client_or_404(db, organization.id, payload.client_id, ctx=role.ctx)
+    # A CRM shortlist is always FOR a client — without one there is no profile to tailor
+    # to and nothing to save picks onto, so reject before rate-limit/billing choreography.
+    if not payload.client_id:
+        raise HTTPException(status_code=400, detail="Pick a client from your list first — the shortlist is tailored to their profile.")
+    client = _get_org_client_or_404(db, organization.id, payload.client_id, ctx=role.ctx)
 
     _enforce_rate_limit_or_429(
         request=request, scope="enterprise.course_finder",

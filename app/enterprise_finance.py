@@ -243,10 +243,14 @@ def _settled_inr_paise(row) -> int:
     a number that is wrong by two orders of magnitude is not.
     """
     currency = str(getattr(row, "currency", None) or "INR").strip().upper()
-    if currency == "INR":
-        # Charged == settled. Unchanged for every row that predates multi-currency.
-        return _int(getattr(row, "amount_paise", 0))
     base = getattr(row, "base_amount_paise", None)
+    if currency == "INR":
+        # Charged == settled, so the stamped settlement is normally identical to
+        # amount_paise — but a webhook-first mandate seed row carries base 0 (the money
+        # lives on the renewal row), and only the settlement figure knows that. Rows
+        # without the stamp (never touched by a verify/webhook since the migration)
+        # keep the old amount_paise behaviour.
+        return _int(base) if base is not None else _int(getattr(row, "amount_paise", 0))
     return _int(base) if base is not None else 0
 
 
@@ -1152,14 +1156,15 @@ def _rilono_billing_rows(db: Session, org_id: int, start: Optional[date], end: d
     sub_query = sub_query.filter(sub_stamp < datetime.combine(end + timedelta(days=1), datetime.min.time()))
     for sp in sub_query.order_by(S.id.desc()).limit(MAX_CREDIT_ROWS).all():
         occurred = _as_date(sp.verified_at) or _as_date(sp.created_at)
-        # The plan book is INR-only; anything else would be a bug, and booking cents as
-        # paise is exactly the error the credit loop above guards against.
-        if (sp.currency or "INR").strip().upper() != "INR":
-            continue
-        gross = _int(sp.amount_paise)
+        # Same settlement rule as the credit loop above: the plan books sell in more than
+        # INR now, and amount_paise is minor units of sp.currency. A non-INR row books at
+        # Razorpay's INR settlement figure, or is dropped until that figure lands.
+        gross = _settled_inr_paise(sp)
         if not occurred or gross <= 0:
             continue
         label = str(sp.plan or "").replace("_", " ").title() or "Rilono"
+        # Non-INR plan sales are zero-rated exports: tax_paise is 0 on those rows, and for
+        # INR rows it is already paise, so no conversion is needed either way.
         tax = _int(sp.tax_paise)
         rows.append(_row(
             row_id=f"rilono-plan-{sp.id}",

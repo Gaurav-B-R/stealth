@@ -2601,6 +2601,39 @@
                                 </svg></span>
                             <span class="nav-label">Overview</span>
                         </a>
+                        <a href="#" class="nav-item" data-tab="universities"
+                            onclick="switchDashboardTab('universities'); return false;">
+                            <span class="nav-icon"><svg viewBox="0 0 24 24" aria-hidden="true" fill="none"
+                                    stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                                    <path d="M3 9l9-5 9 5-9 5-9-5z"></path>
+                                    <path d="M3 9v5l9 5 9-5V9"></path>
+                                    <path d="M21 9v5"></path></svg></span>
+                            <span class="nav-label">Universities</span>
+                        </a>
+                        <div id="uniSubNav" class="visa-subnav" style="display: none;">
+                            <a href="#" class="visa-subnav-item active" data-uni-subtab="universities"
+                                onclick="switchDashboardTab('universities'); return false;">
+                                <span class="subnav-icon"><svg viewBox="0 0 24 24" aria-hidden="true">
+                                        <path d="M4 6h16"></path>
+                                        <path d="M4 12h16"></path>
+                                        <path d="M4 18h10"></path></svg></span>
+                                <span class="subnav-label">Shortlist &amp; Recommendations</span>
+                            </a>
+                            <a href="#" class="visa-subnav-item" data-uni-subtab="courses"
+                                onclick="switchDashboardTab('courses'); return false;">
+                                <span class="subnav-icon"><svg viewBox="0 0 24 24" aria-hidden="true">
+                                        <circle cx="11" cy="11" r="7"></circle>
+                                        <path d="M21 21l-4.35-4.35"></path></svg></span>
+                                <span class="subnav-label">Course Finder</span>
+                            </a>
+                            <a href="#" class="visa-subnav-item" data-uni-subtab="sop"
+                                onclick="switchDashboardTab('sop'); return false;">
+                                <span class="subnav-icon"><svg viewBox="0 0 24 24" aria-hidden="true">
+                                        <path d="M12 20h9"></path>
+                                        <path d="M16.5 3.5a2.121 2.121 0 013 3L7 19l-4 1 1-4L16.5 3.5z"></path></svg></span>
+                                <span class="subnav-label" id="subnavLabelSop">SOP Studio</span>
+                            </a>
+                        </div>
                         <a href="#" class="nav-item" data-tab="documents"
                             onclick="switchDashboardTab('documents'); return false;">
                             <span class="nav-icon"><svg viewBox="0 0 24 24" aria-hidden="true">
@@ -2610,6 +2643,17 @@
                                     <path d="M9 17h6"></path>
                                 </svg></span>
                             <span class="nav-label">Documents</span>
+                        </a>
+                        <a href="#" class="nav-item" data-tab="records"
+                            onclick="switchDashboardTab('records'); return false;">
+                            <span class="nav-icon"><svg viewBox="0 0 24 24" aria-hidden="true">
+                                    <rect x="4" y="7" width="16" height="11" rx="3"></rect>
+                                    <path d="M12 7V4"></path>
+                                    <path d="M10 4h4"></path>
+                                    <circle cx="9.5" cy="12.5" r="1"></circle>
+                                    <circle cx="14.5" cy="12.5" r="1"></circle>
+                                </svg></span>
+                            <span class="nav-label">Rilono AI</span>
                         </a>
                         <a href="#" class="nav-item nav-item-parent" data-tab="visa"
                             onclick="toggleVisaDashboardNav(); return false;">
@@ -2656,6 +2700,16 @@
                                 <span class="subnav-label">Recent Interview Experiences</span>
                             </a>
                         </div>
+                        <a href="#" class="nav-item" data-tab="copilot"
+                            onclick="switchDashboardTab('copilot'); return false;">
+                            <span class="nav-icon"><svg viewBox="0 0 24 24" aria-hidden="true">
+                                    <rect x="3.5" y="5" width="17" height="14" rx="3"></rect>
+                                    <path d="M8 10h8"></path>
+                                    <path d="M9.5 14h5"></path>
+                                    <circle cx="12" cy="4" r="1.5"></circle>
+                                </svg></span>
+                            <span class="nav-label">Rilono Copilot</span>
+                        </a>
                         <a href="#" class="nav-item" data-tab="news"
                             onclick="switchDashboardTab('news'); return false;">
                             <span class="nav-icon"><svg viewBox="0 0 24 24" aria-hidden="true">
@@ -2670,60 +2724,6 @@
                                     <path d="M8.5 15h4.5"></path>
                                 </svg></span>
                             <span class="nav-label">News</span>
-                        </a>
-                        <a href="#" class="nav-item" data-tab="copilot"
-                            onclick="switchDashboardTab('copilot'); return false;">
-                            <span class="nav-icon"><svg viewBox="0 0 24 24" aria-hidden="true">
-                                    <rect x="3.5" y="5" width="17" height="14" rx="3"></rect>
-                                    <path d="M8 10h8"></path>
-                                    <path d="M9.5 14h5"></path>
-                                    <circle cx="12" cy="4" r="1.5"></circle>
-                                </svg></span>
-                            <span class="nav-label">Rilono Copilot</span>
-                        </a>
-                        <a href="#" class="nav-item" data-tab="universities"
-                            onclick="switchDashboardTab('universities'); return false;">
-                            <span class="nav-icon"><svg viewBox="0 0 24 24" aria-hidden="true" fill="none"
-                                    stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                                    <path d="M3 9l9-5 9 5-9 5-9-5z"></path>
-                                    <path d="M3 9v5l9 5 9-5V9"></path>
-                                    <path d="M21 9v5"></path></svg></span>
-                            <span class="nav-label">Universities</span>
-                        </a>
-                        <div id="uniSubNav" class="visa-subnav" style="display: none;">
-                            <a href="#" class="visa-subnav-item active" data-uni-subtab="universities"
-                                onclick="switchDashboardTab('universities'); return false;">
-                                <span class="subnav-icon"><svg viewBox="0 0 24 24" aria-hidden="true">
-                                        <path d="M4 6h16"></path>
-                                        <path d="M4 12h16"></path>
-                                        <path d="M4 18h10"></path></svg></span>
-                                <span class="subnav-label">Shortlist &amp; Recommendations</span>
-                            </a>
-                            <a href="#" class="visa-subnav-item" data-uni-subtab="courses"
-                                onclick="switchDashboardTab('courses'); return false;">
-                                <span class="subnav-icon"><svg viewBox="0 0 24 24" aria-hidden="true">
-                                        <circle cx="11" cy="11" r="7"></circle>
-                                        <path d="M21 21l-4.35-4.35"></path></svg></span>
-                                <span class="subnav-label">Course Finder</span>
-                            </a>
-                            <a href="#" class="visa-subnav-item" data-uni-subtab="sop"
-                                onclick="switchDashboardTab('sop'); return false;">
-                                <span class="subnav-icon"><svg viewBox="0 0 24 24" aria-hidden="true">
-                                        <path d="M12 20h9"></path>
-                                        <path d="M16.5 3.5a2.121 2.121 0 013 3L7 19l-4 1 1-4L16.5 3.5z"></path></svg></span>
-                                <span class="subnav-label" id="subnavLabelSop">SOP Studio</span>
-                            </a>
-                        </div>
-                        <a href="#" class="nav-item" data-tab="records"
-                            onclick="switchDashboardTab('records'); return false;">
-                            <span class="nav-icon"><svg viewBox="0 0 24 24" aria-hidden="true">
-                                    <rect x="4" y="7" width="16" height="11" rx="3"></rect>
-                                    <path d="M12 7V4"></path>
-                                    <path d="M10 4h4"></path>
-                                    <circle cx="9.5" cy="12.5" r="1"></circle>
-                                    <circle cx="14.5" cy="12.5" r="1"></circle>
-                                </svg></span>
-                            <span class="nav-label">Rilono AI</span>
                         </a>
                     </nav>
                     <div class="sidebar-subscription-card">
@@ -4191,11 +4191,14 @@
                         </div>
                         <div class="pricing-plan-meta pricing-plan-meta-enterprise">Free 14-day sandbox · no card required</div>
                         <div class="pricing-plan-savings pricing-plan-savings-enterprise">Monthly plans sized to your team — AI credits included.</div>
-                        <div class="pricing-price pricing-price-enterprise">&#8377;2,999<span>&nbsp;/month + GST</span></div>
+                        <!-- INR markup is the no-JS fallback; updatePricingByCurrency() re-renders
+                             this price (and the tier bullets below) in the selected currency.
+                             "+ GST" is INR-only — every other currency is a zero-rated export. -->
+                        <div id="pricingEnterprisePrice" class="pricing-price pricing-price-enterprise">&#8377;2,999<span>&nbsp;/month + GST</span></div>
                         <ul class="pricing-features">
-                            <li>Starter &#8377;2,999/mo — 10 users, 100 clients, 1,000 AI credits/mo</li>
-                            <li>Growth &#8377;6,999/mo — 30 users, 500 clients, 3,500 AI credits/mo</li>
-                            <li>Scale &#8377;14,999/mo — 100 users, 2,000 clients, 10,000 AI credits/mo</li>
+                            <li>Starter <span id="pricingEnterpriseTierStarter">&#8377;2,999</span>/mo — 10 users, 100 clients, 1,000 AI credits/mo</li>
+                            <li>Growth <span id="pricingEnterpriseTierGrowth">&#8377;6,999</span>/mo — 30 users, 500 clients, 3,500 AI credits/mo</li>
+                            <li>Scale <span id="pricingEnterpriseTierScale">&#8377;14,999</span>/mo — 100 users, 2,000 clients, 10,000 AI credits/mo</li>
                             <li>Team workspace with roles &amp; seats</li>
                             <li>Client CRM — intake, pipeline &amp; document tracking</li>
                             <li>AI document audits, mock interviews &amp; course shortlists</li>
@@ -6993,7 +6996,7 @@
              looks for #pricingCountrySelect (gone), so the currency selector stays empty,
              the pass price never renders, and the checkout modal has no currency control
              while the server now prices per currency. -->
-        <script src="/static/app.js?v=20260809a"></script>
+        <script src="/static/app.js?v=20260817a"></script>
         <script>
         (function() {
             var toggle = document.getElementById('dashSidebarToggle');
