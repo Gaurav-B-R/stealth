@@ -330,6 +330,14 @@ def ensure_coupon_usage_limit_column():
 def ensure_coupon_account_columns():
     """
     Per-account coupons (admin console): restrict a code to one user + track creation time.
+
+    created_at was originally added here with no DDL default, and the model's
+    server_default only applies at CREATE TABLE — so every prod row landed NULL and the
+    admin console's newest-first coupon ordering was meaningless. The model now carries a
+    Python-side default for ORM inserts; the SET DEFAULT below covers non-ORM inserts
+    (Postgres only — SQLite can't ALTER COLUMN, and its fresh create_all tables already
+    get the default). Rows from before the fix are backfilled to now(): the true issue
+    dates are unrecoverable, and a fix-date stamp at least keeps the ordering stable.
     """
     with engine.begin() as conn:
         columns = _get_table_columns(conn, "coupon_codes")
@@ -340,6 +348,13 @@ def ensure_coupon_account_columns():
             conn.execute(text("ALTER TABLE coupon_codes ADD COLUMN restricted_to_user_id INTEGER"))
         if "created_at" not in columns:
             conn.execute(text("ALTER TABLE coupon_codes ADD COLUMN created_at TIMESTAMP"))
+        if engine.dialect.name != "sqlite":
+            conn.execute(text(
+                "ALTER TABLE coupon_codes ALTER COLUMN created_at SET DEFAULT CURRENT_TIMESTAMP"
+            ))
+        conn.execute(text(
+            "UPDATE coupon_codes SET created_at = CURRENT_TIMESTAMP WHERE created_at IS NULL"
+        ))
 
 
 def ensure_referral_columns():

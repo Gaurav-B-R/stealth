@@ -156,3 +156,21 @@ def test_fallback_charge_currency_prefers_sticky_then_country():
     assert billing.fallback_charge_currency(None, "DE") == "EUR"
     assert billing.fallback_charge_currency(None, None) == "INR"
     assert billing.fallback_charge_currency("", "ZZ") == "INR"
+
+
+# ---------------------------------------------------------------------------
+# The min-charge floor (every coupon/discount path clamps to this)
+# ---------------------------------------------------------------------------
+
+def test_min_charge_floor_meets_razorpay_checkout_minimum():
+    # Razorpay's Orders API accepts sub-100-subunit amounts but its Checkout won't
+    # process them: a 65¢ USD order (95% coupon, 2026-08-18) rendered as "US$1" in the
+    # payment sheet and failed at pay time with an amount-mismatch error. Every floor —
+    # and the unknown-currency fallback — must therefore be at least 100 subunits.
+    for code in money.supported_charge_currencies():
+        assert money.min_charge_minor(code) >= 100, (
+            f"{code} floor is below 100 subunits; Razorpay Checkout will fail any "
+            "discounted order this floor lets through"
+        )
+    assert money.min_charge_minor("XYZ") >= 100
+    assert money.min_charge_minor(None) >= 100

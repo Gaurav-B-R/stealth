@@ -14,7 +14,7 @@ from fastapi import APIRouter, Body, Depends, HTTPException, Request
 from sqlalchemy import func
 from sqlalchemy.orm import Session
 
-from app import models, schemas
+from app import models, money, schemas
 from app.auth import get_current_active_user
 from app.database import get_db
 from app.email_service import (
@@ -1305,6 +1305,12 @@ def upgrade_to_pro(
     )
     percent_off_text = _format_percent_off(percent_off)
     effective_amount = _compute_discounted_amount_paise(base_amount, percent_off)
+    # A discount that leaves ANYTHING to pay must leave at least the per-currency
+    # checkout floor: Razorpay Checkout won't process sub-floor amounts (it fails at pay
+    # time with an amount-mismatch error, not at order creation). A 100% coupon still
+    # lands in the free-activation branch below because its discounted amount is 0.
+    if effective_amount > 0:
+        effective_amount = max(effective_amount, money.min_charge_minor(currency))
     effective_plan_id = base_plan_id
     coupon_applied_text = (
         f"Coupon {coupon_code} applied ({percent_off_text}% OFF)." if percent_off > Decimal("0") else None

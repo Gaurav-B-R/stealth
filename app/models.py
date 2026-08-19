@@ -2086,7 +2086,10 @@ class CouponCode(Base):
     # Per-account coupon (admin console "conversion play"): when set, only this user
     # can apply the code at checkout. NULL = a global code anyone can use.
     restricted_to_user_id = Column(Integer, ForeignKey("users.id"), nullable=True, index=True)
-    created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=True)
+    # Python-side default too, not just server_default: the column was patched onto the
+    # live table without a DDL default (schema_patch.ensure_coupon_account_columns), so
+    # server_default alone — applied only at CREATE TABLE — left every insert NULL.
+    created_at = Column(DateTime(timezone=True), default=func.now(), server_default=func.now(), nullable=True)
 
 
 class UserNotification(Base):

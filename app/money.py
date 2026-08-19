@@ -194,20 +194,22 @@ def format_inr(paise) -> str:
 # Minimum charge floors
 # ---------------------------------------------------------------------------
 
-# PRODUCT POLICY, not a documented Razorpay limit. Razorpay publishes a ₹1 floor for
-# INR and no per-currency table at all, so these are set conservatively above any
-# plausible gateway minimum. Keep this SEPARATE from the free-grant threshold: if a
-# discount takes an order below this we still charge the floor rather than giving the
-# product away, which is what conflating the two constants causes.
+# PRODUCT POLICY, with one hard constraint learned in production: every floor must be
+# at least 100 subunits. Razorpay's Orders API accepts less, but its Checkout will not
+# process the payment — a 95%-coupon USD order of 65¢ (2026-08-18) rendered as "US$1"
+# in the payment sheet and then died on "Your payment amount is different from your
+# order amount". Keep this SEPARATE from the free-grant threshold: if a discount takes
+# an order below this we still charge the floor rather than giving the product away,
+# which is what conflating the two constants causes.
 _MIN_CHARGE_MINOR: dict[str, int] = {
     "INR": 100,   # ₹1 — Razorpay's documented minimum
-    "USD": 50,    # $0.50
-    "GBP": 50,
-    "EUR": 50,
-    "CAD": 50,
-    "AUD": 50,
+    "USD": 100,   # $1.00 — 100 subunits is the practical Checkout minimum, see above
+    "GBP": 100,
+    "EUR": 100,
+    "CAD": 100,
+    "AUD": 100,
     "AED": 200,   # ~$0.55
-    "SGD": 50,
+    "SGD": 100,
 }
 
 
