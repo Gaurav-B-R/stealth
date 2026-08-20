@@ -364,6 +364,13 @@ def _ensure_additional_scope_catalogs(db: Session) -> None:
             "entry-vignette": {"Entry Vignette / Decision Letter"},
             "brp": {"Biometric Residence Permit (BRP)"},
         },
+        ("AU", "au_subclass500"): {
+            # Australia replaced the GTE statement with the Genuine Student (GS)
+            # requirement on 23 March 2024. DBs seeded before visa_catalog's rename
+            # (Jun-Jul 2026) still carry the retired label on a required, stage-gating
+            # checklist row — repair it exactly like the UK labels above.
+            "gte-statement": {"Genuine Temporary Entrant (GTE) Statement"},
+        },
     }
     for country_code, journey_key in visa_catalog.catalog_scopes():
         if (country_code, journey_key) == (_US_COUNTRY, _US_VISA):
@@ -414,6 +421,24 @@ def get_document_type_catalog(
         .order_by(models.DocumentTypeCatalog.sort_order.asc(), models.DocumentTypeCatalog.id.asc())
         .all()
     )
+
+
+def get_document_type_label(
+    db: Session,
+    document_type: str,
+    country_code: str | None = None,
+    visa_type_key: str | None = None,
+) -> str | None:
+    """Human-readable label for one document_type in a (country, visa) scope, or None.
+    Used to describe the claimed document to the AI validator — raw keys can carry
+    retired terminology (AU's 'gte-statement' key labels a Genuine Student statement)."""
+    code, journey = visa_catalog.catalog_scope(country_code, visa_type_key)
+    row = (
+        _scoped_query(db, code, journey, active_only=False)
+        .filter(models.DocumentTypeCatalog.document_type == (document_type or "").strip())
+        .first()
+    )
+    return row.label if row else None
 
 
 def get_document_type_payload(

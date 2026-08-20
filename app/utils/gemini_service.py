@@ -340,6 +340,7 @@ def validate_and_extract_document(
     destination_country_code: Optional[str] = None,
     destination_summary: Optional[str] = None,
     usage_source: str = "document_ai",
+    document_type_label: Optional[str] = None,
 ) -> Optional[dict]:
     """
     Validate document type and extract information using Gemini AI.
@@ -453,14 +454,24 @@ STRICT DATE/TIMELINE COMPLIANCE RULES (MANDATORY):
 8. If the document does not contain enough date evidence, do NOT invent dates; mention the assumption/limitation clearly.
 """
 
-        # Build validation prompt based on document type
+        # Build validation prompt based on document type. Describe the claimed type by
+        # its human catalog label when available — raw keys can carry retired terminology
+        # (AU's "gte-statement" key labels a Genuine Student (GS) Statement, and telling
+        # the model "GTE-STATEMENT" invites a wrong mismatch verdict on a stage-gating doc).
         validation_prompt = ""
         if document_type:
-            validation_prompt = f"""You are a document validation system. The user claims this document is a {document_type.upper()}.
+            document_label_value = (document_type_label or "").strip()
+            claimed_label = document_label_value or document_type.upper()
+            claimed_reference = (
+                f'{claimed_label} (internal type key: "{document_type}")'
+                if document_label_value
+                else claimed_label
+            )
+            validation_prompt = f"""You are a document validation system. The user claims this document is a {claimed_reference}.
 
 TASK:
 1. Carefully examine the document
-2. Determine if it actually matches a {document_type.upper()}
+2. Determine if it actually matches a {claimed_label}
 3. If YES: Set "Document Validation" to "Yes" and extract all information
 4. If NO: Set "Document Validation" to "No", identify what document type it actually is, and provide a helpful message asking the user to upload the correct document
 
@@ -1002,7 +1013,7 @@ find "red flags" — concrete errors or risks that could cause a visa refusal (e
 name/DOB/passport-number mismatches, insufficient or unexplained funds, missing signatures/stamps,
 wrong document for the claimed purpose, sponsor/financial gaps).
 
-Respond with ONLY valid JSON (no markdown, no code fences), starting with {{ and ending with }}:
+{destination_block}Respond with ONLY valid JSON (no markdown, no code fences), starting with {{ and ending with }}:
 {{
   "summary": "one-sentence overall read of this document",
   "flags": [
@@ -1013,11 +1024,20 @@ Order flags most-severe first. If the document looks clean, return an empty "fla
 Current date for evaluation: {eval_date}"""
 
 
-def scan_document_red_flags(file_contents: bytes, filename: str, mime_type: str) -> Optional[dict]:
+def scan_document_red_flags(
+    file_contents: bytes,
+    filename: str,
+    mime_type: str,
+    destination_country_code: Optional[str] = None,
+) -> Optional[dict]:
     """
     Run a focused "red flag" audit over a single document for the B2C Visa Success Pass.
     Returns {"summary": str, "flags": [{"title","detail","severity"}]} or None if AI is
     unavailable. Usage is logged under the "red_flag_scan" source for B2C economics.
+
+    `destination_country_code` scopes the audit to the student's destination: the same
+    per-destination rule set the upload-validation prompt uses is injected here, so an
+    AU student's CoE/OSHC/financial evidence is judged by Australian rules, not US ones.
     """
     has_service_account = os.path.exists(SERVICE_ACCOUNT_PATH)
     has_valid_api_key = GEMINI_API_KEY and GEMINI_API_KEY.startswith("AIza")
@@ -1030,7 +1050,22 @@ def scan_document_red_flags(file_contents: bytes, filename: str, mime_type: str)
             candidates_env="GEMINI_DOCUMENT_MODEL_CANDIDATES",
         )
 
-        prompt = RED_FLAG_PROMPT.format(eval_date=datetime.now().date().isoformat())
+        destination_code_value = str(destination_country_code or "").strip().upper()
+        destination_rules = _DESTINATION_TIMELINE_RULES.get(destination_code_value)
+        if destination_rules:
+            destination_block = (
+                f"The student's destination country is {destination_code_value}. Judge this document by "
+                "THAT destination's immigration rules and terminology — do not apply another country's "
+                "rules. Destination-specific rules to apply:\n"
+                f"{destination_rules}\n\n"
+            )
+        else:
+            destination_block = ""
+
+        prompt = RED_FLAG_PROMPT.format(
+            eval_date=datetime.now().date().isoformat(),
+            destination_block=destination_block,
+        )
         file_extension = os.path.splitext(filename)[1].lower()
 
         if file_extension in SUPPORTED_IMAGE_TYPES:

@@ -114,6 +114,8 @@ OFF_TOPIC_REFUSAL = (
 
 
 # Words that signal the prompt IS about the study-abroad journey → never block these.
+# Every supported destination's own vocabulary must be here: with only US terms, an AU
+# student's "translate this OSHC letter" was refused while "translate this I-20" passed.
 _ON_TOPIC_TERMS = (
     "visa", "f-1", "f1", "f 1", "m-1", "j-1", "i-20", "i20", "ds-160", "ds160", "ds 160", "sevis",
     "i-94", "embassy", "consulate", "consular", "interview", "university", "college", "admission",
@@ -124,6 +126,16 @@ _ON_TOPIC_TERMS = (
     "rilono", "document", "upload", "refus", "denied", "221g", "appointment", "slot", "h-1b", "h1b",
     "course", "major", "degree", "masters", "bachelor", "phd", "enrol", "i-797", "affidavit",
     "shortlist", "personal statement", "essay", "loan", "letter of recommendation", "recommendation letter",
+    # Australia (Subclass 500)
+    "coe", "oshc", "subclass", "immiaccount", "genuine student", "gte", "home affairs",
+    "vevo", "hap id", "emedical",
+    # UK (Student visa)
+    "ukvi", "ihs", "brp", "atas", "credibility interview", "selt",
+    # Canada (study permit)
+    "ircc", "loa", "pal", "gic", "sds", "dli", "caq",
+    # Germany (National Visa Type D)
+    "sperrkonto", "blocked account", "aps certificate", "videx", "uni-assist", "studienkolleg",
+    "zulassung", "anabin",
 )
 
 # Words that signal the prompt is OFF topic (general-purpose chatbot use).

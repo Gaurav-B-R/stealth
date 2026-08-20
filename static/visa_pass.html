@@ -419,7 +419,11 @@
               razorpay_order_id:resp.razorpay_order_id, razorpay_payment_id:resp.razorpay_payment_id, razorpay_signature:resp.razorpay_signature}});
             STATE.entitlements=v.entitlements; render();
             toast(v.message||"Pass activated!","success");
-          }catch(ex){ toast("Verification failed: "+ex.message,"error"); }
+          }catch(ex){
+            // 409 = still confirming ("no need to pay again") — reassure, don't alarm.
+            if(ex.status===409){ toast(ex.message,"success"); }
+            else { toast("Verification failed: "+ex.message,"error"); }
+          }
         },
       });
       rzp.on("payment.failed",()=>toast("Payment was not completed.","error"));

@@ -68,18 +68,46 @@ def _generate_delete_otp() -> str:
     return f"{secrets.randbelow(1_000_000):06d}"
 
 
-def _prune_documents_for_country_change(db: Session, user: models.User, new_country: str, new_visa: str) -> list[str]:
+# Checklist keys that appear in MORE THAN ONE country's checklist yet name inherently
+# country-bound artifacts: a UK "Online Visa Application Confirmation" and AU's
+# "ImmiAccount Visa Application Confirmation" share the key "visa-application-form",
+# and Document rows carry no country — so without this set, a validated UK form
+# would silently satisfy AU's stage-5 gate after a UK→AU destination change.
+COUNTRY_BOUND_SHARED_DOCUMENT_TYPES = {
+    "visa-application-form",            # UK ↔ AU
+    "biometrics-confirmation",          # CA ↔ AU
+    "biometric-appointment-confirmation",  # US ↔ UK
+    "visa-fee-receipt",                 # US ↔ DE
+    "university-offer-letter",          # US/UK/AU — offers are institution-bound
+    "accommodation-proof",              # UK/CA/AU/DE — booked in the old country
+}
+
+
+def _prune_documents_for_country_change(
+    db: Session,
+    user: models.User,
+    new_country: str,
+    new_visa: str,
+    old_country: str | None = None,
+) -> list[str]:
     """Delete documents that are specific to the OLD country and not needed in the new one.
 
     Keeps the student's portable documents (passport, transcripts, test scores, financials,
     SOP, resume, photo) and anything present in the NEW country's checklist. Removes the rest
     (I-20/DS-160/SEVIS/CAS/GIC/CoE/OSHC/visa forms…), including their R2 objects. Untyped
     uploads are always kept. Returns the list of removed document types.
+
+    When the destination COUNTRY actually changed, keys in COUNTRY_BOUND_SHARED_DOCUMENT_TYPES
+    are pruned even if the new checklist reuses the key — the old country's artifact does not
+    satisfy the new country's requirement. A same-country visa-type change keeps them.
     """
     new_types = {
         (d.get("document_type") or "").strip()
         for d in visa_catalog.documents_for(new_country, new_visa)
     }
+    country_changed = bool(old_country) and old_country != new_country
+    if country_changed:
+        new_types -= COUNTRY_BOUND_SHARED_DOCUMENT_TYPES
     keep_types = UNIVERSAL_REUSABLE_DOCUMENT_TYPES | new_types
 
     documents = db.query(models.Document).filter(models.Document.user_id == user.id).all()
@@ -705,6 +733,7 @@ def confirm_country_change(
         raise HTTPException(status_code=400, detail="Pending destination is no longer valid. Please try again.")
 
     # Apply the new destination + visa, keep the legacy display country in sync.
+    old_country = visa_catalog.normalize_country(current_user.destination_country_code)
     current_user.destination_country_code = country
     current_user.visa_type_key = visa
     meta = visa_catalog.country_meta(country)
@@ -712,7 +741,9 @@ def confirm_country_change(
         current_user.preferred_country = meta["name"]
 
     # Remove documents specific to the old country (keep passport + portable docs).
-    removed_types = _prune_documents_for_country_change(db, current_user, country, visa)
+    removed_types = _prune_documents_for_country_change(
+        db, current_user, country, visa, old_country=old_country
+    )
 
     # Clear the one-time OTP state.
     current_user.country_change_otp = None

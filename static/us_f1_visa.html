@@ -2697,7 +2697,7 @@
                                         <path d="M9 11h6"></path>
                                         <path d="M9 15h4"></path>
                                     </svg></span>
-                                <span class="subnav-label">Recent Interview Experiences</span>
+                                <span class="subnav-label" id="subnavLabelExperiences">Recent Interview Experiences</span>
                             </a>
                         </div>
                         <a href="#" class="nav-item" data-tab="copilot"
@@ -3275,11 +3275,10 @@
                                         <div class="form-row">
                                             <div class="form-group">
                                                 <label for="documentationIntake">Intake *</label>
+                                                <!-- Options are populated per destination country by
+                                                     populateDocumentationIntakeOptions() in app.js. -->
                                                 <select id="documentationIntake" required>
                                                     <option value="">Select Intake</option>
-                                                    <option value="Spring">Spring</option>
-                                                    <option value="Summer">Summer</option>
-                                                    <option value="Fall">Fall</option>
                                                 </select>
                                             </div>
                                             <div class="form-group">
@@ -3883,10 +3882,10 @@
                                 <div class="dashboard-widget visa-hub-card visa-hub-experiences visa-subtab-card"
                                     style="grid-column: 1 / -1;">
                                     <div class="widget-header">
-                                        <h3>📚 Recent Interview Experiences</h3>
+                                        <h3 id="experiencesModuleTitle">📚 Recent Interview Experiences</h3>
                                     </div>
                                     <div class="widget-content visa-hub-content">
-                                        <p class="visa-hub-copy">Select a country and one or more consulates to fetch
+                                        <p class="visa-hub-copy" id="visaExperienceIntroCopy">Select a country and one or more consulates to fetch
                                             recent interview experiences discussed by users online.</p>
                                         <div class="visa-experience-filters">
                                             <div class="visa-experience-field">
@@ -6996,7 +6995,7 @@
              looks for #pricingCountrySelect (gone), so the currency selector stays empty,
              the pass price never renders, and the checkout modal has no currency control
              while the server now prices per currency. -->
-        <script src="/static/app.js?v=20260817a"></script>
+        <script src="/static/app.js?v=20260819b"></script>
         <script>
         (function() {
             var toggle = document.getElementById('dashSidebarToggle');

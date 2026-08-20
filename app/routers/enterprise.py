@@ -11650,6 +11650,17 @@ def _start_document_processing(
             destination_summary = (
                 f"{client.destination_country_name} — {client.visa_type}" if client is not None else None
             )
+            # Describe the claimed type to the AI by its catalog label, not the raw key
+            # (keys can carry retired terminology; labels are what staff actually chose).
+            doc_label_row = (
+                db2.query(models.DocumentTypeCatalog)
+                .filter(
+                    models.DocumentTypeCatalog.visa_type_key == "enterprise",
+                    models.DocumentTypeCatalog.country_code == (destination_code or ""),
+                    models.DocumentTypeCatalog.document_type == (row.document_type or ""),
+                )
+                .first()
+            )
             validation = None
             try:
                 # Hand the AI the client's profile + their VALIDATED documents: the AI decides,
@@ -11665,6 +11676,7 @@ def _start_document_processing(
                     destination_country_code=destination_code,
                     destination_summary=destination_summary,
                     usage_source=ENTERPRISE_DOC_SCAN_USAGE_SOURCE,
+                    document_type_label=(doc_label_row.label if doc_label_row else None),
                 )
             except Exception:
                 logger.exception("Enterprise doc validation failed (document_id=%s)", document_id)

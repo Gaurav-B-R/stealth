@@ -17,12 +17,16 @@ This guide helps users navigate the Rilono web app UI quickly.
 
 ## Dashboard Left Menu
 - `Overview` : Journey status, document health summary, and embedded AI chat
+- `Universities` : Shortlist & Recommendations, Course Finder, SOP Studio
 - `Documents` : Upload and manage documents, validation status, stage mapping
-- `Interview Prep` :
-  - `F-1 Visa Interview Prep (Rilono AI)`
-  - `F1 Mock Interview (Rilono AI)`
-  - `Recent F1 Interview Experiences`
-- `News` : Latest visa and student updates
+- `Interview Prep` (sub-tab labels adapt to the student's destination — e.g. a US student
+  sees "F-1 Visa Interview Prep", an Australian student sees "Student Visa Interview Prep";
+  refer to them by the destination-appropriate name, never the US one for a non-US student) :
+  - `<Visa> Interview Prep (Rilono AI)` — guided question-by-question coaching
+  - `<Visa> Mock Interview (Rilono AI)` — full mock interview simulation
+  - `Recent Interview Experiences` (US) / `Recent Applicant Experiences` (other destinations)
+- `Rilono Copilot` : Chrome extension tab
+- `News` : Latest visa and student updates for the student's destination
 - `Rilono AI` : Full chat workspace
 
 ## Top-Right User Menu

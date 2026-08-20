@@ -3557,6 +3557,11 @@ function renderSopStudio() {
     const drafts = _sopData.drafts;
     const active = drafts.find((d) => d.root_id === _sopData.activeRoot) || drafts[0] || null;
 
+    // Destination-appropriate intake example (an AU student applies for "February 2027",
+    // not "Fall 2026 / Winter Semester").
+    const sopIntakeCode = (currentUser && currentUser.destination_country_code) || 'US';
+    const sopIntakeNames = DOCUMENTATION_INTAKES[sopIntakeCode] || DOCUMENTATION_INTAKES.US;
+    const sopIntakeExample = `e.g. ${sopIntakeNames[0]} ${new Date().getFullYear() + 1}`;
     const formCard = `
       <div class="dashboard-widget" style="margin-bottom:16px">
         <div class="widget-header" style="display:flex;align-items:center;justify-content:space-between;gap:10px">
@@ -3573,7 +3578,7 @@ function renderSopStudio() {
                 <option value="">Select…</option><option>Bachelor's</option><option selected>Master's</option><option>PhD</option><option>Diploma / Other</option>
               </select></div>
             <div><label style="font-size:12px;font-weight:700">Intake</label>
-              <input id="sopIntake" type="text" placeholder="e.g. Fall 2026 / Winter Semester" style="width:100%;box-sizing:border-box;padding:10px 12px;border:1px solid var(--border-color,#e2e8f0);border-radius:10px"></div>
+              <input id="sopIntake" type="text" placeholder="${escapeHtml(sopIntakeExample)}" style="width:100%;box-sizing:border-box;padding:10px 12px;border:1px solid var(--border-color,#e2e8f0);border-radius:10px"></div>
           </div>
           <div style="margin-top:12px"><label style="font-size:12px;font-weight:700">What should it emphasize? (optional)</label>
             <textarea id="sopHighlights" rows="2" placeholder="e.g. my fintech internship, 8.4 CGPA, the ML project on fraud detection" style="width:100%;box-sizing:border-box;padding:10px 12px;border:1px solid var(--border-color,#e2e8f0);border-radius:10px"></textarea></div>
@@ -4804,6 +4809,11 @@ function updateVisaSectionLabels() {
     setText('prepModuleTitle', `🎯 ${prefix} Interview Prep (Rilono AI)`);
     setText('mockModuleTitle', `🧠 ${prefix} Mock Interview (Rilono AI)`);
     setText('prepCoachingPlaceholder', `Start Prep Session to begin a guided ${currentVisaJourneyPhrase()} interview coaching flow.`);
+    // Experiences tab: US keeps consular interview wording; other destinations get
+    // applicant-experience wording about their own visa process.
+    const expLabel = code === 'US' ? 'Recent Interview Experiences' : 'Recent Applicant Experiences';
+    setText('subnavLabelExperiences', expLabel);
+    setText('experiencesModuleTitle', `📚 ${expLabel}`);
 
     // Rilono Copilot tab copy (the HTML defaults to US F-1 wording).
     const cop = COPILOT_TAB_COPY[code] || COPILOT_TAB_COPY.US;
@@ -5913,7 +5923,12 @@ async function startVisaPassPayment() {
                     }),
                 });
                 const vd = await vr.json().catch(() => ({}));
-                if (!vr.ok) { showMessage(vd.detail || 'Payment verification failed.', 'error'); return; }
+                if (!vr.ok) {
+                    // 409 = payment still confirming (server says "no need to pay again")
+                    // — reassure, don't alarm; the webhook activates the pass on its own.
+                    showMessage(vd.detail || 'Payment verification failed.', vr.status === 409 ? 'success' : 'error');
+                    return;
+                }
                 await loadSubscriptionStatus(true);
                 showMessage(vd.message || 'Visa Success Pass activated! 🎉', 'success');
             } catch (ex) {
@@ -6254,7 +6269,11 @@ async function verifyRazorpayPayment(paymentResponse, checkoutMode = 'order') {
 
         const data = await response.json();
         if (!response.ok) {
-            showMessage(data.detail || 'Payment verification failed. Please contact support.', 'error');
+            // 409 = payment still confirming; the webhook completes activation.
+            showMessage(
+                data.detail || 'Payment verification failed. Please contact support.',
+                response.status === 409 ? 'success' : 'error'
+            );
             return;
         }
 
@@ -6487,6 +6506,22 @@ async function loadF1VisaNews() {
     }
 }
 
+// The experiences feed is scoped to the user's DESTINATION visa. Only the US flow
+// has consular interviews with per-consulate filters; every other destination
+// (AU/UK/CA/DE) fetches experiences about its own visa process, filtered by the
+// applicant's home country alone.
+function visaExperienceIsUSFlow() {
+    return (((currentUser && currentUser.destination_country_code) || 'US') === 'US');
+}
+
+const VISA_EXPERIENCE_INTRO_COPY = {
+    US: 'Select a country and one or more consulates to fetch recent interview experiences discussed by users online.',
+    UK: 'Select your home country to fetch recent UK Student visa experiences (credibility interviews, decision timelines) shared by applicants online.',
+    CA: 'Select your home country to fetch recent Canada study permit experiences (biometrics, IRCC interviews, decision timelines) shared by applicants online.',
+    AU: 'Select your home country to fetch recent Australia Subclass 500 experiences (Genuine Student interviews, grant timelines) shared by applicants online.',
+    DE: 'Select your home country to fetch recent German student visa experiences (embassy appointments, decision timelines) shared by applicants online.',
+};
+
 function initializeVisaInterviewFilters() {
     const countrySelect = document.getElementById('visaExperienceCountry');
     const consulateContainer = document.getElementById('visaExperienceConsulates');
@@ -6500,11 +6535,25 @@ function initializeVisaInterviewFilters() {
     }
 
     const savedCountry = localStorage.getItem('visaExperienceCountry');
-    const country = savedCountry && VISA_INTERVIEW_CONSULATE_MAP[savedCountry] ? savedCountry : 'India';
+    const residenceCountry = (currentUser && currentUser.current_residence_country) || '';
+    const country = (savedCountry && VISA_INTERVIEW_CONSULATE_MAP[savedCountry] && savedCountry)
+        || (VISA_INTERVIEW_CONSULATE_MAP[residenceCountry] && residenceCountry)
+        || 'India';
     countrySelect.value = country;
 
-    const savedConsulates = JSON.parse(localStorage.getItem(`visaExperienceConsulates:${country}`) || '[]');
-    renderVisaConsulateOptions(country, Array.isArray(savedConsulates) ? savedConsulates : []);
+    const isUSFlow = visaExperienceIsUSFlow();
+    const consulateField = document.querySelector('.visa-experience-field-consulates');
+    if (consulateField) consulateField.style.display = isUSFlow ? '' : 'none';
+    const introCopy = document.getElementById('visaExperienceIntroCopy');
+    if (introCopy) {
+        const code = (currentUser && currentUser.destination_country_code) || 'US';
+        introCopy.textContent = VISA_EXPERIENCE_INTRO_COPY[code] || VISA_EXPERIENCE_INTRO_COPY.US;
+    }
+
+    if (isUSFlow) {
+        const savedConsulates = JSON.parse(localStorage.getItem(`visaExperienceConsulates:${country}`) || '[]');
+        renderVisaConsulateOptions(country, Array.isArray(savedConsulates) ? savedConsulates : []);
+    }
 
     const container = document.getElementById('visaExperienceContainer');
     const loaded = container?.dataset.loaded === '1';
@@ -6569,6 +6618,7 @@ function toggleVisaConsulates(selectAll) {
 function handleVisaExperienceCountryChange(country) {
     if (!country || !VISA_INTERVIEW_CONSULATE_MAP[country]) return;
     localStorage.setItem('visaExperienceCountry', country);
+    if (!visaExperienceIsUSFlow()) return;
     const savedConsulates = JSON.parse(localStorage.getItem(`visaExperienceConsulates:${country}`) || '[]');
     renderVisaConsulateOptions(country, Array.isArray(savedConsulates) ? savedConsulates : []);
 }
@@ -6585,13 +6635,18 @@ async function loadF1InterviewExperiences(forceRefresh = false) {
     visaInterviewRequestInFlight = true;
 
     const country = countrySelect.value || 'India';
-    const consulates = getSelectedVisaConsulates();
-    if (consulates.length === 0) {
-        showMessage('Select at least one consulate to fetch experiences.', 'error');
-        visaInterviewRequestInFlight = false;
-        return;
+    const isUSFlow = visaExperienceIsUSFlow();
+    const consulates = isUSFlow ? getSelectedVisaConsulates() : [];
+    if (isUSFlow) {
+        if (consulates.length === 0) {
+            showMessage('Select at least one consulate to fetch experiences.', 'error');
+            visaInterviewRequestInFlight = false;
+            return;
+        }
+        persistVisaConsulateSelection();
+    } else {
+        localStorage.setItem('visaExperienceCountry', country);
     }
-    persistVisaConsulateSelection();
 
     if (!forceRefresh) {
         container.innerHTML = '<div class="news-loading">Fetching latest interview experiences...</div>';
@@ -6617,7 +6672,9 @@ async function loadF1InterviewExperiences(forceRefresh = false) {
 
         const items = Array.isArray(data.items) ? data.items : [];
         if (items.length === 0) {
-            container.innerHTML = '<div class="visa-experience-state"><span class="vxs-icon">🔍</span><p>No interview experiences found for these consulates yet.<span>Try selecting more consulates, or check back a little later.</span></p></div>';
+            container.innerHTML = isUSFlow
+                ? '<div class="visa-experience-state"><span class="vxs-icon">🔍</span><p>No interview experiences found for these consulates yet.<span>Try selecting more consulates, or check back a little later.</span></p></div>'
+                : '<div class="visa-experience-state"><span class="vxs-icon">🔍</span><p>No recent applicant experiences found yet.<span>Try a different home country, or check back a little later.</span></p></div>';
             delete container.dataset.loaded;
         } else {
             container.innerHTML = items.map((item) => {
@@ -6658,7 +6715,9 @@ async function loadF1InterviewExperiences(forceRefresh = false) {
             ? fetchedAt.toLocaleString()
             : 'just now';
         const cacheText = data.cached ? 'cached' : 'fresh';
-        metaInfo.textContent = `${country} • ${consulates.length} consulate(s) • Updated ${fetchedText} (${cacheText})`;
+        metaInfo.textContent = isUSFlow
+            ? `${country} • ${consulates.length} consulate(s) • Updated ${fetchedText} (${cacheText})`
+            : `${country} • Updated ${fetchedText} (${cacheText})`;
     } catch (error) {
         console.error('Error loading F1 interview experiences:', error);
         container.innerHTML = '<div class="visa-experience-state visa-experience-state-error"><span class="vxs-icon">⚠️</span><p>Couldn\'t load interview experiences right now.<span>Check your connection and tap "Fetch Latest Experiences" to retry.</span></p></div>';
@@ -7401,11 +7460,21 @@ async function speakVisaInterviewResponse(text) {
         try {
             window.speechSynthesis.cancel();
             const utterance = new SpeechSynthesisUtterance(utteranceText);
-            utterance.lang = 'en-US';
+            // Match the officer's accent to the destination (an "Australian Home
+            // Affairs officer" must not speak US English when the browser has an
+            // en-AU voice). DE officers still speak English in the simulation.
+            // Fall back through destination accent → en-US → any English voice.
+            const OFFICER_TTS_LANG = { US: 'en-US', UK: 'en-GB', CA: 'en-CA', AU: 'en-AU', DE: 'en-GB' };
+            const destCode = (currentUser && currentUser.destination_country_code) || 'US';
+            const targetLang = OFFICER_TTS_LANG[destCode] || 'en-US';
+            utterance.lang = targetLang;
             utterance.rate = consulate ? 1.05 : 1;   // officers are brisk
             utterance.pitch = consulate ? 0.9 : 1;   // slightly lower register
             const voices = window.speechSynthesis.getVoices();
-            const preferredVoice = voices.find((voice) => voice.lang && voice.lang.toLowerCase().startsWith('en-us'));
+            const wantPrefix = targetLang.toLowerCase();
+            const preferredVoice = voices.find((voice) => voice.lang && voice.lang.toLowerCase().startsWith(wantPrefix))
+                || voices.find((voice) => voice.lang && voice.lang.toLowerCase().startsWith('en-us'))
+                || voices.find((voice) => voice.lang && voice.lang.toLowerCase().startsWith('en'));
             if (preferredVoice) {
                 utterance.voice = preferredVoice;
             }
@@ -12468,44 +12537,82 @@ async function copyReferralLink() {
     showMessage(copied ? 'Referral link copied.' : 'Unable to copy referral link.', copied ? 'success' : 'error');
 }
 
-async function loadDocumentationPreferences() {
-    if (!authToken) return;
+// Intake options per destination (mirrors enterprise_catalog student_intakes so values
+// match what onboarding saves). The HTML shipped US semesters only; every destination
+// rebuilds its own list — an AU student picks February/July/November, not "Fall".
+const DOCUMENTATION_INTAKES = {
+    US: ['Spring', 'Summer', 'Fall'],
+    CA: ['January', 'May', 'September'],
+    UK: ['January', 'September'],
+    AU: ['February', 'July', 'November'],
+    DE: ['Summer Semester', 'Winter Semester'],
+};
 
+function populateDocumentationIntakeOptions() {
+    const intakeSelect = document.getElementById('documentationIntake');
+    if (!intakeSelect) return;
+    const code = (currentUser && currentUser.destination_country_code) || 'US';
+    const intakes = DOCUMENTATION_INTAKES[code] || DOCUMENTATION_INTAKES.US;
+    const previous = intakeSelect.value;
+    intakeSelect.innerHTML = '<option value="">Select Intake</option>'
+        + intakes.map((name) => `<option value="${escapeHtml(name)}">${escapeHtml(name)}</option>`).join('');
+    if (previous && intakes.includes(previous)) intakeSelect.value = previous;
+}
+
+// Saved intakes may be bare ("February") from this form or materialized ("February 2027")
+// from onboarding — split off a trailing year so both display correctly.
+function splitIntakeValue(rawIntake) {
+    const value = String(rawIntake || '').trim();
+    const match = value.match(/^(.*?)\s+(20\d{2})$/);
+    if (match) return { intake: match[1].trim(), year: match[2] };
+    return { intake: value, year: '' };
+}
+
+function applyDocumentationPreferenceValues(rawIntake, rawYear) {
+    const intakeSelect = document.getElementById('documentationIntake');
+    const yearSelect = document.getElementById('documentationYear');
+    const parts = splitIntakeValue(rawIntake);
+    if (intakeSelect && parts.intake) {
+        const hasOption = Array.from(intakeSelect.options).some((o) => o.value === parts.intake);
+        if (hasOption) intakeSelect.value = parts.intake;
+    }
+    const year = String(rawYear || parts.year || '').trim();
+    if (yearSelect && year) {
+        const hasYear = Array.from(yearSelect.options).some((o) => o.value === year);
+        if (hasYear) yearSelect.value = year;
+    }
+}
+
+async function loadDocumentationPreferences() {
+    // The journey destination is authoritative for the country field and the intake
+    // list; saved values may be stale after the user changes countries.
+    const countryInput = document.getElementById('documentationCountry');
+    const destinationCode = (currentUser && currentUser.destination_country_code) || '';
+    const destinationName = (COUNTRY_DISPLAY[destinationCode] || {}).name || '';
+    if (countryInput && destinationName) {
+        countryInput.value = destinationName;
+    }
+    populateDocumentationIntakeOptions();
+
+    if (!authToken) return;
     try {
         const response = await fetch(`${API_BASE}/api/profile/documentation-preferences`, {
             headers: {
                 'Authorization': `Bearer ${authToken}`
             }
         });
-
-        if (response.ok) {
-            const prefs = await response.json();
-
-            // Populate the form fields
-            const countryField = document.getElementById('documentationCountry');
-            const intakeField = document.getElementById('documentationIntake');
-            const yearField = document.getElementById('documentationYear');
-
-            if (countryField && prefs.country) {
-                countryField.value = prefs.country;
-            }
-            if (intakeField && prefs.intake) {
-                intakeField.value = prefs.intake;
-            }
-            if (yearField && prefs.year) {
-                yearField.value = prefs.year;
-            }
-        }
+        if (!response.ok) throw new Error(`HTTP ${response.status}`);
+        const prefs = await response.json();
+        applyDocumentationPreferenceValues(prefs.intake, prefs.year);
     } catch (error) {
         console.error('Error loading documentation preferences:', error);
         // Fall back to localStorage
         const localPrefs = localStorage.getItem('documentationPreferences');
         if (localPrefs) {
-            const prefs = JSON.parse(localPrefs);
-            const intakeField = document.getElementById('documentationIntake');
-            const yearField = document.getElementById('documentationYear');
-            if (intakeField && prefs.intake) intakeField.value = prefs.intake;
-            if (yearField && prefs.year) yearField.value = prefs.year;
+            try {
+                const prefs = JSON.parse(localPrefs);
+                applyDocumentationPreferenceValues(prefs.intake, prefs.year);
+            } catch (parseError) { /* corrupted local prefs — ignore */ }
         }
     }
 }
@@ -14102,35 +14209,9 @@ function initializeYearDropdown() {
     }
 }
 
-function loadDocumentationPreferences() {
-    // The journey destination is authoritative; local preferences may be stale after
-    // the user changes countries during onboarding or from the profile dashboard.
-    const countryInput = document.getElementById('documentationCountry');
-    const destinationCode = (currentUser && currentUser.destination_country_code) || '';
-    const destinationName = (COUNTRY_DISPLAY[destinationCode] || {}).name || '';
-    if (countryInput && destinationName) {
-        countryInput.value = destinationName;
-    }
-
-    // Load saved preferences from localStorage
-    const savedPreferences = localStorage.getItem('documentationPreferences');
-    if (savedPreferences) {
-        try {
-            const prefs = JSON.parse(savedPreferences);
-            const intakeSelect = document.getElementById('documentationIntake');
-            const yearSelect = document.getElementById('documentationYear');
-
-            if (intakeSelect && prefs.intake) {
-                intakeSelect.value = prefs.intake;
-            }
-            if (yearSelect && prefs.year) {
-                yearSelect.value = prefs.year;
-            }
-        } catch (error) {
-            console.error('Error loading documentation preferences:', error);
-        }
-    }
-}
+// NOTE: loadDocumentationPreferences is defined once, earlier in this file (API-backed,
+// destination-aware). A second localStorage-only declaration used to live here and
+// shadowed it — keep this file to a single definition.
 
 async function handleDocumentationForm(e) {
     e.preventDefault();

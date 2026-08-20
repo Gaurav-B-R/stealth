@@ -292,6 +292,17 @@ _SECOND_LEVEL_SUFFIXES = {
     "rzeszow.pl", "bialystok.pl", "opole.pl",
 }
 
+# Australian state education suffixes are THIRD-level ("wa.edu.au"): TAFE and state
+# providers sit one label deeper (northmetrotafe.wa.edu.au, gotafe.vic.edu.au), so
+# eTLD+1 extraction must keep four labels — otherwise every provider in a state
+# collapses to the same key (North and South Metropolitan TAFE became one catalog
+# row with a fabricated https://www.wa.edu.au website). Same failure mode the
+# Polish regional suffixes above fix one level up.
+_THIRD_LEVEL_SUFFIXES = {
+    "wa.edu.au", "vic.edu.au", "nsw.edu.au", "qld.edu.au",
+    "sa.edu.au", "tas.edu.au", "act.edu.au", "nt.edu.au",
+}
+
 
 def _registrable_domain(url) -> Optional[str]:
     """eTLD+1-ish domain of a URL ("https://www.study.unimelb.edu.au/x" → "unimelb.edu.au").
@@ -303,6 +314,8 @@ def _registrable_domain(url) -> Optional[str]:
     if not host or "." not in host:
         return None
     parts = host.split(".")
+    if len(parts) >= 4 and ".".join(parts[-3:]) in _THIRD_LEVEL_SUFFIXES:
+        return ".".join(parts[-4:])
     if len(parts) >= 3 and ".".join(parts[-2:]) in _SECOND_LEVEL_SUFFIXES:
         return ".".join(parts[-3:])
     return ".".join(parts[-2:])
@@ -1003,6 +1016,47 @@ def registry_universities(db: Session, country_code: str) -> list[dict]:
     return out
 
 
+def _repair_state_suffix_rows(db: Session, code: str, registry: list[dict]) -> int:
+    """Repair rows created before _THIRD_LEVEL_SUFFIXES existed: a row whose domain_key
+    IS a bare state suffix ("wa.edu.au") carries a fabricated website URL and blocks the
+    real provider's registry row from seeding. Re-key it from the registry when the name
+    matches (and the corrected key is free); deactivate it otherwise so fabricated data
+    stops being served. Returns rows touched."""
+    suffix_rows = (
+        db.query(models.CourseCatalogUniversity)
+        .filter(
+            models.CourseCatalogUniversity.country_code == code,
+            models.CourseCatalogUniversity.domain_key.in_(sorted(_THIRD_LEVEL_SUFFIXES)),
+        )
+        .all()
+    )
+    if not suffix_rows:
+        return 0
+    taken_keys = {
+        u.domain_key
+        for u in db.query(models.CourseCatalogUniversity)
+        .filter(models.CourseCatalogUniversity.country_code == code)
+        .all()
+        if u.domain_key
+    }
+    by_name = {normalize_key(item["name"]): item for item in registry}
+    touched = 0
+    for row in suffix_rows:
+        match = by_name.get(row.name_key)
+        if match and match["domain_key"] not in taken_keys:
+            taken_keys.discard(row.domain_key)
+            row.domain_key = match["domain_key"]
+            row.website_url = match["website_url"]
+            taken_keys.add(match["domain_key"])
+        else:
+            row.is_active = False
+        touched += 1
+    if touched:
+        db.commit()
+        logger.info("Course catalog %s: repaired %d state-suffix domain rows", code, touched)
+    return touched
+
+
 def seed_universities_from_registry(db: Session, country_code: str, limit: Optional[int] = None) -> int:
     """Insert stub rows for every curated registry university not already in the
     catalog. Free (no AI call) and hallucination-proof; enrichment fills courses and
@@ -1010,6 +1064,8 @@ def seed_universities_from_registry(db: Session, country_code: str, limit: Optio
     code = (country_code or "").upper()
     if not country_name(code):
         return 0
+    registry = registry_universities(db, code)
+    _repair_state_suffix_rows(db, code, registry)
     existing = (
         db.query(models.CourseCatalogUniversity)
         .filter(models.CourseCatalogUniversity.country_code == code)
@@ -1019,7 +1075,7 @@ def seed_universities_from_registry(db: Session, country_code: str, limit: Optio
     have_names = {u.name_key for u in existing}
 
     added = 0
-    for item in registry_universities(db, code):
+    for item in registry:
         if limit is not None and added >= int(limit):
             break
         dkey = item["domain_key"]

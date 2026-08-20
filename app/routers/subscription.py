@@ -501,7 +501,21 @@ def _razorpay_request(
     except requests.RequestException as exc:
         raise HTTPException(status_code=502, detail=f"Failed to contact Razorpay: {str(exc)}")
 
+    if response.status_code in (401, 403):
+        # Present-but-invalid credentials (rotated/revoked keys, live-mode webhook with
+        # test-mode keys). Still transient from the caller's point of view — the event
+        # must NOT be consumed or the row marked failed over our own config — but it
+        # needs a human, so log loudly. Razorpay disables a webhook that fails
+        # continuously for ~24h; these error lines are the alarm.
+        logger.error(
+            "Razorpay API auth failure (HTTP %s) on %s %s — check RAZORPAY_KEY_ID/RAZORPAY_KEY_SECRET",
+            response.status_code,
+            method.upper(),
+            path,
+        )
+        raise HTTPException(status_code=503, detail="Payment provider authentication failed.")
     if response.status_code >= 400:
+        logger.error("Razorpay API error HTTP %s on %s %s", response.status_code, method.upper(), path)
         raise HTTPException(status_code=502, detail="Unable to process Razorpay request right now.")
 
     try:
@@ -522,6 +536,15 @@ def _mark_payment_failed(db: Session, payment_row: models.SubscriptionPayment, m
     payment_row.status = "failed"
     payment_row.error_message = message[:1000]
     db.commit()
+
+
+def _is_transient_verification_error(exc: HTTPException) -> bool:
+    # 409 = the payment exists but is not FINAL yet (order not flipped to paid /
+    # authorized-but-uncaptured — international cards can sit there for hours);
+    # 5xx = Razorpay itself was unreachable. Neither is a verdict on the payment,
+    # so the row must not be marked 'failed', and a webhook delivery must answer
+    # non-2xx so Razorpay keeps retrying instead of treating the event as consumed.
+    return exc.status_code == 409 or exc.status_code >= 500
 
 
 def _mark_payment_verified(
@@ -641,8 +664,19 @@ def _validate_razorpay_order_payment(
 
     if order_data.get("id") != payment_row.razorpay_order_id:
         raise HTTPException(status_code=400, detail="Razorpay order mismatch.")
+    # Terminal payment states are a verdict, not a pending state — they must be caught
+    # BEFORE the pending 409s below, or a dead payment loops as "confirming" forever
+    # (payment.captured will never fire for it). A refunded payment with captured=true
+    # is a real purchase that was later refunded; that is handled by refund flows, not
+    # treated as a failed verification.
+    _payment_state = str(payment_data.get("status", "")).lower()
+    if _payment_state == "failed" or (_payment_state == "refunded" and not bool(payment_data.get("captured"))):
+        raise HTTPException(status_code=400, detail="Payment failed or was refunded by the payment provider.")
     if str(order_data.get("status", "")).lower() != "paid":
-        raise HTTPException(status_code=400, detail="Payment order is not marked as paid yet.")
+        # Pending, not a verdict (409): the order flips to paid only after capture,
+        # which on international cards can trail authorization by hours. Callers must
+        # not mark the row failed for this — see _is_transient_verification_error.
+        raise HTTPException(status_code=409, detail="Payment order is not marked as paid yet.")
     if int(order_data.get("amount", 0) or 0) != int(payment_row.amount_paise):
         raise HTTPException(status_code=400, detail="Payment amount mismatch.")
     if _normalize_currency(order_data.get("currency", "")) != _normalize_currency(payment_row.currency):
@@ -665,7 +699,8 @@ def _validate_razorpay_order_payment(
     payment_status = str(payment_data.get("status", "")).lower()
     payment_captured = bool(payment_data.get("captured"))
     if payment_status != "captured" and not payment_captured:
-        raise HTTPException(status_code=400, detail="Payment is not captured yet.")
+        # Pending, not a verdict (409) — same reasoning as the order-status check above.
+        raise HTTPException(status_code=409, detail="Payment is not captured yet.")
 
     return order_data, payment_data
 
@@ -778,8 +813,12 @@ def _validate_razorpay_recurring_charge(
 
     payment_status = str(payment_data.get("status", "")).lower()
     payment_captured = bool(payment_data.get("captured"))
+    # Terminal states are a verdict — see _validate_razorpay_order_payment.
+    if payment_status == "failed" or (payment_status == "refunded" and not payment_captured):
+        raise HTTPException(status_code=400, detail="Recurring payment failed or was refunded by the payment provider.")
     if payment_status != "captured" and not payment_captured:
-        raise HTTPException(status_code=400, detail="Recurring payment is not captured yet.")
+        # Pending, not a verdict (409) — see _is_transient_verification_error.
+        raise HTTPException(status_code=409, detail="Recurring payment is not captured yet.")
 
     if payment_row.razorpay_plan_id:
         actual_amount = int(payment_data.get("amount", 0) or 0)
@@ -828,6 +867,22 @@ def _find_latest_subscription_id_for_user(db: Session, user_id: int) -> str | No
 
 
 def _find_latest_payment_for_user(db: Session, user_id: int) -> models.SubscriptionPayment | None:
+    # A 'created' row is an OPENED checkout, not a payment — a buyer who pays on
+    # attempt #1 and then reopens checkout while the webhook is still in flight
+    # leaves newer abandoned 'created' rows behind. Those must never mask the row
+    # that actually settled ('verified'/'failed'), or the UI reports "created"
+    # forever and the buyer believes the purchase never went through.
+    settled = (
+        db.query(models.SubscriptionPayment)
+        .filter(
+            models.SubscriptionPayment.user_id == user_id,
+            models.SubscriptionPayment.status != "created",
+        )
+        .order_by(models.SubscriptionPayment.id.desc())
+        .first()
+    )
+    if settled is not None:
+        return settled
     return (
         db.query(models.SubscriptionPayment)
         .filter(models.SubscriptionPayment.user_id == user_id)
@@ -872,6 +927,7 @@ def _finalize_verified_payment(
     subscription_id: str | None,
     invoice_id: str | None,
     provider_subscription_data: dict[str, Any] | None,
+    payment_entity: dict[str, Any] | None = None,
 ) -> models.Subscription:
     now = datetime.utcnow()
     _mark_payment_verified(
@@ -880,6 +936,18 @@ def _finalize_verified_payment(
         subscription_id=subscription_id,
         invoice_id=invoice_id,
     )
+
+    # Razorpay's own INR settlement figure (base_amount appears only on non-INR
+    # payments). Webhook-first verifications used to skip this entirely, leaving
+    # foreign-currency rows (e.g. an AUD pass) with NULL base_amount_paise — booked
+    # as zero revenue by analytics, with no later backfill. Mirror /api/pass/verify.
+    if payment_entity:
+        base_minor, fx_rate = money.settled_inr_minor(payment_entity)
+        if base_minor is not None:
+            payment_row.base_amount_paise = base_minor
+            payment_row.fx_rate_used = fx_rate
+        payment_row.base_currency = "INR"
+        payment_row.is_international = bool(payment_entity.get("international"))
 
     if provider_subscription_data:
         subscription = _apply_pro_access_from_provider_period(
@@ -898,6 +966,19 @@ def _finalize_verified_payment(
         # 15/15 Course Finder runs paid ₹999 and got zero.
         from app import visa_pass as visa_pass_module
         subscription = visa_pass_module.grant_pass(db, user_id, commit=False)
+        # A paid pass conversion rewards the referrer regardless of WHICH path
+        # verified it. /api/pass/verify awards this itself but skips the whole
+        # block once the row is already verified, so a webhook-first verification
+        # silently dropped the reward. award_referral_reward_on_purchase is
+        # idempotent (referral_reward_granted_at guard). Best-effort: never fail
+        # the grant over a reward.
+        try:
+            from app import referrals
+            buyer = db.query(models.User).filter(models.User.id == user_id).first()
+            if buyer is not None:
+                referrals.award_referral_reward_on_purchase(db, buyer, commit=False)
+        except Exception:
+            logger.exception("Referral reward on webhook pass purchase failed (user_id=%s)", user_id)
     else:
         duration_days = _pricing_model_duration_days(_pricing_model_from_payment_row(payment_row))
         subscription = grant_pro_access_for_days(
@@ -1494,6 +1575,11 @@ def upgrade_to_pro(
         "amount": effective_amount,
         "currency": currency,
         "receipt": receipt,
+        # Capture automatically the moment the payment is authorized. Without this,
+        # capture timing rides on dashboard settings, and an international card can
+        # sit authorized-but-uncaptured for hours — the buyer's bank says "paid"
+        # while payment.captured (and therefore the grant) does not fire.
+        "payment_capture": 1,
         "notes": {
             "user_id": str(current_user.id),
             "user_email": current_user.email,
@@ -1595,14 +1681,28 @@ def verify_payment_and_activate_pro(
     before_snapshot = _subscription_change_snapshot(before_subscription)
 
     try:
-        _validate_razorpay_order_payment(
+        _order_data, verified_payment_data = _validate_razorpay_order_payment(
             current_user=current_user,
             payment_row=payment_row,
             payload=payload,
             verify_checkout_signature=True,
         )
     except HTTPException as exc:
-        _mark_payment_failed(db, payment_row, str(exc.detail))
+        # A pending/provider-outage state is not a failed payment: leave the row
+        # 'created' so the payment.captured webhook (or a client retry) can still
+        # verify it. Only definitive validation verdicts poison the row.
+        if not _is_transient_verification_error(exc):
+            _mark_payment_failed(db, payment_row, str(exc.detail))
+        if exc.status_code == 409:
+            # Buyer-facing wording: the internal detail ("order is not marked as
+            # paid yet") reads like a failure and invites paying twice.
+            raise HTTPException(
+                status_code=409,
+                detail=(
+                    "Your payment is still being confirmed by the payment provider. "
+                    "Your plan activates automatically once it completes — no need to pay again."
+                ),
+            )
         raise
 
     subscription = _finalize_verified_payment(
@@ -1613,6 +1713,7 @@ def verify_payment_and_activate_pro(
         subscription_id=None,
         invoice_id=None,
         provider_subscription_data=None,
+        payment_entity=verified_payment_data,
     )
     after_snapshot = _subscription_change_snapshot(subscription)
     if before_snapshot != after_snapshot:
@@ -1718,7 +1819,17 @@ def verify_recurring_payment_and_activate_pro(
             payload.razorpay_payment_id,
             str(exc.detail),
         )
-        _mark_payment_failed(db, seed_row, str(exc.detail))
+        # Pending/provider-outage states are retryable — do not poison the row.
+        if not _is_transient_verification_error(exc):
+            _mark_payment_failed(db, seed_row, str(exc.detail))
+        if exc.status_code == 409:
+            raise HTTPException(
+                status_code=409,
+                detail=(
+                    "Your payment is still being confirmed by the payment provider. "
+                    "Your plan activates automatically once it completes — no need to pay again."
+                ),
+            )
         raise
 
     target_row = seed_row
@@ -1804,6 +1915,7 @@ def verify_recurring_payment_and_activate_pro(
         subscription_id=effective_subscription_id,
         invoice_id=invoice_id,
         provider_subscription_data=subscription_data,
+        payment_entity=payment_data,
     )
     after_snapshot = _subscription_change_snapshot(subscription)
     if before_snapshot != after_snapshot:
@@ -1858,7 +1970,9 @@ def _handle_recurring_payment_webhook(
 
     key_id, key_secret = _razorpay_credentials()
     if not key_id or not key_secret:
-        return {"status": "ignored", "reason": "verification_not_configured"}
+        # 200 would consume the delivery behind a config gap; non-2xx keeps Razorpay
+        # retrying until credentials are restored.
+        raise HTTPException(status_code=503, detail="Payment verification is not configured; retry delivery.")
 
     try:
         subscription_data = _razorpay_request(
@@ -1867,7 +1981,11 @@ def _handle_recurring_payment_webhook(
             key_id=key_id,
             key_secret=key_secret,
         )
-    except HTTPException:
+    except HTTPException as exc:
+        if _is_transient_verification_error(exc):
+            # Answer non-2xx so Razorpay redelivers once the provider recovers —
+            # a 200 here consumes the event and strands the payment forever.
+            raise HTTPException(status_code=503, detail="Provider state is not available yet; retry delivery.")
         if seed_row:
             _mark_payment_failed(db, seed_row, "webhook_subscription_fetch_failed")
         return {"status": "ignored", "reason": "subscription_fetch_failed"}
@@ -1914,8 +2032,16 @@ def _handle_recurring_payment_webhook(
             verify_checkout_signature=False,
             allow_subscription_rebind=False,
         )
-    except HTTPException:
-        _mark_payment_failed(db, seed_row, "webhook_validation_failed")
+    except HTTPException as exc:
+        if _is_transient_verification_error(exc):
+            db.rollback()
+            logger.warning(
+                "Razorpay webhook: recurring payment %s not final yet (%s) — returning 503 so Razorpay retries",
+                payment_id,
+                exc.detail,
+            )
+            raise HTTPException(status_code=503, detail="Payment state is not final yet; retry delivery.")
+        _mark_payment_failed(db, seed_row, f"webhook_validation_failed: {str(exc.detail)[:800]}")
         return {"status": "ignored", "reason": "validation_failed"}
 
     target_row = existing_payment or seed_row
@@ -1964,6 +2090,7 @@ def _handle_recurring_payment_webhook(
         subscription_id=effective_subscription_id,
         invoice_id=invoice_id,
         provider_subscription_data=subscription_data,
+        payment_entity=payment_data,
     )
     refreshed_subscription = get_or_create_user_subscription(db, user.id)
     after_snapshot = _subscription_change_snapshot(refreshed_subscription)
@@ -2002,7 +2129,9 @@ def _handle_subscription_lifecycle_webhook(
 
     key_id, key_secret = _razorpay_credentials()
     if not key_id or not key_secret:
-        return {"status": "ignored", "reason": "verification_not_configured"}
+        # 200 would consume the delivery behind a config gap; non-2xx keeps Razorpay
+        # retrying until credentials are restored.
+        raise HTTPException(status_code=503, detail="Payment verification is not configured; retry delivery.")
 
     try:
         subscription_data = _razorpay_request(
@@ -2011,7 +2140,9 @@ def _handle_subscription_lifecycle_webhook(
             key_id=key_id,
             key_secret=key_secret,
         )
-    except HTTPException:
+    except HTTPException as exc:
+        if _is_transient_verification_error(exc):
+            raise HTTPException(status_code=503, detail="Provider state is not available yet; retry delivery.")
         return {"status": "ignored", "reason": "subscription_fetch_failed"}
 
     payment_row = (
@@ -2102,6 +2233,7 @@ def _handle_payment_failed_webhook(
         models.SubscriptionPayment.provider == "razorpay",
         models.SubscriptionPayment.razorpay_payment_id == payment_id,
     ).first()
+    matched_by_payment_id = payment_row is not None
     if not payment_row:
         subscription_id = str(payment_entity.get("subscription_id") or "").strip()
         if _looks_like_razorpay_id(subscription_id, "sub"):
@@ -2118,7 +2250,40 @@ def _handle_payment_failed_webhook(
         return {"status": "ignored", "reason": "payment_not_found"}
 
     previous_status = str(payment_row.status or "").strip().lower()
-    _mark_payment_failed(db, payment_row, "provider_payment_failed")
+    if previous_status == "verified" and matched_by_payment_id:
+        # payment.failed for a payment id we already verified as captured — Razorpay
+        # does not fail captured payments (refunds/disputes are separate events), so
+        # this is noise; never downgrade the verified purchase over it.
+        return {"status": "ok", "idempotent": True}
+    if previous_status == "verified":
+        # Never downgrade a verified purchase. payment.failed describes one payment
+        # ATTEMPT; the subscription-id fallback lookup above landed on the row of an
+        # earlier SUCCESSFUL charge because a later renewal attempt (different
+        # payment id) failed. Record the failed attempt as its OWN row keyed by the
+        # attempt's payment id: event redeliveries then hit the payment-id lookup
+        # above and dedupe (one failure email per distinct attempt, not per
+        # delivery), and the failing renewal stays visible to reconciliation
+        # without touching the verified row.
+        attempt_order_ref = _ensure_unique_order_ref(
+            db,
+            str(payment_entity.get("order_id") or "").strip() or f"payfail:{payment_id}",
+        )
+        db.add(models.SubscriptionPayment(
+            user_id=payment_row.user_id,
+            provider="razorpay",
+            plan=payment_row.plan,
+            amount_paise=int(payment_entity.get("amount", 0) or 0) or payment_row.amount_paise,
+            currency=_normalize_currency(payment_entity.get("currency", "") or payment_row.currency or "INR"),
+            razorpay_order_id=attempt_order_ref,
+            razorpay_payment_id=payment_id,
+            razorpay_subscription_id=payment_row.razorpay_subscription_id,
+            pricing_model=payment_row.pricing_model,
+            status="failed",
+            error_message="provider_payment_failed",
+        ))
+        db.commit()
+    else:
+        _mark_payment_failed(db, payment_row, "provider_payment_failed")
     if previous_status != "failed":
         user = db.query(models.User).filter(models.User.id == payment_row.user_id).first()
         subscription = get_or_create_user_subscription(db, payment_row.user_id)
@@ -2170,6 +2335,10 @@ async def razorpay_webhook(
         raise HTTPException(status_code=400, detail="Invalid webhook payload.")
 
     event_name = str(event_payload.get("event") or "").strip()
+    # The purchase pipeline's only server-side trace used to be uvicorn access lines,
+    # which made a missed/late delivery invisible until a customer emailed. Log every
+    # accepted delivery (ids only, no PII).
+    logger.info("Razorpay webhook received: event=%s", event_name or "<empty>")
     if event_name == "payment.failed":
         return _handle_payment_failed_webhook(db=db, event_payload=event_payload)
 
@@ -2211,7 +2380,7 @@ async def razorpay_webhook(
         razorpay_signature=provided_signature,
     )
     try:
-        _validate_razorpay_order_payment(
+        _order_data, verified_payment_data = _validate_razorpay_order_payment(
             current_user=user,
             payment_row=payment_row,
             payload=payload,
@@ -2225,6 +2394,7 @@ async def razorpay_webhook(
             subscription_id=None,
             invoice_id=None,
             provider_subscription_data=None,
+            payment_entity=verified_payment_data,
         )
         after_snapshot = _subscription_change_snapshot(updated_subscription)
         if before_snapshot != after_snapshot:
@@ -2248,10 +2418,36 @@ async def razorpay_webhook(
             payment_reference=payment_id,
         )
         _refresh_student_profile_snapshot_safe(db=db, user_id=user.id)
-    except HTTPException:
-        _mark_payment_failed(db, payment_row, "webhook_validation_failed")
+    except HTTPException as exc:
+        if _is_transient_verification_error(exc):
+            db.rollback()
+            logger.warning(
+                "Razorpay webhook: order %s payment %s not final yet (%s) — returning 503 so Razorpay retries",
+                order_id,
+                payment_id,
+                exc.detail,
+            )
+            raise HTTPException(status_code=503, detail="Payment state is not final yet; retry delivery.")
+        # The triggering event is payment.captured, so a definitive rejection here
+        # strands money Razorpay has already collected — a manual dashboard refund
+        # is likely needed. Error level so it pages, not just logs.
+        logger.error(
+            "Razorpay webhook: order %s (user %s) failed validation with funds CAPTURED — manual refund may be needed: %s",
+            order_id,
+            payment_row.user_id,
+            exc.detail,
+        )
+        _mark_payment_failed(db, payment_row, f"webhook_validation_failed: {str(exc.detail)[:800]}")
         return {"status": "ignored", "reason": "validation_failed"}
 
+    logger.info(
+        "Razorpay webhook: verified order %s payment %s for user %s (%s %s)",
+        order_id,
+        payment_id,
+        payment_row.user_id,
+        payment_row.amount_paise,
+        payment_row.currency,
+    )
     return {"status": "ok"}
 
 

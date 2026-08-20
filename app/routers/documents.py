@@ -22,6 +22,7 @@ from app.document_catalog import (
     build_document_catalog_response,
     build_journey_stages,
     ensure_default_document_type_catalog,
+    get_document_type_label,
     get_document_type_payload,
 )
 from app import visa_catalog
@@ -655,6 +656,7 @@ def upload_document(
             related_documents_context=related_documents_context,
             destination_country_code=_dest_code,
             destination_summary=f"{_dest_name} — {_dest_label}",
+            document_type_label=get_document_type_label(db, document_type, _dest_code, _dest_visa),
         )
         
         if validation_result:
@@ -1094,6 +1096,7 @@ def ai_validate_document_transient(
             related_documents_context=related_documents_context,
             destination_country_code=_dest_code,
             destination_summary=f"{_dest_name} — {_dest_label}",
+            document_type_label=get_document_type_label(db, document_type, _dest_code, _dest_visa),
         )
     except Exception:
         logger.exception("ai-validate: Gemini processing failed for user_id=%s", current_user.id)
@@ -1325,12 +1328,12 @@ def _build_subscription_snapshot_for_profile(user: models.User, db: Session) -> 
     user_id = user.id
     subscription = get_or_create_user_subscription(db, user_id, commit=False)
     limits = get_plan_limits(subscription.plan)
-    latest_payment = (
-        db.query(models.SubscriptionPayment)
-        .filter(models.SubscriptionPayment.user_id == user_id)
-        .order_by(desc(models.SubscriptionPayment.id))
-        .first()
-    )
+    # Shared settled-first rule: abandoned 'created' checkout orders must not mask
+    # the payment that actually settled, or the assistant tells a paid buyer their
+    # latest payment is still pending. Function-local import — subscription.py
+    # lazy-imports this module, so a top-level import would be a cycle.
+    from app.routers.subscription import _find_latest_payment_for_user
+    latest_payment = _find_latest_payment_for_user(db, user_id)
     latest_verified_payment = (
         db.query(models.SubscriptionPayment)
         .filter(

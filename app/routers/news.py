@@ -115,6 +115,38 @@ def _resolve_user_destination(user: models.User) -> str:
     return code if code in NEWS_DESTINATIONS else NEWS_DEFAULT_DESTINATION
 
 
+# Per-destination phrasing for the applicant-experiences feed. The US keeps its
+# original consular F-1 interview flow (consulate filters apply); every other
+# destination fetches experiences about ITS OWN student-visa process — an AU
+# student must never be shown US consular interview reports as prep material.
+INTERVIEW_EXPERIENCE_DESTINATIONS: Dict[str, Dict[str, str]] = {
+    "US": {
+        "visa": "US F-1 student visa",
+        "process": "consular F-1 visa interview",
+    },
+    "UK": {
+        "visa": "UK Student visa",
+        "process": "Student visa application, including credibility interviews and decision timelines",
+    },
+    "CA": {
+        "visa": "Canada study permit",
+        "process": "study-permit application, including biometrics, IRCC interview requests, and decision timelines",
+    },
+    "AU": {
+        "visa": "Australia Subclass 500 student visa",
+        "process": "Subclass 500 application, including Genuine Student (GS) phone/video interviews, s56 requests, and grant timelines",
+    },
+    "DE": {
+        "visa": "German national student visa (Type D)",
+        "process": "national-visa appointment and interview at German missions, including appointment waits and decision timelines",
+    },
+    "IE": {
+        "visa": "Ireland study visa (Stamp 2)",
+        "process": "study-visa application and decision timelines",
+    },
+}
+
+
 def _clean_and_parse_json(text: str) -> Dict[str, Any]:
     response_text = (text or "").strip()
     if response_text.startswith("```json"):
@@ -432,7 +464,9 @@ def _match_consulate(raw_value: str, allowed_consulates: List[str]) -> str:
     return value
 
 
-def _normalize_interview_items(items: Any, allowed_consulates: List[str]) -> List[Dict[str, str]]:
+def _normalize_interview_items(
+    items: Any, allowed_consulates: List[str], default_location: str = "Consulate not specified"
+) -> List[Dict[str, str]]:
     if not isinstance(items, list):
         return []
 
@@ -454,7 +488,7 @@ def _normalize_interview_items(items: Any, allowed_consulates: List[str]) -> Lis
             source_url = ""
 
         normalized.append({
-            "consulate": consulate or "Consulate not specified",
+            "consulate": consulate or default_location,
             "interview_result": str(raw.get("interview_result", "")).strip() or str(raw.get("outcome", "")).strip() or "Reported",
             "summary": summary,
             "key_takeaway": str(raw.get("key_takeaway", "")).strip() or str(raw.get("focus", "")).strip(),
@@ -738,12 +772,15 @@ Provide 4 to 8 items. If no qualifying recent updates exist, return an empty ite
     }
 
 
-def _generate_f1_interview_experiences_with_gemini(country: str, consulates: List[str]) -> Dict[str, Any]:
+def _generate_interview_experiences_with_gemini(
+    destination_code: str, country: str, consulates: List[str]
+) -> Dict[str, Any]:
     client, auth_mode = _build_latest_genai_client()
 
-    consulate_text = ", ".join(consulates)
     now_utc_iso = datetime.now(timezone.utc).isoformat()
-    prompt = f"""You are a research assistant helping F1 visa students.
+    if destination_code == "US":
+        consulate_text = ", ".join(consulates)
+        prompt = f"""You are a research assistant helping F1 visa students.
 Task: Find recent F-1 visa interview experiences posted by real users online.
 
 Filters:
@@ -784,6 +821,52 @@ Output JSON format:
 }}
 
 Provide 5 to 10 items."""
+    else:
+        meta = INTERVIEW_EXPERIENCE_DESTINATIONS[destination_code]
+        prompt = f"""You are a research assistant helping students applying for the {meta['visa']}.
+Task: Find recent {meta['visa']} application and interview experiences posted by real applicants online.
+
+Scope:
+- Destination visa: {meta['visa']} — cover the {meta['process']}.
+- Applicants from: {country}
+- Current date/time (UTC): {now_utc_iso}
+
+Sources to prioritize:
+- Reddit
+- X (Twitter)
+- Telegram communities
+- Yocket
+- Other active student communities/forums
+
+Strict output requirements:
+- Include ONLY experiences about the {meta['visa']}. NEVER include experiences about other
+  countries' visas (no US F-1 consular interviews unless the destination is the US).
+- Prefer experiences shared by applicants from {country}; clearly relevant ones from other
+  home countries are acceptable if recent and useful.
+- Prefer very recent posts.
+- Treat the current UTC date/time above as "now" when determining recency.
+- Include a direct source link for each item when available.
+- Keep each summary short and practical for a student.
+- Return ONLY valid JSON. No markdown.
+
+Output JSON format:
+{{
+  "generated_at_utc": "{now_utc_iso}",
+  "items": [
+    {{
+      "consulate": "short context label, e.g. 'GS Interview', 'Grant Timeline', 'Biometrics'",
+      "interview_result": "Approved | Refused | Pending | Unknown",
+      "summary": "2-3 sentence concise experience summary",
+      "key_takeaway": "single practical takeaway",
+      "platform": "Reddit | X | Telegram | Yocket | Forum",
+      "source_name": "post author or source label",
+      "source_url": "https://...",
+      "reported_date": "YYYY-MM-DD or unknown"
+    }}
+  ]
+}}
+
+Provide 5 to 10 items."""
 
     # Inherit the master chain (Gemini 3.1 Pro first, live fallbacks only).
     model_candidates = gemini_utils.get_model_candidates(
@@ -802,7 +885,11 @@ Provide 5 to 10 items."""
                 allow_non_grounded_fallback=ALLOW_NON_GROUNDED_INTERVIEW_FALLBACK,
             )
             data = _clean_and_parse_json(getattr(response, "text", ""))
-            items = _normalize_interview_items(data.get("items", []), consulates)
+            items = _normalize_interview_items(
+                data.get("items", []),
+                consulates,
+                default_location="Consulate not specified" if destination_code == "US" else "Applicant report",
+            )
             if not items:
                 raise ValueError("Gemini returned no usable interview experiences")
             return {
@@ -932,16 +1019,27 @@ def get_f1_interview_experiences(
     refresh: bool = Query(default=False),
     current_user: models.User = Depends(get_current_active_user),
 ):
-    del current_user  # endpoint is protected; user object is not needed further.
+    # Experiences are scoped to the user's DESTINATION visa process. The US keeps
+    # its consular flow (home country + US-consulate filters); other destinations
+    # fetch experiences about their own visa (e.g. AU Subclass 500 GS interviews)
+    # filtered only by the applicant's home country.
+    destination = _resolve_user_destination(current_user)
+    if destination not in INTERVIEW_EXPERIENCE_DESTINATIONS:
+        destination = NEWS_DEFAULT_DESTINATION
     now_utc = datetime.now(timezone.utc)
 
-    selected_country, selected_consulates = _normalize_filter_inputs(country, consulates)
-    cache_key = _build_interview_cache_key(selected_country, selected_consulates)
+    if destination == "US":
+        selected_country, selected_consulates = _normalize_filter_inputs(country, consulates)
+    else:
+        selected_country, _ = _normalize_filter_inputs(country, None)
+        selected_consulates = []
+    cache_key = f"{destination}|{_build_interview_cache_key(selected_country, selected_consulates)}"
 
     with _interview_lock:
         cache_entry = _interview_cache.get(cache_key)
         if cache_entry and not refresh and _cache_entry_is_fresh(cache_entry, now_utc, INTERVIEW_CACHE_TTL):
             return {
+                "destination_country_code": destination,
                 "country": selected_country,
                 "consulates": selected_consulates,
                 "items": cache_entry["items"],
@@ -953,7 +1051,7 @@ def get_f1_interview_experiences(
                 "grounding_method": cache_entry.get("grounding_method"),
             }
 
-    generated = _generate_f1_interview_experiences_with_gemini(selected_country, selected_consulates)
+    generated = _generate_interview_experiences_with_gemini(destination, selected_country, selected_consulates)
     cache_entry = {
         "country": selected_country,
         "consulates": selected_consulates,
@@ -969,6 +1067,7 @@ def get_f1_interview_experiences(
         _interview_cache[cache_key] = cache_entry
 
     return {
+        "destination_country_code": destination,
         "country": selected_country,
         "consulates": selected_consulates,
         "items": generated["items"],

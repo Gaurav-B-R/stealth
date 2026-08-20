@@ -239,6 +239,11 @@ def pass_checkout(
         "amount": amount,
         "currency": currency,
         "receipt": receipt,
+        # Capture automatically on authorization (mirrors the enterprise flow).
+        # Without this, capture timing rides on Razorpay dashboard settings, and an
+        # international card can sit authorized-but-uncaptured for hours — the
+        # buyer's bank says "paid" while the pass never activates.
+        "payment_capture": 1,
         "notes": {
             "user_id": str(current_user.id),
             "product": "visa_success_pass",
@@ -251,6 +256,13 @@ def pass_checkout(
     order_id = str(order.get("id") or "").strip()
     if not order_id:
         raise HTTPException(status_code=502, detail="Could not create the payment order.")
+    logger.info(
+        "Pass checkout order created: %s user %s (%s %s)",
+        order_id,
+        current_user.id,
+        amount,
+        currency,
+    )
 
     db.add(models.SubscriptionPayment(
         user_id=current_user.id,
@@ -339,16 +351,62 @@ def pass_verify(
     payment_data = _razorpay_request("GET", f"/payments/{payload.razorpay_payment_id.strip()}")
 
     def _reject(detail: str) -> None:
+        if bool(payment_data.get("captured")):
+            # With payment_capture=1 the money has already been collected; rejecting
+            # the verification strands captured funds — a manual dashboard refund is
+            # likely needed. Error level so it pages, not just logs.
+            logger.error(
+                "Pass verify rejected a CAPTURED payment — manual refund may be needed: order %s payment %s user %s: %s",
+                payment_row.razorpay_order_id,
+                payload.razorpay_payment_id,
+                current_user.id,
+                detail,
+            )
+        else:
+            logger.warning(
+                "Pass verify rejected: order %s user %s: %s",
+                payment_row.razorpay_order_id,
+                current_user.id,
+                detail,
+            )
         payment_row.status = "failed"
         payment_row.error_message = detail
         db.commit()
         raise HTTPException(status_code=400, detail=detail)
 
+    def _pending(detail: str) -> None:
+        # Authorized-but-not-yet-captured (or order not yet flipped to paid) is a
+        # PENDING state, not a verdict — capture on international cards can trail
+        # authorization by hours. Marking the row failed here poisons a purchase
+        # that is still completing; leave it 'created' so the payment.captured
+        # webhook (or a verify retry) can still activate the pass.
+        logger.info(
+            "Pass verify pending: order %s user %s: %s",
+            payment_row.razorpay_order_id,
+            current_user.id,
+            detail,
+        )
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                "Your payment is still being confirmed by the payment provider. "
+                "The pass activates automatically once it completes — no need to pay again."
+            ),
+        )
+
     expected_currency = money.normalize_currency(payment_row.currency, strict=False)
     if str(order_data.get("id") or "") != payment_row.razorpay_order_id:
         _reject("Razorpay order mismatch.")
+    # Terminal payment states are a verdict and must be caught BEFORE the pending
+    # paths below, or a dead payment loops as "confirming — no need to pay again"
+    # forever (payment.captured will never fire for it). A refunded payment with
+    # captured=true was a real purchase later refunded — refund handling, not a
+    # verification failure.
+    payment_state = str(payment_data.get("status", "")).lower()
+    if payment_state == "failed" or (payment_state == "refunded" and not bool(payment_data.get("captured"))):
+        _reject("This payment failed or was refunded by the payment provider. Please try again.")
     if str(order_data.get("status", "")).lower() != "paid":
-        _reject("This payment has not completed yet.")
+        _pending("order not marked paid yet")
     if int(order_data.get("amount", 0) or 0) != int(payment_row.amount_paise):
         _reject("Payment amount mismatch.")
     if money.normalize_currency(order_data.get("currency"), strict=False) != expected_currency:
@@ -361,9 +419,10 @@ def pass_verify(
         _reject("Payment currency mismatch.")
     # An authorized-but-uncaptured payment can still yield a valid checkout signature, and
     # capture failure is materially more common on international cards. Without this the
-    # pass is granted for money that never arrives.
+    # pass is granted for money that never arrives. It is a pending state, not a failure:
+    # capture usually follows within moments (payment_capture=1 on the order).
     if not bool(payment_data.get("captured")):
-        _reject("This payment has not been captured yet.")
+        _pending("payment authorized but not captured yet")
 
     already_verified = payment_row.status == "verified"
     if not already_verified:
@@ -389,6 +448,14 @@ def pass_verify(
         except Exception:
             logger.exception("Referral reward on purchase failed (user_id=%s)", current_user.id)
         db.commit()
+        logger.info(
+            "Pass verified: order %s payment %s user %s (%s %s)",
+            payment_row.razorpay_order_id,
+            payment_row.razorpay_payment_id,
+            current_user.id,
+            payment_row.amount_paise,
+            payment_row.currency,
+        )
 
     subscription = get_or_create_user_subscription(db, current_user.id)
     return {
@@ -430,7 +497,12 @@ async def red_flag_scan(
 
     # Attribute this scan's Gemini cost to the account that ran it.
     ai_usage.set_usage_account(user_id=current_user.id)
-    result = gemini_service.scan_document_red_flags(data, file.filename or "document", file.content_type or "")
+    result = gemini_service.scan_document_red_flags(
+        data,
+        file.filename or "document",
+        file.content_type or "",
+        destination_country_code=current_user.destination_country_code,
+    )
     if result is None:
         raise HTTPException(status_code=503, detail="The red-flag scan isn't available right now.")
 

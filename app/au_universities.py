@@ -90,7 +90,9 @@ AU_UNIVERSITIES: list[tuple[str, str, str]] = [
     # Public TAFEs & institutes (CRICOS-registered — VET/diploma & degree pathways
     # heavily used by international Subclass 500 students).
     ("tafensw.edu.au", "TAFE NSW", "Sydney, NSW"),
-    ("studenttafensw.edu.au", "TAFE NSW", "Sydney, NSW"),
+    # Student accounts are firstname.lastname@studytafensw.edu.au (per TAFE NSW's own
+    # find-your-username docs) — NOT "studenttafensw".
+    ("studytafensw.edu.au", "TAFE NSW", "Sydney, NSW"),
     ("tafeqld.edu.au", "TAFE Queensland", "Brisbane, QLD"),
     ("tafesa.edu.au", "TAFE SA", "Adelaide, SA"),
     ("tastafe.tas.edu.au", "TasTAFE", "Hobart, TAS"),
@@ -137,6 +139,19 @@ def seed_au_universities(db: Session) -> int:
     Idempotent and additive — safe to run on every startup. Existing rows (incl. the
     externally-loaded US list) are never modified.
     """
+    # Retire domains this list used to ship with a typo — additive seeding would
+    # otherwise leave the dead domain matching nobody forever.
+    _RETIRED_DOMAINS = {"studenttafensw.edu.au"}
+    retired = (
+        db.query(models.USUniversity)
+        .filter(models.USUniversity.email_domain.in_(sorted(_RETIRED_DOMAINS)))
+        .all()
+    )
+    for row in retired:
+        db.delete(row)
+    if retired:
+        db.commit()
+
     existing = {
         (domain or "").strip().lower()
         for (domain,) in db.query(models.USUniversity.email_domain).all()
