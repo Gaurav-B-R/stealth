@@ -9,7 +9,7 @@ from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
 
 from fastapi import APIRouter, Body, Depends, HTTPException, Query, Request, Response, status
 from jose import JWTError, jwt
-from sqlalchemy import bindparam, case, desc, func, inspect, or_, select, text
+from sqlalchemy import case, desc, func, or_, select
 from sqlalchemy.orm import Session, aliased
 
 from app import models, schemas
@@ -34,6 +34,7 @@ from app.auth import (
     get_current_admin_user,
 )
 from app.database import get_db
+from app.utils import user_deletion
 from app.utils.rate_limiter import check_ip_rate_limit, extract_client_ip, is_request_ip_whitelisted
 from app.utils.turnstile import is_turnstile_enabled, verify_turnstile_token
 
@@ -408,95 +409,6 @@ def _add_month_bucket(monthly_buckets: dict, when, *, investment: Decimal = Deci
     key = _month_key(when)
     monthly_buckets[key]["investment_usd"] += investment
     monthly_buckets[key]["returns_usd"] += returns
-
-
-def _get_table_columns(inspector, table_name: str) -> dict[str, dict]:
-    try:
-        return {str(col["name"]): col for col in inspector.get_columns(table_name)}
-    except Exception:
-        return {}
-
-
-def _cleanup_legacy_marketplace_rows(db: Session, user_id: int) -> None:
-    """
-    Best-effort cleanup for legacy marketplace tables that may still exist in some DBs.
-    These tables are not represented in current ORM models but can block user deletion
-    through FK constraints (e.g. test buyer/seller accounts).
-    """
-    bind = db.get_bind()
-    if bind is None:
-        return
-
-    inspector = inspect(bind)
-    table_names = set(inspector.get_table_names())
-    if not {"items", "messages", "item_images"} & table_names:
-        return
-
-    item_columns = _get_table_columns(inspector, "items") if "items" in table_names else {}
-    message_columns = _get_table_columns(inspector, "messages") if "messages" in table_names else {}
-    item_image_columns = _get_table_columns(inspector, "item_images") if "item_images" in table_names else {}
-
-    # If marketplace items are owned by this user, delete dependent rows first.
-    owner_columns = [
-        col
-        for col in ("seller_id", "user_id", "owner_id", "created_by_id", "creator_id")
-        if col in item_columns
-    ]
-    owned_item_ids: list[int] = []
-    if owner_columns:
-        owner_where = " OR ".join(f'"{col}" = :uid' for col in owner_columns)
-        rows = db.execute(
-            text(f'SELECT "id" FROM "items" WHERE {owner_where}'),
-            {"uid": int(user_id)},
-        ).fetchall()
-        owned_item_ids = [int(row[0]) for row in rows if row and row[0] is not None]
-
-    if owned_item_ids:
-        if item_image_columns and "item_id" in item_image_columns:
-            db.execute(
-                text('DELETE FROM "item_images" WHERE "item_id" IN :item_ids').bindparams(
-                    bindparam("item_ids", expanding=True)
-                ),
-                {"item_ids": owned_item_ids},
-            )
-        if message_columns and "item_id" in message_columns:
-            db.execute(
-                text('DELETE FROM "messages" WHERE "item_id" IN :item_ids').bindparams(
-                    bindparam("item_ids", expanding=True)
-                ),
-                {"item_ids": owned_item_ids},
-            )
-
-    # Remove messages directly tied to the user.
-    for column in ("sender_id", "receiver_id", "user_id", "seller_id", "buyer_id"):
-        if column in message_columns:
-            db.execute(
-                text(f'DELETE FROM "messages" WHERE "{column}" = :uid'),
-                {"uid": int(user_id)},
-            )
-
-    # Null out buyer-like references when possible; otherwise delete matching rows.
-    for column in ("buyer_id", "sold_to_user_id", "reserved_by_user_id"):
-        if column not in item_columns:
-            continue
-        if bool(item_columns[column].get("nullable", True)):
-            db.execute(
-                text(f'UPDATE "items" SET "{column}" = NULL WHERE "{column}" = :uid'),
-                {"uid": int(user_id)},
-            )
-        else:
-            db.execute(
-                text(f'DELETE FROM "items" WHERE "{column}" = :uid'),
-                {"uid": int(user_id)},
-            )
-
-    # Finally delete items owned by the user.
-    if owner_columns:
-        owner_where = " OR ".join(f'"{col}" = :uid' for col in owner_columns)
-        db.execute(
-            text(f'DELETE FROM "items" WHERE {owner_where}'),
-            {"uid": int(user_id)},
-        )
 
 
 @router.get("/users", response_model=schemas.AdminUserListResponse)
@@ -2879,21 +2791,34 @@ def delete_user_admin(
 
     _assert_manageable_target(user, current_user)
 
-    try:
-        # Clean up referral links from other users to avoid FK constraint failures.
-        db.query(models.User).filter(models.User.referred_by_user_id == user.id).update(
-            {models.User.referred_by_user_id: None},
-            synchronize_session=False,
+    # NOT NULL ownership rows (enterprise orgs / CRM clients / legacy students the user
+    # created) cannot be de-linked or auto-deleted — refuse up front with the reason
+    # instead of letting the FK violation surface as an opaque 500.
+    blockers = user_deletion.find_ownership_blockers(db, user.id)
+    if blockers:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=(
+                "Cannot delete this account: it owns "
+                + "; ".join(blockers)
+                + ". Reassign or delete those records first."
+            ),
         )
 
-        # This table currently has no ORM relationship on User, so clear explicitly.
-        db.query(models.RilonoAiChatUploadEvent).filter(
-            models.RilonoAiChatUploadEvent.user_id == user.id
-        ).delete(synchronize_session=False)
+    # Snapshot the user's object-storage keys BEFORE the Document rows disappear; the
+    # irreversible R2 purge itself runs only AFTER the DB delete commits, so a failed
+    # delete never leaves a live account whose files are already gone.
+    try:
+        r2_keys = user_deletion.collect_user_r2_keys(db, user.id)
+    except Exception:
+        r2_keys = []
+        logger.exception("Admin delete: failed to snapshot R2 keys for user_id=%s; proceeding with DB delete", user_id)
 
-        # Some upgraded DBs still include legacy marketplace tables (items/messages/item_images)
-        # where user-linked rows must be removed first to satisfy FK constraints.
-        _cleanup_legacy_marketplace_rows(db=db, user_id=user.id)
+    try:
+        # Sever/remove every users.id reference the ORM cascades don't cover (shortlists,
+        # SOP drafts, enterprise memberships/notifications/AI threads, payment de-linking,
+        # referral links, legacy marketplace rows, ...).
+        user_deletion.purge_user_references(db, user.id)
 
         db.delete(user)
         db.commit()
@@ -2904,6 +2829,9 @@ def delete_user_admin(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Failed to delete user account. Please try again.",
         )
+
+    # DB rows are gone — erase the files from object storage (right-to-erasure). Best-effort.
+    user_deletion.delete_r2_objects(r2_keys, user_id=user_id)
 
     return {"message": "User account deleted successfully."}
 
