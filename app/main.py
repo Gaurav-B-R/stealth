@@ -532,7 +532,7 @@ _SPA_ROUTE_META = {
     "/products/us-f1-visa": {"title": _F1_TITLE, "description": _F1_DESCRIPTION, "canonical": f"{SITE_ORIGIN}/us-f1-visa"},
     "/pricing": {
         "title": "Pricing — Plans & Visa Success Pass · Rilono",
-        "description": "See Rilono's simple pricing: a free tier plus the one-time Visa Success Pass for unlimited AI document validation, red-flag scans and mock interviews.",
+        "description": "See Rilono's simple pricing: a free tier plus the one-time Visa Success Pass for unlimited AI document validation, red-flag scans and university shortlists, plus 3 voice mock interviews.",
         "canonical": f"{SITE_ORIGIN}/pricing",
     },
     "/about-us": {

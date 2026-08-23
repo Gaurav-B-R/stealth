@@ -15462,6 +15462,34 @@ def enterprise_course_catalog_browse(
     }
 
 
+def _course_finder_subject_or_400(discipline, field_of_study) -> tuple:
+    """The one rule both Course Finder forms enforce, applied server-side too: a shortlist
+    is always built WITHIN a catalog subject area (discipline bucket); the free-text field
+    of study only refines it. Free text alone — "House Wife", "Machine Learning" — is
+    accepted only when the catalog normaliser maps it onto a real bucket; otherwise the
+    caller is told to pick a subject area instead of Rilono AI inventing one and billing
+    5 credits for it. Returns (discipline, field_of_study)."""
+    from app import course_catalog
+    field = str(field_of_study or "").strip()
+    subject = str(discipline or "").strip()
+    if subject:
+        canonical = course_catalog._clean_discipline(subject)
+        if canonical == "Other" and subject.lower() != "other":
+            raise HTTPException(
+                status_code=400,
+                detail=f"'{subject}' isn't a subject area Course Finder knows — pick one from the list.",
+            )
+        return canonical, field
+    mapped = course_catalog._clean_discipline(field) if field else None
+    if field and mapped and mapped != "Other":
+        return mapped, field
+    raise HTTPException(
+        status_code=400,
+        detail="Pick a subject area first — Rilono AI shortlists within it (add a specific "
+               "course or specialisation if you have one).",
+    )
+
+
 class EnterpriseCourseFinderRecommend(BaseModel):
     client_id: Optional[int] = None
     country_code: Optional[str] = Field(None, max_length=8)
@@ -15512,9 +15540,7 @@ def enterprise_course_finder_recommend(
             detail="Pick a destination country (or set one on the client) first.",
         )
 
-    field_query = (payload.field_of_study or "").strip()
-    if not field_query and not (payload.discipline or "").strip():
-        raise HTTPException(status_code=400, detail="Tell Rilono AI the field of study to shortlist for.")
+    discipline, field_query = _course_finder_subject_or_400(payload.discipline, payload.field_of_study)
 
     # Hard-block a broke wallet BEFORE spending any Gemini tokens.
     credits.enforce_action_or_402(db, organization.id, COURSE_FINDER_ACTION_KEY)
@@ -15523,7 +15549,7 @@ def enterprise_course_finder_recommend(
         db,
         country_code=code,
         degree_level=(payload.degree_level or "").strip().lower() or None,
-        discipline=(payload.discipline or "").strip() or None,
+        discipline=discipline,
         q=field_query or None,
         limit_universities=20,
     )
@@ -15534,7 +15560,7 @@ def enterprise_course_finder_recommend(
             db,
             country_code=code,
             degree_level=(payload.degree_level or "").strip().lower() or None,
-            discipline=(payload.discipline or "").strip() or None,
+            discipline=discipline,
             limit_universities=20,
         )
 
@@ -15546,7 +15572,7 @@ def enterprise_course_finder_recommend(
             client=client,
             field_of_study=field_query or None,
             degree_level=(payload.degree_level or "").strip().lower() or None,
-            discipline=(payload.discipline or "").strip() or None,
+            discipline=discipline,
             budget=payload.budget,
             notes=payload.notes,
             max_results=payload.max_results,
@@ -15571,7 +15597,7 @@ def enterprise_course_finder_recommend(
         client_name=client.full_name if client else None,
         country_code=code,
         degree_level=(payload.degree_level or "").strip().lower() or None,
-        discipline=(payload.discipline or "").strip() or None,
+        discipline=discipline,
         query=json.dumps({
             "field_of_study": field_query or None,
             "budget": (payload.budget or "").strip() or None,

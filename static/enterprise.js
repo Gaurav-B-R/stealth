@@ -6175,8 +6175,9 @@
 
       if (canCourseFinderAi) {
         // Form values live on uni.form so redraws (item saves, history loads) keep a
-        // half-typed brief. Same unlock rule as the side panel: a free-text field of
-        // study OR a picked discipline.
+        // half-typed brief. Same unlock rule as the Course Finder page: a SUBJECT AREA
+        // must be picked (the free text only refines it) — unless the vocabulary failed
+        // to load, when the old text-only rule is the only thing left.
         const fld = $("#uniCfField"), lvl = $("#uniCfLevel"), dsc = $("#uniCfDiscipline"),
           bud = $("#uniCfBudget"), nts = $("#uniCfNotes");
         if (fld) fld.oninput = () => { uni.form.field = fld.value; };
@@ -6188,8 +6189,8 @@
         // While a run is in flight the button is painted disabled+busy; binding validity
         // then would re-enable it mid-run (this flow doesn't go through withBusy).
         if (run && !uni.aiBusy) bindValidity(run, [fld, dsc],
-          () => ((fld && fld.value) || "").trim() !== "" || !!(dsc && dsc.value),
-          "Enter a field of study or pick a discipline first");
+          () => (dsc && !dsc.disabled) ? !!dsc.value : ((fld && fld.value) || "").trim() !== "",
+          "Pick a subject area first");
         if (run) run.onclick = () => uniRunCourseFinder();
       }
       $$(".uni-rec-save", w).forEach((b) => { b.onclick = () => uniSaveRecItem(Number(b.dataset.i)); });
@@ -6346,6 +6347,17 @@
         ? m.degree_levels
         : Object.entries(CF_LEVEL_LABELS).map(([key, label]) => ({ key, label }));
       const disciplines = m.disciplines || [];
+      // First paint for this client: seed the brief from their intake record (only the
+      // boxes that are still empty, and only once the subject-area vocabulary is here so
+      // the mapping can actually land).
+      if (disciplines.length && f.prefilledFor !== cl.id) {
+        const d = cfProfileDefaults(cl, m);
+        if (!f.discipline) f.discipline = d.discipline;
+        if (!(f.field || "").trim()) f.field = d.field;
+        if (!f.level) f.level = d.level;
+        if (!(f.budget || "").trim()) f.budget = d.budget;
+        f.prefilledFor = cl.id;
+      }
       // meta.countries is the catalog's coverage list; a destination outside it would
       // only 400 on the run, so say so up front instead of offering a dead form.
       const covered = !m.countries || !code || m.countries.some((x) => x.code === code);
@@ -6360,11 +6372,11 @@
         cardBody = `
           <div class="uni-form">
             <div class="field"><label>Destination</label><input value="${esc(((cl.country && cl.country.flag_emoji) ? cl.country.flag_emoji + " " : "") + dest)}" disabled title="Pinned to ${esc(first)}'s destination"></div>
-            <div class="field"><label>Field of study</label><input id="uniCfField" placeholder="e.g. Machine Learning, MBA…" maxlength="120" value="${esc(f.field)}"></div>
+            <div class="field"><label>Subject area <span class="muted" style="font-weight:400">· required</span></label>
+              <select id="uniCfDiscipline" ${disciplines.length ? "" : "disabled"}><option value="">${disciplines.length ? "Pick a subject area…" : "Subject areas unavailable"}</option>${disciplines.map((x) => `<option value="${esc(x)}" ${x === f.discipline ? "selected" : ""}>${esc(x)}</option>`).join("")}</select></div>
+            <div class="field"><label>Specific course or specialisation <span class="muted" style="font-weight:400">(optional)</span></label><input id="uniCfField" placeholder="e.g. MBA in Finance, Machine Learning" maxlength="120" value="${esc(f.field)}"></div>
             <div class="field"><label>Level</label>
               <select id="uniCfLevel"><option value="">Any</option>${levels.map((l) => `<option value="${esc(l.key)}" ${l.key === f.level ? "selected" : ""}>${esc(l.label)}</option>`).join("")}</select></div>
-            <div class="field"><label>Discipline</label>
-              <select id="uniCfDiscipline" ${disciplines.length ? "" : "disabled"}><option value="">Any</option>${disciplines.map((x) => `<option value="${esc(x)}" ${x === f.discipline ? "selected" : ""}>${esc(x)}</option>`).join("")}</select></div>
             <div class="field"><label>Annual budget</label><input id="uniCfBudget" placeholder="${esc(uniBudgetHint(code))}" maxlength="60" value="${esc(f.budget)}"></div>
             <div class="field"><label>Notes for Rilono AI</label><input id="uniCfNotes" placeholder="e.g. prefers co-op programs, needs scholarships" maxlength="300" value="${esc(f.notes)}"></div>
           </div>
@@ -6470,7 +6482,9 @@
     async function uniRunCourseFinder() {
       if (uni.aiBusy) return;
       const f = uni.form;
-      if (!(f.field || "").trim() && !f.discipline) { toast("Add a field of study (or pick a discipline) first.", "error"); return; }
+      const dscEl = $("#uniCfDiscipline");
+      const needsSubject = !dscEl || !dscEl.disabled;
+      if (needsSubject ? !f.discipline : !(f.field || "").trim()) { toast("Pick a subject area first.", "error"); return; }
       uni.aiBusy = true;
       const btn = $("#uniCfRun");
       // dataset.busy stands bindValidity's sync down (its input listeners stay live
@@ -15442,6 +15456,38 @@
   // the client gave up, so give it a longer leash than AI_API_TIMEOUT_MS.
   const CF_AI_TIMEOUT_MS = 150000;
   const CF_LEVEL_LABELS = { bachelors: "Bachelor's", masters: "Master's", phd: "PhD", diploma: "Diploma", other: "Other" };
+  // Profile → Course Finder form defaults. The client's intake record already says what they
+  // want to study (field_of_study), at what level (study_level) and with what budget
+  // (budget_band); pre-filling from it means staff start from the dossier instead of an
+  // empty box — the "House Wife" typed into Field of study that bought a polished, meaningless
+  // shortlist came from exactly that empty box. Subject area is the catalog's fixed bucket
+  // list, so the free-text field of study is mapped onto it the same way the catalog
+  // normaliser does (exact label, else substring either way).
+  const CF_PROFILE_LEVEL_MAP = { bachelors: "bachelors", masters: "masters", mba: "masters", phd: "phd",
+    pg_diploma: "diploma", diploma: "diploma", foundation: "other", certificate: "other", language: "other" };
+  function cfGuessDiscipline(text, disciplines) {
+    const s = String(text || "").trim().toLowerCase();
+    if (!s || !disciplines || !disciplines.length) return "";
+    const exact = disciplines.find((d) => String(d).toLowerCase() === s);
+    if (exact) return exact;
+    const hit = disciplines.find((d) => {
+      const k = String(d).toLowerCase();
+      return k !== "other" && (k.includes(s) || s.includes(k));
+    });
+    return hit || "";
+  }
+  function cfProfileDefaults(cl, meta) {
+    const m = meta || {};
+    const disciplines = m.disciplines || [];
+    const levelKeys = new Set((m.degree_levels && m.degree_levels.length ? m.degree_levels : Object.keys(CF_LEVEL_LABELS).map((key) => ({ key }))).map((l) => l.key));
+    const lvl = CF_PROFILE_LEVEL_MAP[String((cl && cl.study_level) || "").toLowerCase()] || "";
+    return {
+      discipline: cfGuessDiscipline(cl && cl.field_of_study, disciplines),
+      field: String((cl && cl.field_of_study) || "").trim(),
+      level: levelKeys.has(lvl) ? lvl : "",
+      budget: String((cl && cl.budget_band_label) || "").trim(),
+    };
+  }
   const CF_FIT_META = {
     reach: { label: "Reach", color: "#f59e0b" },
     match: { label: "Match", color: "#10b981" },
@@ -16037,14 +16083,16 @@
           <label class="cf-f"><span>Destination</span>
             <select id="cfAiCountry">${(m.countries || []).map((x) => `<option value="${esc(x.code)}" ${x.code === cf.country ? "selected" : ""}>${esc(x.flag_emoji || "")} ${esc(x.name)}</option>`).join("")}</select>
           </label>
-          <label class="cf-f"><span>Field of study</span>
-            <input id="cfAiField" placeholder="e.g. Machine Learning, MBA…" value="${esc(cf.aiField || cf.q)}" maxlength="120" />
+          <label class="cf-f"><span>Subject area</span>
+            <select id="cfAiDiscipline"><option value="">${(m.disciplines || []).length ? "Pick a subject area…" : "Subject areas unavailable"}</option>${(m.disciplines || []).map((d) => `<option value="${esc(d)}" ${d === cf.discipline ? "selected" : ""}>${esc(d)}</option>`).join("")}</select>
+            <span class="cf-f-hint">Required — pre-filled from the client's profile when it's recorded</span>
+          </label>
+          <label class="cf-f"><span>Specific course or specialisation</span>
+            <input id="cfAiField" placeholder="e.g. MBA in Finance, Machine Learning" value="${esc(cf.aiField || cf.q)}" maxlength="120" />
+            <span class="cf-f-hint">Optional — refines the subject area</span>
           </label>
           <label class="cf-f"><span>Level</span>
             <select id="cfAiLevel"><option value="">Any</option>${(m.degree_levels || []).map((l) => `<option value="${esc(l.key)}" ${l.key === cf.level ? "selected" : ""}>${esc(l.label)}</option>`).join("")}</select>
-          </label>
-          <label class="cf-f"><span>Discipline</span>
-            <select id="cfAiDiscipline"><option value="">Any</option>${(m.disciplines || []).map((d) => `<option value="${esc(d)}" ${d === cf.discipline ? "selected" : ""}>${esc(d)}</option>`).join("")}</select>
           </label>
           <label class="cf-f"><span>Annual budget</span>
             <input id="cfAiBudget" placeholder="e.g. USD 40,000" value="${esc(cf.aiBudget)}" maxlength="60" />
@@ -16098,6 +16146,13 @@
       const dest = (cl.destination_country_code || "").toUpperCase();
       const sel = $("#cfAiCountry");
       if (sel && dest && (cf.meta.countries || []).some((x) => x.code === dest)) sel.value = dest;
+      // …and seed the brief from their intake record, touching only boxes still empty.
+      const d = cfProfileDefaults(cl, cf.meta || {});
+      const ds = $("#cfAiDiscipline"), fi = $("#cfAiField"), ls = $("#cfAiLevel"), bi = $("#cfAiBudget");
+      if (ds && !ds.value && d.discipline) { ds.value = d.discipline; cf.discipline = d.discipline; }
+      if (fi && !fi.value.trim() && d.field) { fi.value = d.field; cf.aiField = d.field; }
+      if (ls && !ls.value && d.level) { ls.value = d.level; cf.level = d.level; }
+      if (bi && !bi.value.trim() && d.budget) { bi.value = d.budget; cf.aiBudget = d.budget; }
       cfSyncAiRun();
     };
     const openMenu = async () => {
@@ -16128,20 +16183,23 @@
     };
   }
 
-  /* A shortlist needs SOMETHING to search for. Either box will do — a free-text field of
-     study or a picked discipline — which is why this is one predicate over both rather than
-     a required-field check on each. */
+  /* A shortlist needs a SUBJECT AREA — the catalog's fixed bucket list — so the model is
+     never handed free text alone ("House Wife" in the old field-of-study box bought a
+     polished, meaningless shortlist). The free-text box only refines the bucket. If the
+     vocabulary failed to load (degraded meta) the old text-only rule is the only thing left;
+     the server applies the same rule. */
   function cfAiHasTarget() {
     const f = $("#cfAiField"), d = $("#cfAiDiscipline");
     const field = f ? f.value : (cf.aiField || "");
     const disc = d ? d.value : (cf.discipline || "");
-    return String(field || "").trim() !== "" || String(disc || "") !== "";
+    const vocabulary = !!((cf.meta && cf.meta.disciplines) || []).length;
+    return vocabulary ? String(disc || "") !== "" : String(field || "").trim() !== "";
   }
   /* A shortlist is always FOR a client — with nobody picked there is no profile to tailor
      to and no one to save picks onto. First unmet requirement, as the button tooltip. */
   function cfAiBlocker() {
     if (!cf.clientId) return "Pick a client from your list first";
-    if (!cfAiHasTarget()) return "Enter a field of study or pick a discipline first";
+    if (!cfAiHasTarget()) return "Pick a subject area first";
     return "";
   }
   function cfSyncAiRun() {

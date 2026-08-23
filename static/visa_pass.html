@@ -34,7 +34,8 @@
       border:1px solid var(--border);border-radius:var(--radius);padding:26px;margin-bottom:22px}
     .hero h1{margin:0 0 8px;font-size:26px}
     .hero p{margin:0;color:var(--muted);font-size:14px;line-height:1.6}
-    .grid{display:grid;grid-template-columns:repeat(4,1fr);gap:14px;margin-bottom:22px}
+    .grid{display:grid;grid-template-columns:repeat(5,1fr);gap:14px;margin-bottom:22px}
+    @media(max-width:1100px){.grid{grid-template-columns:repeat(3,1fr)}}
     @media(max-width:900px){.grid{grid-template-columns:repeat(2,1fr)}}
     @media(max-width:640px){.grid{grid-template-columns:1fr}}
     .card{background:var(--card);border:1px solid var(--border);border-radius:var(--radius);padding:18px}
@@ -319,6 +320,7 @@
           ${quotaCard(f.voice_interview)}
           ${quotaCard(f.university_shortlist)}
           ${quotaCard(f.sop_generator)}
+          ${quotaCard(f.course_finder)}
         </div>
 
         <div class="section-title">Document Red-Flag scan</div>

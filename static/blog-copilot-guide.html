@@ -17,7 +17,7 @@
     <meta property="og:url" content="https://rilono.com/blog/how-to-use-rilono-ai-copilot">
     <meta property="og:image" content="https://rilono.com/static/logo.png">
     <meta property="article:published_time" content="2026-07-05">
-    <meta property="article:modified_time" content="2026-08-07">
+    <meta property="article:modified_time" content="2026-08-22">
     <meta name="twitter:card" content="summary_large_image">
     <meta name="twitter:site" content="@Rilono_AI">
     <meta name="twitter:creator" content="@Rilono_AI">
@@ -164,7 +164,7 @@
                 "author": { "@type": "Organization", "name": "Rilono", "url": "https://rilono.com/" },
                 "publisher": { "@type": "Organization", "name": "Rilono", "logo": { "@type": "ImageObject", "url": "https://rilono.com/static/logo.png" } },
                 "datePublished": "2026-07-05",
-                "dateModified": "2026-08-07",
+                "dateModified": "2026-08-22",
                 "about": "Rilono Copilot Chrome extension"
             },
             {
@@ -173,7 +173,8 @@
                     { "@type": "Question", "name": "Copilot says it can't find my Rilono session", "acceptedAnswer": { "@type": "Answer", "text": "Make sure a rilono.com tab is open and logged in, refresh that tab, then click \"I am logged in\" in the panel. If your session expired, log in on rilono.com again first." } },
                     { "@type": "Question", "name": "Inspect Page says access was blocked", "acceptedAnswer": { "@type": "Answer", "text": "Chrome asks for per-site permission the first time you inspect a new website. Click Inspect Page again and choose Allow when prompted. Inspect works on regular http(s) pages — not on browser settings pages or PDFs opened directly in a tab." } },
                     { "@type": "Question", "name": "My chat says Copilot needs the Visa Success Pass", "acceptedAnswer": { "@type": "Answer", "text": "Copilot workflows are part of the Visa Success Pass. Once the pass is active on your account, Copilot unlocks automatically for the pass's 30 days — no extra setup in the extension. (Consultancy staff are different: in enterprise staff mode, Copilot bills your organization's credits instead, and no personal pass is needed.)" } },
-                    { "@type": "Question", "name": "The answers reference the wrong country", "acceptedAnswer": { "@type": "Answer", "text": "Copilot follows the destination on your Rilono account. If you recently changed destinations on rilono.com, click the refresh icon in the panel header so it picks up your new journey." } }
+                    { "@type": "Question", "name": "The answers reference the wrong country", "acceptedAnswer": { "@type": "Answer", "text": "Copilot follows the destination on your Rilono account. If you recently changed destinations on rilono.com, click the refresh icon in the panel header so it picks up your new journey." } },
+                    { "@type": "Question", "name": "Can my consultancy's clients use Copilot without the extension?", "acceptedAnswer": { "@type": "Answer", "text": "Yes. Staff can send a client Copilot access link from the client record's Copilot tab. The client opens it in any browser, verifies a one-time code emailed to the address on their record, and chats about their own case — seeing only their own profile and documents, never your team's internal working fields. Each link lasts 30 days and up to 100 messages, and costs the organization 20 credits, charged only when the client first verifies the code." } }
                 ]
             }
         ]
@@ -261,7 +262,8 @@
         <p>The quick-action buttons under the chat also adapt to your destination — a Canada account sees GIC and study-permit shortcuts where a US account sees DS-160 help. Copilot works beside the form; the country guide above walks the whole journey, so keep it open in a second tab while you fill.</p>
 
         <h2>For consultancies: enterprise staff mode</h2>
-        <p>If your Rilono account belongs to a consultancy team (Rilono for Enterprise), Copilot switches to <strong>staff mode</strong>: a client picker appears in the side panel, and you work <em>on behalf of a selected client</em> from your organization's workspace — their profile, destination and document context load automatically. Usage bills to your organization's prepaid credits (with a free daily allowance), so staff don't need a personal Visa Success Pass. Everything else works the same, including read-only Inspect Page. Clients themselves don't need Rilono accounts.</p>
+        <p>If your Rilono account belongs to a consultancy team (Rilono for Enterprise), Copilot switches to <strong>staff mode</strong>: a client picker appears in the side panel, and you work <em>on behalf of a selected client</em> from your organization's workspace — their profile, destination and document context load automatically. Usage bills to your organization's AI credits (with a free daily allowance), so staff don't need a personal Visa Success Pass. Everything else works the same, including read-only Inspect Page. Clients themselves don't need Rilono accounts.</p>
+        <p>Staff can also give a client their own Copilot: from the client record's <strong>Copilot</strong> tab, send a <strong>client Copilot access link</strong> to the email on their record (this needs the "Share client copilot" permission). The client opens the link in a normal browser — no extension or Rilono account needed — verifies a one-time code sent to that email, and can then chat with Copilot about their own case. They see only their own CRM profile and documents — never your team's internal working fields such as priority, lead source, refusal notes or follow-up dates. Each link is valid for 30 days and up to 100 messages, and costs your organization 20 credits flat, charged only when the client first verifies the code — an ignored link is never billed.</p>
 
         <h2>Attachments and sessions</h2>
         <ul>
@@ -304,6 +306,10 @@
             <details>
                 <summary>The answers reference the wrong country<span class="chev">+</span></summary>
                 <p class="ans">Copilot follows the destination on your Rilono account. If you recently changed destinations on rilono.com, click the refresh icon in the panel header so it picks up your new journey.</p>
+            </details>
+            <details>
+                <summary>Can my consultancy's clients use Copilot without the extension?<span class="chev">+</span></summary>
+                <p class="ans">Yes. Staff can send a client Copilot access link from the client record's Copilot tab. The client opens it in any browser, verifies a one-time code emailed to the address on their record, and chats about their own case — seeing only their own profile and documents, never your team's internal working fields. Each link lasts 30 days and up to 100 messages, and costs the organization 20 credits, charged only when the client first verifies the code.</p>
             </details>
         </div>
 
