@@ -109,7 +109,6 @@ def test_extension_copilot_prompts_have_identity_guardrail():
 
 @pytest.mark.parametrize("relpath", [
     "app/routers/ai_chat.py",       # B2C chat + B2C visa-prep interview mode
-    "app/university_shortlist.py",
     "app/course_catalog.py",        # Course Finder AI shortlist
     "app/sop_kit.py",
 ])

@@ -13834,13 +13834,12 @@ async def public_document_request_upload(
 # Per-client university shortlisting (B2B)
 #
 # Each consultancy client gets their own shortlist, tailored to THAT student's
-# destination country. Reuses the proven B2C recommendation engine
-# (app/university_shortlist.py) — it is a pure function over a country name — but
-# every row here is org+client scoped, staff-attributed, and the AI action is
-# metered against the organization's Rilono Credits wallet.
+# destination country; every row is org+client scoped and staff-attributed. AI picks
+# come from Course Finder (/course-finder/recommend → save-to-client) — the older
+# per-client "AI shortlist" route that called the B2C recommendation engine was
+# removed on 2026-08-22 (no UI had called it since the Course Finder embed shipped).
 # ===========================================================================
 
-UNIVERSITY_ACTION_KEY = "university_match"
 _UNIVERSITY_DIFFICULTY = {"reach", "match", "safety"}
 
 
@@ -13926,16 +13925,6 @@ class EnterpriseUniversityUpdate(BaseModel):
     notes: Optional[str] = Field(None, max_length=1000)
 
 
-class EnterpriseUniversityRecommend(BaseModel):
-    field_of_study: str = Field(..., min_length=1, max_length=120)
-    level: Optional[str] = Field(None, max_length=60)
-    budget: Optional[str] = Field(None, max_length=60)
-    gpa: Optional[str] = Field(None, max_length=60)
-    test_scores: Optional[str] = Field(None, max_length=160)
-    preferences: Optional[str] = Field(None, max_length=300)
-    max_results: int = Field(6, ge=1, le=8)
-
-
 @router.get("/clients/{client_id}/universities")
 def enterprise_client_universities_list(
     client_id: int,
@@ -13947,16 +13936,12 @@ def enterprise_client_universities_list(
     _, organization, role = _require_enterprise_membership(db=db, user=current_user, request=request, require_capability="universities.view")
     client = _get_org_client_or_404(db, organization.id, client_id, ctx=role.ctx)
     rows = _client_universities_query(db, organization.id, client.id).all()
-    from app import university_shortlist
-
     return {
         "permissions": _enterprise_permissions_for_role(role),
         "entries": [_serialize_client_university(r) for r in rows],
         "destination_country_code": client.destination_country_code,
         "destination_country": client.destination_country_name,
         "client_name": client.full_name,
-        "recommend_available": university_shortlist.ai_available(),
-        "recommend_cost": credits.action_cost(UNIVERSITY_ACTION_KEY),
     }
 
 
@@ -14140,83 +14125,6 @@ def enterprise_client_university_delete(
         raise HTTPException(status_code=404, detail="University not found.")
     db.commit()
     return {"deleted": True, "id": entry_id, "permissions": _enterprise_permissions_for_role(role)}
-
-
-@router.post("/clients/{client_id}/universities/recommend")
-def enterprise_client_university_recommend(
-    client_id: int,
-    payload: EnterpriseUniversityRecommend,
-    request: Request,
-    db: Session = Depends(get_db),
-    current_user: models.User = Depends(get_current_active_user),
-):
-    """AI university matches for this client, tailored to their destination country.
-
-    Choreography mirrors the proven B2C/Deep-Scan ordering: rate-limit → wallet
-    pre-check → generate → fail without charging → charge ONLY on a usable result.
-    """
-    _, organization, role = _require_enterprise_membership(
-        db=db, user=current_user, request=request, require_capability=("ai.shortlist", "credits.spend")
-    )
-    client = _get_org_client_or_404(db, organization.id, client_id, ctx=role.ctx)
-
-    _enforce_rate_limit_or_429(
-        request=request,
-        scope="enterprise.university_recommend",
-        limit=20,
-        window_seconds=600,
-        extra_key=str(current_user.id),
-    )
-
-    from app import university_shortlist
-
-    if not university_shortlist.ai_available():
-        raise HTTPException(status_code=503, detail="AI recommendations are not configured.")
-
-    destination = (client.destination_country_name or "").strip()
-    if not destination:
-        raise HTTPException(status_code=400, detail="Set this client's destination country first.")
-
-    # Hard-block a broke wallet BEFORE spending any Gemini tokens.
-    credits.enforce_action_or_402(db, organization.id, UNIVERSITY_ACTION_KEY)
-
-    ai_usage.set_usage_account(organization_id=organization.id)
-    result = university_shortlist.recommend_universities(
-        destination_country=destination,
-        field_of_study=payload.field_of_study,
-        level=payload.level,
-        budget=payload.budget,
-        gpa=payload.gpa,
-        test_scores=payload.test_scores,
-        home_country=client.nationality,
-        preferences=payload.preferences,
-        max_results=payload.max_results,
-        usage_source="enterprise_university_shortlist",
-    )
-
-    if not result.get("available"):
-        raise HTTPException(status_code=503, detail=result.get("message") or "Recommendations are unavailable right now.")
-    universities = result.get("universities") or []
-    if not universities:
-        # Nothing usable came back — never bill the consultancy for an empty result.
-        raise HTTPException(
-            status_code=502,
-            detail="Couldn't generate recommendations. Refine the field of study or preferences and retry.",
-        )
-
-    txn = credits.charge_action(
-        db, organization.id, UNIVERSITY_ACTION_KEY,
-        user=current_user, reference_type="client", reference_id=client.id,
-        description=f"University shortlist — {client.full_name}", commit=True,
-    )
-    return {
-        "permissions": _enterprise_permissions_for_role(role),
-        "universities": universities,
-        "destination_country": destination,
-        "grounded": bool(result.get("grounded")),
-        "credits_charged": credits.action_cost(UNIVERSITY_ACTION_KEY) if txn else 0,
-        "wallet": credits.wallet_state(db, organization.id, currency=_resolve_charge_currency(None, organization)),
-    }
 
 
 # ===========================================================================
@@ -15463,31 +15371,13 @@ def enterprise_course_catalog_browse(
 
 
 def _course_finder_subject_or_400(discipline, field_of_study) -> tuple:
-    """The one rule both Course Finder forms enforce, applied server-side too: a shortlist
-    is always built WITHIN a catalog subject area (discipline bucket); the free-text field
-    of study only refines it. Free text alone — "House Wife", "Machine Learning" — is
-    accepted only when the catalog normaliser maps it onto a real bucket; otherwise the
-    caller is told to pick a subject area instead of Rilono AI inventing one and billing
-    5 credits for it. Returns (discipline, field_of_study)."""
+    """Subject-area rule shared by every AI-shortlist form (see course_catalog.resolve_subject),
+    as a 400 for this router. Returns (discipline, field_of_study)."""
     from app import course_catalog
-    field = str(field_of_study or "").strip()
-    subject = str(discipline or "").strip()
-    if subject:
-        canonical = course_catalog._clean_discipline(subject)
-        if canonical == "Other" and subject.lower() != "other":
-            raise HTTPException(
-                status_code=400,
-                detail=f"'{subject}' isn't a subject area Course Finder knows — pick one from the list.",
-            )
-        return canonical, field
-    mapped = course_catalog._clean_discipline(field) if field else None
-    if field and mapped and mapped != "Other":
-        return mapped, field
-    raise HTTPException(
-        status_code=400,
-        detail="Pick a subject area first — Rilono AI shortlists within it (add a specific "
-               "course or specialisation if you have one).",
-    )
+    try:
+        return course_catalog.resolve_subject(discipline, field_of_study)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
 
 
 class EnterpriseCourseFinderRecommend(BaseModel):
@@ -15541,6 +15431,10 @@ def enterprise_course_finder_recommend(
         )
 
     discipline, field_query = _course_finder_subject_or_400(payload.discipline, payload.field_of_study)
+    try:
+        budget = course_catalog.normalize_budget(payload.budget)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
 
     # Hard-block a broke wallet BEFORE spending any Gemini tokens.
     credits.enforce_action_or_402(db, organization.id, COURSE_FINDER_ACTION_KEY)
@@ -15573,7 +15467,7 @@ def enterprise_course_finder_recommend(
             field_of_study=field_query or None,
             degree_level=(payload.degree_level or "").strip().lower() or None,
             discipline=discipline,
-            budget=payload.budget,
+            budget=budget,
             notes=payload.notes,
             max_results=payload.max_results,
             usage_source="enterprise_course_finder",
@@ -15600,7 +15494,7 @@ def enterprise_course_finder_recommend(
         discipline=discipline,
         query=json.dumps({
             "field_of_study": field_query or None,
-            "budget": (payload.budget or "").strip() or None,
+            "budget": budget,
             "notes": (payload.notes or "").strip() or None,
             "max_results": payload.max_results,
         }),

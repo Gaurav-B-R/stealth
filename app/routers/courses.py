@@ -315,6 +315,13 @@ def courses_recommend(
     than the older check→generate→consume) is deliberate: this is the one B2C feature
     with a finite paid cap whose purpose is bounding real Gemini/Search spend, and the
     old shape let N parallel requests each pass the check and lost-update the counter."""
+    # Validate the brief first: a bad request is a 400 before any rate-limit, paywall or
+    # model-availability state is consulted (same order as the enterprise endpoint).
+    try:
+        discipline, field_query = course_catalog.resolve_subject(payload.discipline, payload.field_of_study)
+        budget = course_catalog.normalize_budget(payload.budget)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
     _rate_limit_or_429(request, "courses.recommend", RECOMMEND_RATE_LIMIT, RECOMMEND_RATE_WINDOW, current_user.id)
     subscription = get_or_create_user_subscription(db, current_user.id)
 
@@ -322,15 +329,12 @@ def courses_recommend(
         raise HTTPException(status_code=503, detail="AI recommendations are not configured.")
 
     code = _resolve_country_or_400(current_user, payload.country_code)
-    field_query = (payload.field_of_study or "").strip()
-    if not field_query and not (payload.discipline or "").strip():
-        raise HTTPException(status_code=400, detail="Tell Rilono AI the field of study to shortlist for.")
 
     catalog_rows, _total = course_catalog.query_catalog(
         db,
         country_code=code,
         degree_level=(payload.degree_level or "").strip().lower() or None,
-        discipline=(payload.discipline or "").strip() or None,
+        discipline=discipline,
         q=field_query or None,
         limit_universities=20,
     )
@@ -341,7 +345,7 @@ def courses_recommend(
             db,
             country_code=code,
             degree_level=(payload.degree_level or "").strip().lower() or None,
-            discipline=(payload.discipline or "").strip() or None,
+            discipline=discipline,
             limit_universities=20,
         )
 
@@ -362,8 +366,8 @@ def courses_recommend(
                 student_history=_student_history_block(db, current_user, code),
                 field_of_study=field_query or None,
                 degree_level=(payload.degree_level or "").strip().lower() or None,
-                discipline=(payload.discipline or "").strip() or None,
-                budget=payload.budget,
+                discipline=discipline,
+                budget=budget,
                 notes=payload.notes,
                 max_results=payload.max_results,
                 usage_source=USAGE_SOURCE,
@@ -384,10 +388,10 @@ def courses_recommend(
             user_id=current_user.id,
             country_code=code,
             degree_level=(payload.degree_level or "").strip().lower() or None,
-            discipline=(payload.discipline or "").strip() or None,
+            discipline=discipline,
             query=json.dumps({
                 "field_of_study": field_query or None,
-                "budget": (payload.budget or "").strip() or None,
+                "budget": budget,
                 "gpa": (payload.gpa or "").strip() or None,
                 "test_scores": (payload.test_scores or "").strip() or None,
                 "notes": (payload.notes or "").strip() or None,

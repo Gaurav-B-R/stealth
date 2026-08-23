@@ -3859,7 +3859,6 @@ async function deleteSopDraft() {
 
 // University shortlisting + AI recommendations (Phase 3)
 // ===========================================================================
-let _shortlistRecs = [];
 let _shortlistData = { entries: [], entitlement: null, destination_country: '' };
 
 async function shortlistFetch(path, opts) {
@@ -3890,8 +3889,12 @@ async function shortlistFetch(path, opts) {
     return data;
 }
 
-async function loadUniversityShortlist() {
-    const c = document.getElementById('universitiesContent');
+// The saved shortlist now lives inside Course Finder (the "My shortlist" tab) — the old
+// "Shortlist & Recommendations" page duplicated Course Finder's AI shortlist and was removed.
+let _shortlistHostId = 'cfShortlistHost';
+async function loadUniversityShortlist(hostId) {
+    if (hostId) _shortlistHostId = hostId;
+    const c = document.getElementById(_shortlistHostId);
     if (!c) return;
     c.innerHTML = '<div style="padding:2rem;color:#64748b">Loading…</div>';
     try {
@@ -3904,48 +3907,11 @@ async function loadUniversityShortlist() {
 }
 
 function renderUniversitiesUI() {
-    const c = document.getElementById('universitiesContent');
+    const c = document.getElementById(_shortlistHostId);
     if (!c) return;
     const d = _shortlistData || {};
-    const ent = d.entitlement || {};
-    const dest = d.destination_country || 'your destination';
-    const recAvailable = d.recommend_available !== false;
-    const locked = Boolean(ent.locked);
-    const remainingTxt = ent.tier === 'pass' ? 'Unlimited with Visa Pass'
-        : (ent.limit === -1 ? 'Unlimited' : `${ent.remaining != null ? ent.remaining : (ent.limit || 0)} free left`);
     const inp = 'width:100%;box-sizing:border-box;background:#ffffff;border:1px solid #e2e8f0;border-radius:10px;color:#0f172a;font-size:14px;padding:10px 12px';
-    const lbl = (t) => `<div style="font-size:12px;font-weight:700;color:#64748b;margin:0 0 6px">${t}</div>`;
     const card = (inner, extra) => `<div style="background:#ffffff;border:1px solid #e2e8f0;border-radius:16px;padding:18px 20px;${extra || ''}">${inner}</div>`;
-
-    // Country-aware placeholder hints — the shortlist form must not assume US conventions
-    // (USD budget, GRE, 4.0 GPA) on a UK/CA/AU/DE journey. Codes match visa_catalog.
-    const slCode = d.destination_country_code || (currentUser && currentUser.destination_country_code) || 'US';
-    const slBudgetHint = ({ US: 'e.g. $30,000', UK: 'e.g. £22,000', CA: 'e.g. C$25,000', AU: 'e.g. A$35,000', DE: 'e.g. €12,000' })[slCode] || 'e.g. your annual budget (local currency)';
-    const slScoresHint = ({ US: 'e.g. IELTS 7.5, GRE 320', UK: 'e.g. IELTS 7.0', CA: 'e.g. IELTS 7.0', AU: 'e.g. IELTS 7.0, PTE 65', DE: 'e.g. IELTS 6.5, TestDaF 4' })[slCode] || 'e.g. IELTS 7.0';
-    const slGpaHint = ({ US: 'e.g. 3.6/4.0', UK: 'e.g. 2:1 or AAB', CA: 'e.g. 3.6/4.0 or 85%', AU: 'e.g. 75% or GPA 5.5/7', DE: 'e.g. 1.7 (German scale)' })[slCode] || 'e.g. your GPA or grade average';
-
-    const formCard = card(`
-        <div style="display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap;margin-bottom:14px">
-          <div><div style="font-weight:800;font-size:16px;color:#0f172a">Rilono AI University Recommendations</div>
-          <div style="font-size:12.5px;color:#64748b">Tailored to ${escapeHtml(dest)} based on your profile.</div></div>
-          <span style="font-size:12px;font-weight:700;color:${locked ? '#b45309' : '#065f46'}">${escapeHtml(remainingTxt)}</span>
-        </div>
-        ${!recAvailable ? '<div style="color:#b45309;font-size:13px">Rilono AI recommendations are not available right now.</div>' : `
-        <div style="display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px">
-          <div style="grid-column:1/-1">${lbl('Field of study <span style="color:#be123c">*</span>')}<input id="slField" placeholder="e.g. Computer Science" style="${inp}"></div>
-          <div>${lbl('Study level')}<select id="slLevel" style="${inp}"><option value="">Any</option><option>Bachelors</option><option>Masters</option><option>PhD</option><option>Diploma</option></select></div>
-          <div>${lbl('Annual budget')}<input id="slBudget" placeholder="${slBudgetHint}" style="${inp}"></div>
-          <div>${lbl('GPA / grades')}<input id="slGpa" placeholder="${slGpaHint}" style="${inp}"></div>
-          <div>${lbl('Test scores')}<input id="slScores" placeholder="${slScoresHint}" style="${inp}"></div>
-          <div style="grid-column:1/-1">${lbl('Other preferences')}<input id="slPrefs" placeholder="e.g. scholarships, near a major city" style="${inp}"></div>
-        </div>
-        <div style="display:flex;align-items:center;gap:12px;margin-top:14px;flex-wrap:wrap">
-          <button id="slRecBtn" onclick="getUniversityRecommendations()" style="background:linear-gradient(135deg,#6366f1,#a855f7);color:#fff;border:none;border-radius:10px;padding:10px 18px;font-weight:700;cursor:pointer">Get recommendations</button>
-          <span id="slRecMsg" style="font-size:13px;color:#be123c"></span>
-        </div>
-        ${locked && ent.tier !== 'pass' ? '<div style="margin-top:10px;font-size:12.5px;color:#64748b">You have used your free recommendation. <a href="/visa-pass" style="color:#9aa0ff;font-weight:600">Get the Visa Pass</a> for unlimited.</div>' : ''}
-        `}
-    `);
 
     const statusColors = { considering: '#64748b', applied: '#1d4ed8', admitted: '#065f46', rejected: '#be123c' };
     const statusOpts = ['considering', 'applied', 'admitted', 'rejected'];
@@ -3972,97 +3938,19 @@ function renderUniversitiesUI() {
     }).join('');
     const savedCard = card(`
         <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:6px">
-          <div style="font-weight:800;font-size:16px;color:#0f172a">Your shortlist</div>
+          <div style="font-weight:800;font-size:16px;color:#0f172a">My shortlist</div>
           <span style="font-size:12.5px;color:#64748b">${(d.entries || []).length} saved</span>
         </div>
+        <div style="font-size:12.5px;color:#64748b;margin-bottom:4px">Universities you saved from AI shortlists or added yourself — track each one as you apply.</div>
         <div style="display:flex;gap:8px;margin:10px 0 4px">
           <input id="slManualName" placeholder="Add a university manually…" style="${inp}">
           <button onclick="addManualUniversity()" style="background:#f1f5f9;color:#0f172a;border:1px solid #e2e8f0;border-radius:10px;padding:0 16px;font-weight:600;cursor:pointer">Add</button>
         </div>
-        ${savedRows || '<div style="color:#64748b;font-size:13px;padding:10px 0">No universities saved yet. Use Rilono AI recommendations above or add one manually.</div>'}
-    `, 'margin-top:18px');
+        ${savedRows || '<div style="color:#64748b;font-size:13px;padding:10px 0">No universities saved yet. Generate an AI shortlist and add picks from it, or add one manually.</div>'}
+    `);
 
-    c.innerHTML = formCard + '<div id="slRecsContainer" style="margin-top:18px"></div>' + savedCard;
-    renderShortlistRecs();
+    c.innerHTML = savedCard;
     attachUniversityAutocomplete(document.getElementById('slManualName'));
-}
-
-function renderShortlistRecs() {
-    const cont = document.getElementById('slRecsContainer');
-    if (!cont) return;
-    if (!_shortlistRecs.length) { cont.innerHTML = ''; return; }
-    const diffColor = { reach: '#be123c', match: '#1d4ed8', safety: '#065f46' };
-    const RANK_COUNTRY_NAMES = { US: 'the US', UK: 'the UK', CA: 'Canada', AU: 'Australia', DE: 'Germany' };
-    const rankCountryLabel = RANK_COUNTRY_NAMES[(currentUser && currentUser.destination_country_code) || 'US'] || 'country';
-    const rankRow = (u) => {
-        const parts = [];
-        if (u.qs_world_rank) parts.push(`QS World ${escapeHtml(u.qs_world_rank)}`);
-        if (u.country_rank) parts.push(`#${escapeHtml(u.country_rank)} in ${rankCountryLabel}`);
-        return parts.length
-            ? `<div style="font-size:11.5px;color:#b45309;font-weight:600;margin:0 0 7px">🏆 ${parts.join(' · ')}</div>`
-            : '';
-    };
-    cont.innerHTML = '<div style="font-weight:700;color:#0f172a;margin:6px 0 10px">Recommended for you</div>'
-      + '<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(260px,1fr));gap:12px">'
-      + _shortlistRecs.map((u, i) => `
-        <div style="background:#ffffff;border:1px solid #e2e8f0;border-radius:14px;padding:14px 16px">
-          <div style="display:flex;justify-content:space-between;gap:8px">
-            <div style="font-weight:700;color:#0f172a">${escapeHtml(u.name)}</div>
-            <span style="font-size:10.5px;font-weight:700;text-transform:uppercase;color:${diffColor[u.admission_difficulty] || '#64748b'}">${escapeHtml(u.admission_difficulty || '')}</span>
-          </div>
-          <div style="font-size:12.5px;color:#64748b;margin:2px 0 6px">${escapeHtml([u.program, u.location].filter(Boolean).join(' · '))}</div>
-          ${rankRow(u)}
-          ${u.why_recommended ? `<div style="font-size:12.5px;color:#334155;margin-bottom:6px">${escapeHtml(u.why_recommended)}</div>` : ''}
-          ${u.estimated_annual_tuition ? `<div style="font-size:12px;color:#64748b">💰 ${escapeHtml(u.estimated_annual_tuition)}</div>` : ''}
-          ${(u.key_requirements && u.key_requirements.length) ? `<ul style="margin:6px 0 0;padding-left:16px;color:#64748b;font-size:12px">${u.key_requirements.map((r) => `<li>${escapeHtml(r)}</li>`).join('')}</ul>` : ''}
-          <button onclick="saveRecommendedUniversity(${i})" style="margin-top:10px;width:100%;background:#f1f5f9;color:#0f172a;border:1px solid #e2e8f0;border-radius:9px;padding:8px;font-weight:600;cursor:pointer">+ Save to shortlist</button>
-        </div>`).join('') + '</div>';
-}
-
-async function getUniversityRecommendations() {
-    const btn = document.getElementById('slRecBtn');
-    const msg = document.getElementById('slRecMsg');
-    const field = ((document.getElementById('slField') || {}).value || '').trim();
-    if (!field) { if (msg) msg.textContent = 'Enter your field of study.'; return; }
-    const val = (id) => ((document.getElementById(id) || {}).value || '').trim() || null;
-    const body = {
-        field_of_study: field, level: val('slLevel'), budget: val('slBudget'),
-        gpa: val('slGpa'), test_scores: val('slScores'), preferences: val('slPrefs'), max_results: 6,
-    };
-    if (msg) msg.textContent = '';
-    if (btn) btn.disabled = true;
-    const progress = startAiProgress((t) => { if (btn) btn.textContent = t; }, 'Finding universities…');
-    try {
-        const res = await shortlistFetch('/recommend', { method: 'POST', body });
-        _shortlistRecs = res.universities || [];
-        if (res.entitlement) _shortlistData.entitlement = res.entitlement;
-        renderShortlistRecs();
-        if (!_shortlistRecs.length && msg) msg.textContent = 'No matches — try adjusting your inputs.';
-    } catch (e) {
-        if (msg) msg.textContent = e.status === 402 ? 'Free limit reached — get the Visa Pass for unlimited.' : (e.message || 'Could not get recommendations.');
-    } finally {
-        progress.stop();
-        if (btn) { btn.disabled = false; btn.textContent = 'Get recommendations'; }
-    }
-}
-
-async function saveRecommendedUniversity(idx) {
-    const u = _shortlistRecs[idx];
-    if (!u) return;
-    try {
-        await shortlistFetch('', { method: 'POST', body: {
-            university_name: u.name, program: u.program, location: u.location,
-            est_tuition: u.estimated_annual_tuition, rationale: u.why_recommended, source: 'ai',
-            // Persist the AI metadata too — before these fields, saving dropped the
-            // ranks/difficulty/URLs the recommendation was chosen on.
-            qs_world_rank: u.qs_world_rank, country_rank: u.country_rank,
-            admission_difficulty: u.admission_difficulty, key_requirements: u.key_requirements,
-            application_fee: u.application_fee, website_url: u.official_website,
-            admissions_url: u.admissions_url,
-        }});
-        showMessage('Added to your shortlist.', 'success');
-        await loadUniversityShortlist();
-    } catch (e) { showMessage(e.message || 'Could not save university.', 'error'); }
 }
 
 async function addManualUniversity() {
@@ -4227,14 +4115,24 @@ function cfRenderShell() {
           </div>
           <div style="display:flex;gap:6px;flex-wrap:wrap">${chips}</div>
         </div>`)}
-      <div style="display:flex;gap:8px;margin:14px 0">${tabBtn('browse', '🔎 Browse catalog')}${tabBtn('ai', '✨ AI shortlist')}</div>
+      <div style="display:flex;gap:8px;margin:14px 0;flex-wrap:wrap">${tabBtn('browse', '🔎 Browse catalog')}${tabBtn('ai', '✨ AI shortlist')}${tabBtn('shortlist', '🎓 My shortlist')}</div>
       <div id="cfPanel"></div>`;
     if (_cf.tab === 'browse') { cfRenderBrowse(); cfLoadBrowse(false); }
+    else if (_cf.tab === 'shortlist') { cfRenderShortlistTab(); }
     else { cfRenderAI(); cfLoadHistory(); }
 }
 
+// "My shortlist": the universities the student saved (from AI shortlists or by hand), with
+// status tracking — the list the old Shortlist & Recommendations page used to show.
+function cfRenderShortlistTab() {
+    const p = document.getElementById('cfPanel');
+    if (!p) return;
+    p.innerHTML = '<div id="cfShortlistHost"></div>';
+    loadUniversityShortlist('cfShortlistHost');
+}
+
 function cfSetTab(tab) {
-    _cf.tab = tab === 'ai' ? 'ai' : 'browse';
+    _cf.tab = (tab === 'ai' || tab === 'shortlist') ? tab : 'browse';
     cfRenderShell();
 }
 
@@ -4254,7 +4152,7 @@ function cfRenderBrowse() {
     const m = _cfMeta || {};
     const opt = (v, label, cur) => `<option value="${escapeHtml(String(v))}"${String(cur) === String(v) ? ' selected' : ''}>${escapeHtml(label)}</option>`;
     const levelOpts = ['<option value="">Any level</option>'].concat((m.degree_levels || []).map((l) => opt(l.key, l.label, _cf.level))).join('');
-    const discOpts = ['<option value="">Any discipline</option>'].concat((m.disciplines || []).map((d) => opt(d, d, _cf.discipline))).join('');
+    const discOpts = ['<option value="">Any subject area</option>'].concat((m.disciplines || []).map((d) => opt(d, d, _cf.discipline))).join('');
     const adv = _cf.adv;
     const ieltsOpts = ['<option value="">Any</option>'].concat([5, 5.5, 6, 6.5, 7, 7.5, 8].map((b) => opt(b, `Band ${b.toFixed(1)}`, adv.max_ielts))).join('');
     const greOpts = ['<option value="">Any</option>'].concat((m.gre_filters || []).map((g) => opt(g.key, g.label, adv.gre))).join('');
@@ -4272,7 +4170,7 @@ function cfRenderBrowse() {
       ${CF_CARD(`
         <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:10px">
           <div>${CF_LBL('Level')}<select id="cfLevel" style="${CF_INP}" onchange="cfSelectApply()">${levelOpts}</select></div>
-          <div>${CF_LBL('Discipline')}<select id="cfDiscipline" style="${CF_INP}" onchange="cfSelectApply()">${discOpts}</select></div>
+          <div>${CF_LBL('Subject area')}<select id="cfDiscipline" style="${CF_INP}" onchange="cfSelectApply()">${discOpts}</select></div>
           <div>${CF_LBL('Search course or university')}<input id="cfQ" maxlength="80" value="${escapeAttr(_cf.q)}" placeholder="e.g. Data Science or Melbourne" style="${CF_INP}" onkeydown="if(event.key==='Enter')cfApply()"></div>
           <div>${CF_LBL('Max tuition / year')}<input id="cfMaxTuition" type="number" min="0" value="${escapeAttr(_cf.maxTuition)}" placeholder="Local currency" style="${CF_INP}" onkeydown="if(event.key==='Enter')cfApply()"></div>
         </div>
@@ -4282,6 +4180,7 @@ function cfRenderBrowse() {
             Advanced filters${advCount ? ` <span style="background:#6366f1;color:#fff;border-radius:999px;padding:1px 7px;font-size:11px;margin-left:4px">${advCount}</span>` : ''} ${_cf.advOpen ? '▴' : '▾'}</button>
           <span id="cfChips" style="display:flex;gap:6px;flex-wrap:wrap;align-items:center">${cfChipsHtml()}</span>
         </div>
+        <div id="cfFilterMsg" style="display:none;color:#be123c;font-size:13px;margin-top:8px"></div>
         <div id="cfAdvPanel" style="display:${_cf.advOpen ? 'block' : 'none'};margin-top:14px;border-top:1px solid #f1f5f9;padding-top:14px">
           <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(210px,1fr));gap:16px">
             <div>
@@ -4375,10 +4274,45 @@ function cfReadAdvInputs() {
     _cf.adv = adv;
 }
 
+
+// Browse-filter number guard (Max/Min tuition, TOEFL). type="number" min="0" only disables
+// the stepper — a typed "-10000" still submits, and the server then silently ignored it,
+// so the page looked like it had accepted the value. Returns "" or the first problem; also
+// paints the offending box. Mirrors the server rule (course_catalog.normalize_catalog_filters
+// drops out-of-range numbers instead of clamping them to the nearest bound).
+function cfFilterNumberProblem() {
+  const checks = [
+    ["cfMaxTuition", "Max tuition", 0, 10000000, "enter an amount in local currency, e.g. 25000"],
+    ["cfMinTuition", "Min tuition", 0, 10000000, "enter an amount in local currency, e.g. 10000"],
+    ["cfToefl", "TOEFL iBT", 40, 120, "enter your score between 40 and 120"],
+  ];
+  let problem = "";
+  checks.forEach(([id, label, lo, hi, hint]) => {
+    const el = document.getElementById(id);
+    if (!el) return;
+    const raw = String(el.value || "").trim();
+    let bad = "";
+    if (raw) {
+      const n = Number(raw);
+      if (!Number.isFinite(n)) bad = `${label} must be a number — ${hint}.`;
+      else if (n < 0) bad = `${label} can't be negative — ${hint}.`;
+      else if (n < lo || n > hi) bad = `${label} must be between ${lo} and ${hi} — ${hint}.`;
+    }
+    el.style.borderColor = bad ? "#be123c" : "";
+    el.setAttribute("aria-invalid", bad ? "true" : "false");
+    if (bad && !problem) { problem = bad; try { el.focus(); } catch (e) { /* ignore */ } }
+  });
+  return problem;
+}
+
 function cfSelectApply() { cfApply(); }
 function cfApplyAdv() { cfApply(); }
 
 function cfApply() {
+    const problem = cfFilterNumberProblem();
+    const msgEl = document.getElementById('cfFilterMsg');
+    if (msgEl) { msgEl.textContent = problem; msgEl.style.display = problem ? 'block' : 'none'; }
+    if (problem) return;
     cfReadBasicInputs();
     cfReadAdvInputs();
     _cf.offset = 0; _cf.universities = []; _cf.expanded = {};
@@ -4532,7 +4466,7 @@ function cfRenderAI() {
     const aiAvailable = m.ai_available !== false;
     const opt = (v, label, cur) => `<option value="${escapeHtml(String(v))}"${String(cur) === String(v) ? ' selected' : ''}>${escapeHtml(label)}</option>`;
     const levelOpts = ['<option value="">Any level</option>'].concat((m.degree_levels || []).map((l) => opt(l.key, l.label, _cf.ai.level))).join('');
-    const discOpts = ['<option value="">Any discipline</option>'].concat((m.disciplines || []).map((d) => opt(d, d, _cf.ai.discipline))).join('');
+    const discOpts = [`<option value="">${(m.disciplines || []).length ? 'Pick a subject area…' : 'Subject areas unavailable'}</option>`].concat((m.disciplines || []).map((d) => opt(d, d, _cf.ai.discipline))).join('');
     const selected = cfCountry(_cf.country) || {};
     const code = _cf.country || 'US';
     const budgetHint = ({ US: 'e.g. $30,000', UK: 'e.g. £22,000', CA: 'e.g. C$25,000', AU: 'e.g. A$35,000', DE: 'e.g. €12,000' })[code] || 'e.g. your annual budget (local currency)';
@@ -4550,9 +4484,9 @@ function cfRenderAI() {
         </div>
         ${!aiAvailable ? '<div style="color:#b45309;font-size:13px">Rilono AI recommendations are not available right now.</div>' : `
         <div style="display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px">
-          <div style="grid-column:1/-1">${CF_LBL('Field of study <span style="color:#be123c">*</span>')}<input id="cfAiField" maxlength="120" value="${escapeAttr(_cf.ai.field)}" placeholder="e.g. Data Science" style="${CF_INP}"></div>
+          <div>${CF_LBL('Subject area <span style="color:#be123c">*</span>')}<select id="cfAiDiscipline" style="${CF_INP}">${discOpts}</select></div>
+          <div>${CF_LBL('Specific course or specialisation <span style="color:#94a3b8;font-weight:600">(optional)</span>')}<input id="cfAiField" maxlength="120" value="${escapeAttr(_cf.ai.field)}" placeholder="e.g. MBA in Finance, Machine Learning" style="${CF_INP}"></div>
           <div>${CF_LBL('Study level')}<select id="cfAiLevel" style="${CF_INP}">${levelOpts}</select></div>
-          <div>${CF_LBL('Discipline (optional)')}<select id="cfAiDiscipline" style="${CF_INP}">${discOpts}</select></div>
           <div>${CF_LBL('Annual budget')}<input id="cfAiBudget" maxlength="60" value="${escapeAttr(_cf.ai.budget)}" placeholder="${budgetHint}" style="${CF_INP}"></div>
           <div>${CF_LBL('GPA / grades')}<input id="cfAiGpa" maxlength="60" value="${escapeAttr(_cf.ai.gpa)}" placeholder="${gpaHint}" style="${CF_INP}"></div>
           <div>${CF_LBL('Test scores')}<input id="cfAiScores" maxlength="160" value="${escapeAttr(_cf.ai.scores)}" placeholder="${scoresHint}" style="${CF_INP}"></div>
@@ -4577,14 +4511,48 @@ function cfReadAiInputs() {
     };
 }
 
+
+// Annual budget sanity rule, mirrored server-side (course_catalog.normalize_budget): the box
+// stays free text because real budgets come as "£22,000", "USD 40k" or "₹15–25 L / year",
+// but it must contain a positive amount — "-10000" and "abc" used to go straight to the model.
+const CF_BUDGET_WORDS = new Set(["per", "year", "yr", "annual", "annually", "approx", "approximately", "about", "around",
+  "upto", "up", "to", "max", "maximum", "min", "minimum", "lakh", "lakhs", "lac", "lacs", "crore", "crores", "cr", "k", "l",
+  "m", "mn", "million", "thousand", "usd", "gbp", "cad", "aud", "eur", "inr", "nzd", "sgd", "aed", "pln", "sek", "chf",
+  "jpy", "rs", "dollars", "pounds", "euros", "rupees",
+    "a", "c", "s", "nz", "us", "hk", "ca", "au", "uk", "dh", "dhs", "rm"]);
+function cfBudgetProblem(raw) {
+  const text = String(raw || "").trim().replace(/\s+/g, " ");
+  if (!text) return "";
+  if (/^[-−–]/.test(text)) return "Budget can't be negative — enter the annual amount, e.g. 30000 or £22,000.";
+  const nums = text.match(/\d[\d,]*(?:\.\d+)?/g);
+  if (!nums) return "Enter the annual budget as an amount, e.g. 30000 or £22,000.";
+  for (const n of nums) {
+    const v = parseFloat(n.replace(/,/g, ""));
+    if (!(v > 0)) return "Budget must be more than zero — enter the annual amount, e.g. 30000.";
+    if (v > 100000000) return "That budget looks wrong — enter the annual amount, e.g. 30000.";
+  }
+  const words = text.match(/[A-Za-z]+/g) || [];
+  if (words.some((w) => !CF_BUDGET_WORDS.has(w.toLowerCase())) || /[^0-9A-Za-z\s,.\-–\/()$£€₹¥₩₪₱₫฿]/.test(text)) {
+    return "Enter the annual budget as an amount (optionally with a currency), e.g. 30000, £22,000 or USD 40k.";
+  }
+  return "";
+}
+
 async function cfRunRecommend() {
     cfReadAiInputs();
     const btn = document.getElementById('cfAiRunBtn');
     const msg = document.getElementById('cfAiMsg');
-    if (!_cf.ai.field && !_cf.ai.discipline) {
-        if (msg) msg.textContent = 'Enter your field of study (or pick a discipline).';
+    const vocabulary = !!((_cfMeta && _cfMeta.disciplines) || []).length;
+    if (vocabulary ? !_cf.ai.discipline : !_cf.ai.field) {
+        if (msg) msg.textContent = vocabulary ? 'Pick a subject area first.' : 'Enter your field of study.';
         return;
     }
+    if (_cf.ai.discipline === 'Other' && !_cf.ai.field) {
+        if (msg) msg.textContent = 'For “Other”, add the specific course you mean.';
+        return;
+    }
+    const budgetProblem = cfBudgetProblem(_cf.ai.budget);
+    if (budgetProblem) { if (msg) msg.textContent = budgetProblem; return; }
     if (msg) msg.textContent = '';
     if (btn) btn.disabled = true;
     const progress = startAiProgress((t) => { if (btn) btn.textContent = t; }, 'Building your shortlist…');
@@ -9547,6 +9515,9 @@ async function deleteAdminUser(userId, userEmail = 'this user') {
 }
 
 function switchDashboardTab(tabName) {
+    // The standalone Universities page was folded into Course Finder: its saved shortlist is
+    // Course Finder's "My shortlist" tab and its AI recommendations duplicated the AI shortlist.
+    if (tabName === 'universities') { tabName = 'courses'; _cf.tab = 'shortlist'; }
     if (tabName === 'admin' && !hasAdminConsoleAccess()) {
         showMessage('Admin access required.', 'error');
         tabName = 'overview';

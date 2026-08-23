@@ -1,16 +1,17 @@
-"""University shortlisting + AI recommendations (B2C student dashboard).
+"""University shortlist (B2C student dashboard) — shown as Course Finder's "My shortlist" tab.
 
 - GET    /api/shortlist            list the student's saved universities
-- POST   /api/shortlist            add a university (manual, or saved from an AI rec)
+- POST   /api/shortlist            add a university (manual, or saved from a Course Finder rec)
 - PATCH  /api/shortlist/{id}       update status / notes
 - DELETE /api/shortlist/{id}       remove a university
-- POST   /api/shortlist/recommend  AI university recommendations (Visa-Pass gated)
+
+The old POST /api/shortlist/recommend (Gemini university recommendations, Visa-Pass gated)
+was removed on 2026-08-22: Course Finder's catalog-grounded AI shortlist replaced it.
 """
 import json
-import os
 from typing import Optional
 
-from fastapi import APIRouter, Body, Depends, HTTPException, Request, status
+from fastapi import APIRouter, Body, Depends, HTTPException, status
 from pydantic import BaseModel, Field
 from sqlalchemy import desc
 from sqlalchemy.orm import Session
@@ -19,17 +20,11 @@ from app import models
 from app import visa_catalog
 from app import visa_pass
 from app import university_shortlist
-from app import ai_usage
 from app.auth import get_current_active_user
 from app.database import get_db
 from app.subscriptions import get_or_create_user_subscription
-from app.utils.rate_limiter import check_ip_rate_limit
 
 router = APIRouter(prefix="/api/shortlist", tags=["shortlist"])
-
-RECOMMEND_RATE_LIMIT = int(os.getenv("SHORTLIST_RECOMMEND_RATE_LIMIT", "20") or "20")
-RECOMMEND_RATE_WINDOW = int(os.getenv("SHORTLIST_RECOMMEND_RATE_WINDOW", "600") or "600")
-
 
 class ShortlistEntryCreate(BaseModel):
     university_name: str = Field(..., min_length=1, max_length=200)
@@ -53,28 +48,6 @@ class ShortlistEntryCreate(BaseModel):
 class ShortlistEntryUpdate(BaseModel):
     status: Optional[str] = None
     notes: Optional[str] = Field(default=None, max_length=1000)
-
-
-class RecommendRequest(BaseModel):
-    field_of_study: str = Field(..., min_length=1, max_length=120)
-    level: Optional[str] = Field(default=None, max_length=60)         # Bachelors | Masters | PhD ...
-    budget: Optional[str] = Field(default=None, max_length=60)
-    gpa: Optional[str] = Field(default=None, max_length=60)
-    test_scores: Optional[str] = Field(default=None, max_length=160)
-    preferences: Optional[str] = Field(default=None, max_length=300)
-    max_results: int = Field(default=6, ge=1, le=8)
-
-
-def _rate_limit_or_429(request: Request, scope: str, limit: int, window: int, user_id: int) -> None:
-    allowed, retry_after = check_ip_rate_limit(
-        request=request, scope=scope, limit=limit, window_seconds=window, extra_key=f"user:{user_id}",
-    )
-    if not allowed:
-        raise HTTPException(
-            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
-            detail="Too many requests. Please slow down and try again shortly.",
-            headers={"Retry-After": str(retry_after or window)},
-        )
 
 
 def _destination(user: models.User) -> tuple[str, str]:
@@ -105,7 +78,6 @@ def list_shortlist(
         "entries": [university_shortlist.serialize_entry(r) for r in rows],
         "destination_country_code": code,
         "destination_country": name,
-        "recommend_available": university_shortlist.ai_available(),
         "entitlement": visa_pass.feature_entitlement(subscription, "university_shortlist"),
     }
 
@@ -242,47 +214,3 @@ def delete_shortlist_entry(
     db.delete(entry)
     db.commit()
     return {"deleted": True, "id": entry_id}
-
-
-@router.post("/recommend")
-def recommend(
-    payload: RecommendRequest,
-    request: Request,
-    current_user: models.User = Depends(get_current_active_user),
-    db: Session = Depends(get_db),
-):
-    _rate_limit_or_429(request, "shortlist.recommend", RECOMMEND_RATE_LIMIT, RECOMMEND_RATE_WINDOW, current_user.id)
-    subscription = get_or_create_user_subscription(db, current_user.id)
-    # Free quota / Visa-Pass gating (raises 402 when locked).
-    visa_pass.enforce_feature_or_402(db, subscription, "university_shortlist")
-
-    ai_usage.set_usage_account(user_id=current_user.id)
-    _, destination_country = _destination(current_user)
-    result = university_shortlist.recommend_universities(
-        destination_country=destination_country,
-        field_of_study=payload.field_of_study.strip(),
-        level=(payload.level or "").strip() or None,
-        budget=(payload.budget or "").strip() or None,
-        gpa=(payload.gpa or "").strip() or None,
-        test_scores=(payload.test_scores or "").strip() or None,
-        home_country=getattr(current_user, "current_residence_country", None),
-        preferences=(payload.preferences or "").strip() or None,
-        max_results=payload.max_results,
-    )
-
-    if not result.get("available"):
-        raise HTTPException(
-            status_code=503,
-            detail=result.get("message") or "AI recommendations are temporarily unavailable.",
-        )
-    if not result.get("universities"):
-        # Don't burn the quota when the model returned nothing usable.
-        raise HTTPException(status_code=502, detail="Couldn't generate recommendations. Please refine your inputs and retry.")
-
-    # Only consume the metered quota once we have real results.
-    visa_pass.consume_feature(db, subscription, "university_shortlist", commit=True)
-    return {
-        "destination_country": destination_country,
-        "universities": result["universities"],
-        "entitlement": visa_pass.feature_entitlement(subscription, "university_shortlist"),
-    }

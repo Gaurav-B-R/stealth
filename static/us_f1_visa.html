@@ -2602,7 +2602,7 @@
                             <span class="nav-label">Overview</span>
                         </a>
                         <a href="#" class="nav-item" data-tab="universities"
-                            onclick="switchDashboardTab('universities'); return false;">
+                            onclick="switchDashboardTab('courses'); return false;">
                             <span class="nav-icon"><svg viewBox="0 0 24 24" aria-hidden="true" fill="none"
                                     stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
                                     <path d="M3 9l9-5 9 5-9 5-9-5z"></path>
@@ -2611,15 +2611,7 @@
                             <span class="nav-label">Universities</span>
                         </a>
                         <div id="uniSubNav" class="visa-subnav" style="display: none;">
-                            <a href="#" class="visa-subnav-item active" data-uni-subtab="universities"
-                                onclick="switchDashboardTab('universities'); return false;">
-                                <span class="subnav-icon"><svg viewBox="0 0 24 24" aria-hidden="true">
-                                        <path d="M4 6h16"></path>
-                                        <path d="M4 12h16"></path>
-                                        <path d="M4 18h10"></path></svg></span>
-                                <span class="subnav-label">Shortlist &amp; Recommendations</span>
-                            </a>
-                            <a href="#" class="visa-subnav-item" data-uni-subtab="courses"
+                            <a href="#" class="visa-subnav-item active" data-uni-subtab="courses"
                                 onclick="switchDashboardTab('courses'); return false;">
                                 <span class="subnav-icon"><svg viewBox="0 0 24 24" aria-hidden="true">
                                         <circle cx="11" cy="11" r="7"></circle>
@@ -3078,35 +3070,15 @@
                         </div>
                     </div>
 
-                    <!-- Universities Tab -->
-                    <div id="dashboardTab-universities" class="dashboard-tab">
-                        <div class="tab-header">
-                            <h2>🎓 Universities</h2>
-                            <p class="tab-subtitle">Get Rilono AI university recommendations for your destination and track your shortlist.</p>
-                            <div class="visa-mobile-subnav" aria-label="University modules">
-                                <button type="button" class="visa-mobile-subnav-btn active"
-                                    onclick="switchDashboardTab('universities')">🎓 Shortlist</button>
-                                <button type="button" class="visa-mobile-subnav-btn"
-                                    onclick="switchDashboardTab('courses')">🔎 Course Finder</button>
-                                <button type="button" class="visa-mobile-subnav-btn"
-                                    onclick="switchDashboardTab('sop')">✍️ SOP Studio</button>
-                            </div>
-                        </div>
-                        <div id="universitiesContent" style="padding: 0 0 2rem;">
-                            <div style="padding:2rem;color:var(--text-secondary,#9a9cb0)">Loading…</div>
-                        </div>
-                    </div>
-
                     <!-- SOP Studio Tab (Application Kit) -->
                     <!-- Course Finder Tab (lives under the Universities parent, like SOP Studio) -->
                     <div id="dashboardTab-courses" class="dashboard-tab">
                         <div class="tab-header">
                             <h2>🔎 Course Finder</h2>
                             <p class="tab-subtitle">Browse verified courses for your destination — fees, deadlines,
-                                entry requirements — and get an AI shortlist personalized to your profile.</p>
+                                entry requirements — get an AI shortlist personalized to your profile, and track the
+                                universities you save.</p>
                             <div class="visa-mobile-subnav" aria-label="University modules">
-                                <button type="button" class="visa-mobile-subnav-btn"
-                                    onclick="switchDashboardTab('universities')">🎓 Shortlist</button>
                                 <button type="button" class="visa-mobile-subnav-btn active"
                                     onclick="switchDashboardTab('courses')">🔎 Course Finder</button>
                                 <button type="button" class="visa-mobile-subnav-btn"
@@ -3124,8 +3096,6 @@
                             <p class="tab-subtitle" id="sopTabSubtitle">Rilono AI drafts your statement from your real
                                 profile and documents — then refines it with you, line by line.</p>
                             <div class="visa-mobile-subnav" aria-label="University modules">
-                                <button type="button" class="visa-mobile-subnav-btn"
-                                    onclick="switchDashboardTab('universities')">🎓 Shortlist</button>
                                 <button type="button" class="visa-mobile-subnav-btn"
                                     onclick="switchDashboardTab('courses')">🔎 Course Finder</button>
                                 <button type="button" class="visa-mobile-subnav-btn active"

@@ -6485,6 +6485,9 @@
       const dscEl = $("#uniCfDiscipline");
       const needsSubject = !dscEl || !dscEl.disabled;
       if (needsSubject ? !f.discipline : !(f.field || "").trim()) { toast("Pick a subject area first.", "error"); return; }
+      if (f.discipline === "Other" && !(f.field || "").trim()) { toast("For “Other”, add the specific course or specialisation you mean.", "error"); return; }
+      const budgetProblem = cfBudgetProblem(f.budget);
+      if (budgetProblem) { toast(budgetProblem, "error"); return; }
       uni.aiBusy = true;
       const btn = $("#uniCfRun");
       // dataset.busy stands bindValidity's sync down (its input listeners stay live
@@ -15476,6 +15479,33 @@
     });
     return hit || "";
   }
+
+  // Annual budget sanity rule, mirrored server-side (course_catalog.normalize_budget): the box
+  // stays free text because real budgets come as "£22,000", "USD 40k" or "₹15–25 L / year",
+  // but it must contain a positive amount — "-10000" and "abc" used to go straight to the model.
+  const CF_BUDGET_WORDS = new Set(["per", "year", "yr", "annual", "annually", "approx", "approximately", "about", "around",
+    "upto", "up", "to", "max", "maximum", "min", "minimum", "lakh", "lakhs", "lac", "lacs", "crore", "crores", "cr", "k", "l",
+    "m", "mn", "million", "thousand", "usd", "gbp", "cad", "aud", "eur", "inr", "nzd", "sgd", "aed", "pln", "sek", "chf",
+    "jpy", "rs", "dollars", "pounds", "euros", "rupees",
+    "a", "c", "s", "nz", "us", "hk", "ca", "au", "uk", "dh", "dhs", "rm"]);
+  function cfBudgetProblem(raw) {
+    const text = String(raw || "").trim().replace(/\s+/g, " ");
+    if (!text) return "";
+    if (/^[-−–]/.test(text)) return "Budget can't be negative — enter the annual amount, e.g. 30000 or £22,000.";
+    const nums = text.match(/\d[\d,]*(?:\.\d+)?/g);
+    if (!nums) return "Enter the annual budget as an amount, e.g. 30000 or £22,000.";
+    for (const n of nums) {
+      const v = parseFloat(n.replace(/,/g, ""));
+      if (!(v > 0)) return "Budget must be more than zero — enter the annual amount, e.g. 30000.";
+      if (v > 100000000) return "That budget looks wrong — enter the annual amount, e.g. 30000.";
+    }
+    const words = text.match(/[A-Za-z]+/g) || [];
+    if (words.some((w) => !CF_BUDGET_WORDS.has(w.toLowerCase())) || /[^0-9A-Za-z\s,.\-–\/()$£€₹¥₩₪₱₫฿]/.test(text)) {
+      return "Enter the annual budget as an amount (optionally with a currency), e.g. 30000, £22,000 or USD 40k.";
+    }
+    return "";
+  }
+
   function cfProfileDefaults(cl, meta) {
     const m = meta || {};
     const disciplines = m.disciplines || [];
@@ -15652,6 +15682,37 @@
   }
 
   /* ---------------- Browse (free) ---------------- */
+
+  // Browse-filter number guard (Max/Min tuition, TOEFL). type="number" min="0" only disables
+  // the stepper — a typed "-10000" still submits, and the server then silently ignored it,
+  // so the page looked like it had accepted the value. Returns "" or the first problem; also
+  // paints the offending box. Mirrors the server rule (course_catalog.normalize_catalog_filters
+  // drops out-of-range numbers instead of clamping them to the nearest bound).
+  function cfFilterNumberProblem() {
+    const checks = [
+      ["cfMaxTuition", "Max tuition", 0, 10000000, "enter an amount in local currency, e.g. 25000"],
+      ["cfMinTuition", "Min tuition", 0, 10000000, "enter an amount in local currency, e.g. 10000"],
+      ["cfToefl", "TOEFL iBT", 40, 120, "enter your score between 40 and 120"],
+    ];
+    let problem = "";
+    checks.forEach(([id, label, lo, hi, hint]) => {
+      const el = document.getElementById(id);
+      if (!el) return;
+      const raw = String(el.value || "").trim();
+      let bad = "";
+      if (raw) {
+        const n = Number(raw);
+        if (!Number.isFinite(n)) bad = `${label} must be a number — ${hint}.`;
+        else if (n < 0) bad = `${label} can't be negative — ${hint}.`;
+        else if (n < lo || n > hi) bad = `${label} must be between ${lo} and ${hi} — ${hint}.`;
+      }
+      el.style.borderColor = bad ? "#be123c" : "";
+      el.setAttribute("aria-invalid", bad ? "true" : "false");
+      if (bad && !problem) { problem = bad; try { el.focus(); } catch (e) { /* ignore */ } }
+    });
+    return problem;
+  }
+
   function cfDrawBrowseShell() {
     const panel = $("#cfPanel");
     if (!panel) return;
@@ -15665,8 +15726,8 @@
           <label class="cf-f"><span>Level</span>
             <select id="cfLevel"><option value="">Any level</option>${(m.degree_levels || []).map((l) => `<option value="${esc(l.key)}" ${l.key === cf.level ? "selected" : ""}>${esc(l.label)}</option>`).join("")}</select>
           </label>
-          <label class="cf-f"><span>Discipline</span>
-            <select id="cfDiscipline"><option value="">Any discipline</option>${(m.disciplines || []).map((d) => `<option value="${esc(d)}" ${d === cf.discipline ? "selected" : ""}>${esc(d)}</option>`).join("")}</select>
+          <label class="cf-f"><span>Subject area</span>
+            <select id="cfDiscipline"><option value="">Any subject area</option>${(m.disciplines || []).map((d) => `<option value="${esc(d)}" ${d === cf.discipline ? "selected" : ""}>${esc(d)}</option>`).join("")}</select>
           </label>
           <label class="cf-f cf-f-grow"><span>Search</span>
             <input id="cfQ" type="search" placeholder="Course or university, e.g. Data Science…" value="${esc(cf.q)}" />
@@ -15682,7 +15743,11 @@
       <div id="cfBrowseBody"><div class="center-load"><div class="spinner dark"></div></div></div>`;
     // One read-everything-then-load path: the advanced panel stays in the DOM when
     // collapsed, so a filter set and then hidden is still the filter that gets applied.
-    const apply = () => { cfReadFilters(); cfSyncFilterBar(); cfLoadBrowse(); };
+    const apply = () => {
+      const problem = cfFilterNumberProblem();
+      if (problem) { toast(problem, "error"); return; }
+      cfReadFilters(); cfSyncFilterBar(); cfLoadBrowse();
+    };
     $("#cfApply").onclick = apply;
     $("#cfQ").onkeydown = (e) => { if (e.key === "Enter") apply(); };
     ["cfCountry", "cfLevel", "cfDiscipline"].forEach((id) => { $("#" + id).onchange = apply; });
@@ -16225,7 +16290,11 @@
       max_results: 6,
     };
     if (!body.client_id) { toast("Pick a client from your list first — the shortlist is tailored to their profile.", "error"); return; }
-    if (!body.field_of_study && !body.discipline) { toast("Add a field of study (or pick a discipline) first.", "error"); return; }
+    const vocabulary = !!((cf.meta && cf.meta.disciplines) || []).length;
+    if (vocabulary ? !body.discipline : !body.field_of_study) { toast("Pick a subject area first.", "error"); return; }
+    if (body.discipline === "Other" && !body.field_of_study) { toast("For “Other”, add the specific course or specialisation you mean.", "error"); return; }
+    const budgetProblem = cfBudgetProblem(body.budget);
+    if (budgetProblem) { toast(budgetProblem, "error"); return; }
     cf.aiBusy = true;
     btn.disabled = true;
     btn.innerHTML = '<span class="spinner"></span> Rilono AI is researching…';

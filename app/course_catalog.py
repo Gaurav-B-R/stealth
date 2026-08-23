@@ -565,6 +565,75 @@ def _clean_discipline(value) -> Optional[str]:
     return "Other"
 
 
+def resolve_subject(discipline, field_of_study) -> tuple:
+    """The one rule every AI-shortlist form enforces (enterprise Course Finder, the
+    per-client Universities tab, the B2C Course Finder and the B2C Universities page),
+    applied server-side too: a shortlist is always built WITHIN a catalog subject area
+    (discipline bucket); the free-text field of study only refines it. Free text alone —
+    "House Wife", "Machine Learning" — is accepted only when it maps cleanly onto a real
+    bucket, and "Other" must come with the specific course, so the model is never handed
+    free text alone (or just "Other") and billed for inventing a shortlist around it.
+    Returns (discipline, field_of_study); raises ValueError with the user-facing message."""
+    field = str(field_of_study or "").strip()
+    subject = str(discipline or "").strip()
+    if subject:
+        canonical = _clean_discipline(subject)
+        if canonical == "Other" and subject.lower() != "other":
+            raise ValueError(f"'{subject}' isn't a subject area Course Finder knows — pick one from the list.")
+        if canonical == "Other" and not field:
+            raise ValueError("For 'Other', add the specific course or specialisation you mean.")
+        return canonical, field
+    mapped = _clean_discipline(field) if field else None
+    if field and mapped and mapped != "Other":
+        return mapped, field
+    raise ValueError(
+        "Pick a subject area first — Rilono AI shortlists within it (add a specific "
+        "course or specialisation if you have one)."
+    )
+
+
+_BUDGET_ALLOWED_WORDS = frozenset({
+    "per", "year", "yr", "annual", "annually", "approx", "approximately", "about", "around", "upto", "up",
+    "to", "max", "maximum", "min", "minimum", "lakh", "lakhs", "lac", "lacs", "crore", "crores", "cr", "k",
+    "l", "m", "mn", "million", "thousand", "usd", "gbp", "cad", "aud", "eur", "inr", "nzd", "sgd", "aed",
+    "pln", "sek", "chf", "jpy", "rs", "dollars", "pounds", "euros", "rupees",
+    # currency prefixes as typed: A$35,000, C$25,000, NZ$, S$, US$, HK$, Dh/Dhs, RM
+    "a", "c", "s", "nz", "us", "hk", "ca", "au", "uk", "dh", "dhs", "rm",
+})
+_BUDGET_ALLOWED_CHARS = re.compile(r"[^0-9A-Za-z\s,.\-–/()$£€₹¥₩₪₱₫฿]")
+_BUDGET_NUMBER = re.compile(r"\d[\d,]*(?:\.\d+)?")
+
+
+def normalize_budget(raw) -> Optional[str]:
+    """Sanity rule for the free-text annual budget every AI-shortlist form sends (mirrored
+    client-side as cfBudgetProblem). Budgets legitimately arrive as "£22,000", "USD 40k"
+    or "₹15–25 L / year" (the enterprise pre-fill from the client's budget band), so the
+    text is kept as written for the model — but it must contain a positive amount:
+    "-10000" and "abc" used to reach the model (and be billed) untouched. Returns the
+    trimmed text, None when blank; raises ValueError with the user-facing message."""
+    text = " ".join(str(raw or "").split())
+    if not text:
+        return None
+    if text[0] in "-−–":
+        raise ValueError("Budget can't be negative — enter the annual amount, e.g. 30000 or £22,000.")
+    numbers = _BUDGET_NUMBER.findall(text)
+    if not numbers:
+        raise ValueError("Enter the annual budget as an amount, e.g. 30000 or £22,000.")
+    for token in numbers:
+        try:
+            value = float(token.replace(",", ""))
+        except ValueError:
+            value = 0.0
+        if value <= 0:
+            raise ValueError("Budget must be more than zero — enter the annual amount, e.g. 30000.")
+        if value > 100_000_000:
+            raise ValueError("That budget looks wrong — enter the annual amount, e.g. 30000.")
+    words = re.findall(r"[A-Za-z]+", text)
+    if any(w.lower() not in _BUDGET_ALLOWED_WORDS for w in words) or _BUDGET_ALLOWED_CHARS.search(text):
+        raise ValueError("Enter the annual budget as an amount (optionally with a currency), e.g. 30000, £22,000 or USD 40k.")
+    return text[:60]
+
+
 def _clean_int(value) -> Optional[int]:
     try:
         n = int(round(float(re.sub(r"[^0-9.]", "", str(value)) or "nan")))
@@ -889,6 +958,10 @@ def normalize_catalog_filters(raw: Optional[dict]) -> dict:
     out: dict = {}
 
     def _int(key: str, lo: int, hi: int):
+        """Below the floor the value is nonsense (a negative tuition, a TOEFL of -5): DROP it
+        rather than clamp it up — clamping -5 to a TOEFL ceiling of 40 used to turn a typo
+        into a filter that hid almost every course. Above the ceiling it is just "a lot":
+        clamp. Both forms reject these client-side first; this is the API's safety net."""
         v = src.get(key)
         if v is None or v == "":
             return
@@ -896,7 +969,9 @@ def normalize_catalog_filters(raw: Optional[dict]) -> dict:
             n = int(float(v))
         except Exception:
             return
-        n = max(lo, min(n, hi))
+        if n < lo:
+            return
+        n = min(n, hi)
         if n > 0:
             out[key] = n
 
