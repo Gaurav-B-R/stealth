@@ -1362,7 +1362,15 @@ def _build_subscription_snapshot_for_profile(user: models.User, db: Session) -> 
         getattr(latest_verified_payment, "pricing_model", None)
     )
     has_verified_payment = latest_verified_payment is not None
+    # ends_at is a timezone-aware column; `now` is naive UTC. Strip tzinfo before comparing
+    # (same rule as app/subscriptions._normalize_datetime and the twin snapshot in
+    # routers/subscription.py). 2026-08-23: this was the one unnormalized comparison — it
+    # only ran for a Pro user with BOTH a referral reward and an end date, and then raised
+    # "can't compare offset-naive and offset-aware datetimes" on every profile-snapshot
+    # refresh, which 500ed the Rilono AI chat / extension Copilot for that user.
     ends_at = subscription.ends_at
+    if getattr(ends_at, "tzinfo", None):
+        ends_at = ends_at.replace(tzinfo=None)
     now = datetime.utcnow()
     referral_bonus_active = bool(
         subscription.plan == PLAN_PRO

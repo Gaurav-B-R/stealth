@@ -1081,7 +1081,13 @@ def chat_with_ai(
         user_name = current_user.full_name or current_user.username or "Student"
         
         # Keep profile file fresh when needed, then attach the full raw decrypted JSON directly.
-        refresh_student_profile_if_stale(current_user, db)
+        # A snapshot refresh is a convenience step: if it fails (2026-08-23: a datetime
+        # comparison bug in the snapshot builder), answer from the cached profile rather than
+        # turning the whole chat into a 500.
+        try:
+            refresh_student_profile_if_stale(current_user, db)
+        except Exception as refresh_error:
+            print(f"Warning: profile snapshot refresh failed for user {current_user.id}: {refresh_error}")
         student_profile_raw_text = get_student_profile_raw_text(current_user.id)
         navigation_guide_text = get_user_navigation_guide_text()
         if not student_profile_raw_text:
