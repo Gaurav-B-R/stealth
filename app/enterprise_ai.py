@@ -36,6 +36,7 @@ from app import enterprise_access as access
 from app import ai_usage
 from app import course_catalog
 from app import enterprise_catalog as catalog
+from app import enterprise_client_fields as client_fields
 from app.utils import gemini_service as gemini_utils
 
 logger = logging.getLogger(__name__)
@@ -248,7 +249,160 @@ def _client_brief(c: models.EnterpriseClient, member_names: dict | None = None) 
         "office": c.branch_name,
         "email": c.email,
         "phone": c.phone,
+        # The short profile facts list answers keep needing ("clients from Mumbai", "Indian
+        # clients", "who is due a follow-up"). The REST of the profile is deliberately not in
+        # the brief — a 50-row search would blow past TOOL_RESULT_CHAR_CAP. It lives in
+        # get_client_details (full profile) and in the count/search profile filters.
+        "nationality": c.nationality,
+        "current_city": c.current_city,
+        "next_followup_date": _iso(c.next_followup_date),
     }
+
+
+def _client_intake_profile(client: models.EnterpriseClient) -> dict:
+    """The rest of the client profile — the intake block the client screen shows beyond the
+    core case fields: WhatsApp, current city, gender, guardian, study level and field,
+    qualifications, English/aptitude tests, work experience, budget and funding, prior
+    refusals, lead source, next follow-up, consents.
+
+    Built from the SAME field lists the client API serializer uses (_serialize_client_intake
+    in the enterprise router), so a field added to the client screen reaches the assistant
+    without a second edit here. Before this the assistant answered "I don't have that in the
+    client details" for current city, IELTS score, guardian, etc. — every one of which the
+    profile screen showed — because the tool payload was a hand-typed subset that predated
+    those columns. Choice fields are returned as their human label ('Masters', 'Score
+    available') rather than the stored key; blanks stay null so the model can say "not
+    filled in yet" rather than "I can't see that"."""
+    try:
+        from app.routers import enterprise as _r  # lazy: the router imports this module
+        data = _r._serialize_client_intake(client) or {}
+    except Exception:
+        logger.warning("Enterprise AI: client intake profile unavailable", exc_info=True)
+        return {}
+    profile: dict = {}
+    for key, value in data.items():
+        if key.endswith("_label") or key.endswith("_labels"):
+            continue  # folded into the base key below
+        if key == "branch_name":
+            continue  # already in the brief as "office"
+        label = data.get(f"{key}_label")
+        if key == "marketing_consent_channels":
+            label = data.get("marketing_consent_channel_labels")
+        value = label if label not in (None, "", []) else value
+        profile[key] = _clip(value, 600) if isinstance(value, str) else value
+    return profile
+
+
+# Friendly labels for the intake block, in the order a counsellor reads the client screen.
+# A field the serializer adds later that is not listed here still renders (generic label):
+# the block is built from the live field set, never from this list.
+INTAKE_FIELD_LABELS = [
+    ("whatsapp_number", "WhatsApp number"), ("current_city", "Current city"), ("gender", "Gender"),
+    ("guardian_name", "Guardian name"), ("guardian_relation", "Guardian relation"),
+    ("guardian_phone", "Guardian phone"),
+    ("study_level", "Study level"), ("field_of_study", "Field of study"),
+    ("admission_stage", "Admission stage"),
+    ("highest_qualification", "Highest qualification"), ("qualification_score", "Qualification score"),
+    ("qualification_scale", "Score scale"), ("year_of_passing", "Year of passing"),
+    ("backlogs_count", "Backlogs / arrears"), ("work_experience_band", "Work experience"),
+    ("english_test_status", "English test status"), ("english_test_type", "English test"),
+    ("english_test_score", "English test score"), ("english_test_date", "English test date"),
+    ("aptitude_test_type", "Aptitude test"), ("aptitude_test_score", "Aptitude test score"),
+    ("budget_band", "Budget band"), ("funding_source", "Funding source"),
+    ("prior_refusal_history", "Prior visa refusal history"),
+    ("prior_refusal_notes", "Prior refusal notes (staff)"),
+    ("lead_source", "Lead source (staff)"), ("lead_source_detail", "Lead source detail (staff)"),
+    ("next_followup_date", "Next follow-up date (staff)"),
+    ("marketing_consent_channels", "Marketing consent channels"),
+    ("marketing_consent_at", "Marketing consent given on"),
+    ("institution_share_consent", "Consent to share with institutions"),
+    ("institution_share_consent_at", "Institution-share consent on"),
+]
+
+
+def _intake_profile_lines(client: models.EnterpriseClient, *, skip=frozenset()) -> list:
+    """(field, 'Label: value') lines for the intake block — WhatsApp, city, gender, guardian,
+    academics, test scores, budget/funding, refusals, lead source, follow-up, consents — in
+    the order a counsellor reads the client screen; blanks render as '—'. Shared by the
+    Copilot prompt and the Deep Scan dossier, so every AI surface sees the same profile as
+    the client screen (the dashboard assistant gets the same data as a dict)."""
+    profile = _client_intake_profile(client)
+    labels = dict(INTAKE_FIELD_LABELS)
+    ordered = [k for k, _ in INTAKE_FIELD_LABELS if k in profile] + [k for k in profile if k not in labels]
+    lines = []
+    for key in ordered:
+        if key in skip:
+            continue
+        value = profile.get(key)
+        if isinstance(value, bool):
+            # An unticked consent box means "not recorded", not "refused" — rendering it as
+            # "no" made the Deep Scan auditor call it a critical refusal.
+            value = "yes" if value else ("not recorded" if "consent" in key else "no")
+        elif isinstance(value, (list, tuple)):
+            value = ", ".join(str(v) for v in value) or None
+        text = str(value).strip() if value is not None else ""
+        label = labels.get(key) or key.replace("_", " ").capitalize()
+        lines.append((key, f"{label}: {text or '—'}"))
+    return lines
+
+
+# Profile filters count_clients and search_clients share. Text fields match as a substring;
+# choice fields resolve against the live option catalog (key or human label). ONE list,
+# consumed by ONE helper, so the two tools can never disagree about which filters exist —
+# a parameter only one of them accepted used to raise TypeError mid-turn ("who are they?"
+# after "how many were added this week?") and surface as an empty answer.
+#
+# Deliberately SHORT. Each entry is one more optional parameter on both tools, and in a
+# controlled, interleaved live sample gemini-2.5-flash returned EMPTY candidates (no text,
+# no call) for ~20% of simple questions with 15/17 parameters on these tools versus 0% with
+# 11/13 — the same declarations minus gender / budget_band / funding_source /
+# field_of_study. Those fields are still on every get_client_details payload; they are just
+# not list filters. Add a filter here only with that measurement repeated.
+_PROFILE_TEXT_FILTERS = ("current_city", "nationality")
+_PROFILE_CHOICE_FILTERS = ("study_level", "lead_source", "english_test_status")
+_FOLLOWUP_WINDOWS = "'overdue', 'today', 'this_week', 'this_month', 'any' (one is scheduled) or 'none' (none set)"
+
+
+def _choice_keys(field: str, value) -> list:
+    """Resolve a model-supplied value for a choice field to its stored key(s). Accepts the
+    key ('score_available'), the human label ('Score available') or a PREFIX of either
+    ('google' → google_ads, 'bachelor' → bachelors). A prefix that fits several options
+    returns all of them — 'exempt' means every exempt_* status, which is what the asker
+    meant — and the caller filters on the union and echoes every matched label. Prefix,
+    never substring: 'taken' must not resolve to not_taken, 'client' must not resolve to
+    'Referral (client / friend)'. [] when nothing matches, so the caller can return the
+    valid options instead of a confident wrong count."""
+    raw = str(value or "").strip().lower().replace("-", "_").replace(" ", "_")
+    if not raw:
+        return []
+    options = client_fields.CLIENT_PROFILE_OPTIONS.get(field, [])
+    norm = [(item["key"], item["key"].lower(), str(item["label"]).lower().replace(" ", "_"))
+            for item in options]
+    exact = [key for key, k, lbl in norm if raw in (k, lbl)]
+    if exact:
+        return exact[:1]
+    return [key for key, k, lbl in norm if k.startswith(raw) or lbl.startswith(raw)]
+
+
+def _profile_filter_doc() -> str:
+    """Docstring fragment for the shared profile filters, appended to both list tools so they
+    are documented once. Deliberately COMPACT: every tool declaration is re-sent on every
+    round, and a long per-field option list here measurably made gemini-2.5-flash return
+    empty candidates (no text, no call) for simple questions. The valid option keys are not
+    listed — an unrecognised value returns them in the error, and _choice_key already accepts
+    the human label or a fragment ('masters', 'Google Ads', 'ielts')."""
+    pad = "        "
+    return "\n".join([
+        pad + "- Profile filters (fields from the client profile screen; combine freely): "
+              + ", ".join(_PROFILE_TEXT_FILTERS) + " — substring match ('Mumbai', 'Indian'); "
+              + ", ".join(_PROFILE_CHOICE_FILTERS) + " — the profile screen's option, as its key, "
+              "label or prefix ('masters', 'Google Ads', 'exempt' = every exempt status); an "
+              "unrecognised value returns the valid options — relay them, never answer unfiltered.",
+        pad + f"- followup: next follow-up date window — {_FOLLOWUP_WINDOWS}.",
+    ])
+
+
+_PROFILE_FILTER_DOC = _profile_filter_doc()
 
 
 # ---------------------------------------------------------------------------
@@ -363,10 +517,20 @@ def build_org_tools(db: Session, organization_id: int, ctx=None, viewer_user_id=
 
     def get_portal_overview() -> dict:
         """Get a high-level overview of the entire portal: total clients, a breakdown
-        by pipeline stage, by visa type, by destination country, how many are approved
-        vs rejected, and how many new clients were added this week and this month.
-        Use this for broad 'how is my portal doing' style questions."""
+        by pipeline stage, by visa type, by destination country, by nationality, current
+        city, lead source and study level (top 10 each), and how many new clients were
+        added this week and this month. Use this for broad 'how is my portal doing' and
+        'where do our clients/leads come from' style questions."""
         total = _base().count()
+
+        def _top(column, label=None, n: int = 10) -> dict:
+            rows = (_base().with_entities(column, func.count(models.EnterpriseClient.id))
+                    .filter(column.isnot(None), column != "")
+                    .group_by(column)
+                    .order_by(func.count(models.EnterpriseClient.id).desc())
+                    .limit(n).all())
+            return {str(label(k) if label else k): int(c) for k, c in rows}
+
         by_status = {k: 0 for k in catalog.CLIENT_STAGE_KEYS}
         for s, n in (_base().with_entities(models.EnterpriseClient.status, func.count(models.EnterpriseClient.id))
                      .group_by(models.EnterpriseClient.status).all()):
@@ -385,7 +549,7 @@ def build_org_tools(db: Session, organization_id: int, ctx=None, viewer_user_id=
         month_start, _ = _period_range("this_month")
         new_week = _base().filter(models.EnterpriseClient.created_at >= week_start).count()
         new_month = _base().filter(models.EnterpriseClient.created_at >= month_start).count()
-        return {
+        payload = {
             "total_clients": total,
             "by_status": status_labelled,
             "by_destination_country": by_country,
@@ -393,33 +557,28 @@ def build_org_tools(db: Session, organization_id: int, ctx=None, viewer_user_id=
             "new_clients_last_7_days": new_week,
             "new_clients_last_30_days": new_month,
         }
+        if ctx is None or ctx.has("clients.view"):
+            # Profile breakdowns belong with the client records they summarise.
+            payload.update({
+                "by_nationality": _top(models.EnterpriseClient.nationality),
+                "by_current_city": _top(models.EnterpriseClient.current_city),
+                "by_lead_source": _top(models.EnterpriseClient.lead_source,
+                                       lambda k: client_fields.choice_label("lead_source", k) or k),
+                "by_study_level": _top(models.EnterpriseClient.study_level,
+                                       lambda k: client_fields.choice_label("study_level", k) or k),
+            })
+        return payload
 
-    def count_clients(
-        status: Optional[str] = None,
-        destination_country: Optional[str] = None,
-        visa_type: Optional[str] = None,
-        added_period: Optional[str] = None,
-        updated_period: Optional[str] = None,
-    ) -> dict:
-        """Count clients matching optional filters.
-        - status: a pipeline stage such as 'new lead', 'shortlisting', 'applications
-          sent', 'offer accepted', 'documents', 'submitted', 'interview', 'awaiting
-          decision', 'approved', 'rejected', 'on hold'. A status that matches no stage
-          returns an error instead of a count — relay it, never answer with a total.
-        - destination_country: country name or 2-letter code (US, CA, UK, AU, DE, IE, FR, ES, NL, AE).
-        - visa_type: a substring of the visa type (e.g. 'F-1', 'Study Permit').
-        - added_period: filter by when the client was ADDED. One of 'today',
-          'yesterday', 'this_week', 'this_month', 'all'.
-        - updated_period: filter by when the client's record last CHANGED (a good
-          proxy for status changes). Same options as added_period. For example, to
-          answer 'how many were approved today', use status='approved' and
-          updated_period='today'.
-        Returns the matching count and the filters that were applied."""
-        q = _base()
-        applied = {}
+    def _apply_client_filters(q, applied: dict, *, status=None, destination_country=None,
+                              visa_type=None, added_period=None, updated_period=None,
+                              followup=None, **profile):
+        """Apply the filter set count_clients and search_clients share. Returns (query, error);
+        `error` is a ready-to-return dict (an unresolvable stage or option value) so the
+        tools relay it instead of silently answering from an unfiltered list. `applied` is
+        filled with the human-readable filters actually used, for the model to echo back."""
         st = _normalize_status(status)
         if status and not st:
-            return _unresolved_status(status)
+            return q, _unresolved_status(status)
         if st:
             q = q.filter(models.EnterpriseClient.status == st)
             applied["status"] = _stage_label(st)
@@ -444,30 +603,122 @@ def build_org_tools(db: Session, organization_id: int, ctx=None, viewer_user_id=
             if e is not None:
                 q = q.filter(models.EnterpriseClient.updated_at < e)
             applied["updated_period"] = updated_period
+        for field in _PROFILE_TEXT_FILTERS:
+            value = profile.get(field)
+            if value is not None and str(value).strip():
+                column = getattr(models.EnterpriseClient, field)
+                q = q.filter(func.lower(column).like(f"%{str(value).strip().lower()}%"))
+                applied[field] = str(value).strip()
+        for field in _PROFILE_CHOICE_FILTERS:
+            value = profile.get(field)
+            if value is None or not str(value).strip():
+                continue
+            keys = _choice_keys(field, value)
+            if not keys:
+                options = ", ".join(f"{item['label']} ({item['key']})"
+                                    for item in client_fields.CLIENT_PROFILE_OPTIONS.get(field, []))
+                return q, {"error": f"'{value}' isn't a recognised {field.replace('_', ' ')}. "
+                                    f"Valid options: {options}."}
+            column = getattr(models.EnterpriseClient, field)
+            q = q.filter(column == keys[0] if len(keys) == 1 else column.in_(keys))
+            # Every matched label is echoed so the model says "exempt (MOI or provider)" for a
+            # prefix that widened to several options, never a single label for a union.
+            applied[field] = " or ".join(client_fields.choice_label(field, k) or k for k in keys)
+        if followup:
+            window = str(followup).strip().lower().replace("-", "_").replace(" ", "_")
+            today = datetime.utcnow().date()
+            col = models.EnterpriseClient.next_followup_date
+            if window in ("overdue", "past_due", "missed", "late"):
+                q = q.filter(col.isnot(None), col < today)
+            elif window == "today":
+                q = q.filter(col == today)
+            elif window in ("this_week", "week", "next_7_days", "7_days"):
+                q = q.filter(col.isnot(None), col >= today, col <= today + timedelta(days=7))
+            elif window in ("this_month", "month", "next_30_days", "30_days"):
+                q = q.filter(col.isnot(None), col >= today, col <= today + timedelta(days=30))
+            elif window in ("any", "scheduled", "set", "has_followup"):
+                q = q.filter(col.isnot(None))
+            elif window in ("none", "unscheduled", "missing", "not_set", "no_followup"):
+                q = q.filter(col.is_(None))
+            else:
+                return q, {"error": f"'{followup}' isn't a recognised follow-up window. "
+                                    f"Use {_FOLLOWUP_WINDOWS}."}
+            applied["followup"] = window
+        return q, None
+
+    def count_clients(
+        status: Optional[str] = None,
+        destination_country: Optional[str] = None,
+        visa_type: Optional[str] = None,
+        added_period: Optional[str] = None,
+        updated_period: Optional[str] = None,
+        current_city: Optional[str] = None,
+        nationality: Optional[str] = None,
+        study_level: Optional[str] = None,
+        lead_source: Optional[str] = None,
+        english_test_status: Optional[str] = None,
+        followup: Optional[str] = None,
+    ) -> dict:
+        """Count clients matching optional filters (all optional; they combine with AND).
+        - status: a pipeline stage such as 'new lead', 'shortlisting', 'applications
+          sent', 'offer accepted', 'documents', 'submitted', 'interview', 'awaiting
+          decision', 'approved', 'rejected', 'on hold'. A status that matches no stage
+          returns an error instead of a count — relay it, never answer with a total.
+        - destination_country: country name or 2-letter code (US, CA, UK, AU, DE, IE, FR, ES, NL, AE).
+        - visa_type: a substring of the visa type (e.g. 'F-1', 'Study Permit').
+        - added_period: when the client was ADDED — 'today', 'yesterday', 'this_week',
+          'this_month', 'all'.
+        - updated_period: when the record last CHANGED (a good proxy for status changes);
+          same options. E.g. 'approved today' = status='approved', updated_period='today'.
+        Returns the count and the filters applied. search_clients takes the same filters
+        and lists who they are."""
+        applied: dict = {}
+        q, err = _apply_client_filters(
+            _base(), applied, status=status, destination_country=destination_country,
+            visa_type=visa_type, added_period=added_period, updated_period=updated_period,
+            followup=followup, current_city=current_city, nationality=nationality,
+            study_level=study_level, lead_source=lead_source, english_test_status=english_test_status,
+        )
+        if err:
+            return err
         return {"count": int(q.count()), "filters_applied": applied or "none"}
+
+    count_clients.__doc__ = count_clients.__doc__.rstrip("\n") + "\n" + _PROFILE_FILTER_DOC
 
     def search_clients(
         query: Optional[str] = None,
         status: Optional[str] = None,
         destination_country: Optional[str] = None,
+        visa_type: Optional[str] = None,
+        added_period: Optional[str] = None,
+        updated_period: Optional[str] = None,
+        current_city: Optional[str] = None,
+        nationality: Optional[str] = None,
+        study_level: Optional[str] = None,
+        lead_source: Optional[str] = None,
+        english_test_status: Optional[str] = None,
+        followup: Optional[str] = None,
         limit: int = 20,
     ) -> dict:
-        """Search for clients and return a short list with their key fields.
-        - query: matches name, email, phone, passport number or application reference.
-        - status: optional pipeline stage filter. A status that matches no stage returns
-          an error instead of a list — relay it, never fall back to an unfiltered list.
-        - destination_country: optional country name or code.
+        """Search for clients and return a short list with their key fields (stage, destination,
+        visa type, intake, priority, key date, counselor, office, email, phone, nationality,
+        current city, next follow-up).
+        - query: matches name, email, phone or application reference.
+        - status / destination_country / visa_type / added_period / updated_period: as in
+          count_clients (an unknown status returns an error — relay it, never list unfiltered).
         - limit: max results (default 20, capped at 50).
-        Use this to list clients matching a description."""
-        q = _base()
-        st = _normalize_status(status)
-        if status and not st:
-            return _unresolved_status(status)
-        if st:
-            q = q.filter(models.EnterpriseClient.status == st)
-        code = _normalize_country(destination_country)
-        if destination_country and code:
-            q = q.filter(models.EnterpriseClient.destination_country_code == code)
+        Use this to list clients matching a description or to answer 'who are they' after a
+        count. For a profile field with no filter (a test score, guardian, budget figure) look
+        each client up with get_client_details."""
+        applied: dict = {}
+        q, err = _apply_client_filters(
+            _base(), applied, status=status, destination_country=destination_country,
+            visa_type=visa_type, added_period=added_period, updated_period=updated_period,
+            followup=followup, current_city=current_city, nationality=nationality,
+            study_level=study_level, lead_source=lead_source, english_test_status=english_test_status,
+        )
+        if err:
+            return err
         if query and query.strip():
             like = f"%{query.strip().lower()}%"
             q = q.filter(or_(
@@ -480,13 +731,29 @@ def build_org_tools(db: Session, organization_id: int, ctx=None, viewer_user_id=
         n = max(1, min(int(limit or 20), 50))
         rows = q.order_by(models.EnterpriseClient.created_at.desc()).limit(n).all()
         names = _member_names()
-        return {"count": len(rows), "clients": [_client_brief(c, names) for c in rows]}
+        return {"count": len(rows), "filters_applied": applied or "none",
+                "clients": [_client_brief(c, names) for c in rows]}
+
+    search_clients.__doc__ = (
+        search_clients.__doc__.rstrip("\n") + "\n        - Profile filters ("
+        + ", ".join(_PROFILE_TEXT_FILTERS + _PROFILE_CHOICE_FILTERS + ("followup",))
+        + "): exactly as documented on count_clients."
+    )
 
     def get_client_details(name: Optional[str] = None, client_id: Optional[int] = None) -> dict:
-        """Get the full profile for a single client, including contact info, passport,
-        visa case, status, assigned counselor, key date, and the most recent notes on
-        their file. Provide either the client's name or their client_id. If multiple
-        clients match a name, a list of candidates is returned instead."""
+        """Get the FULL profile for a single client — everything the client screen shows:
+        contact details (email, phone, WhatsApp, current city), personal details
+        (nationality, gender, date of birth), passport number and expiry (the number only
+        if you may view sensitive data), guardian, the case (destination, visa category and
+        type, intake, pipeline stage, priority, key date, next follow-up, assigned
+        counselor, office, application reference), academics (study level, field of study,
+        highest qualification and score, year of passing, backlogs, work experience),
+        English and aptitude tests (status, type, score, date), budget band and funding
+        source, prior visa refusals, lead source, consents, when the client was added and
+        last updated, and the most recent notes on their file. Use it for ANY question
+        about a specific client's details. Provide either the client's name or their
+        client_id. If multiple clients match a name, a list of candidates is returned
+        instead."""
         q = _base()
         if client_id:
             client = q.filter(models.EnterpriseClient.id == int(client_id)).first()
@@ -509,18 +776,30 @@ def build_org_tools(db: Session, organization_id: int, ctx=None, viewer_user_id=
         )
         detail = _client_brief(client, names)
         detail.update({
-            "nationality": client.nationality,
-            # Same rule as _serialize_client: omitted, never masked.
-            "passport_number": (client.passport_number
-                                if (ctx is None or ctx.has("clients.view_sensitive")) else None),
+            "date_of_birth": _iso(client.date_of_birth),
             "passport_expiry": _iso(client.passport_expiry),
+            "visa_category": (catalog.VISA_CATEGORY_MAP.get(str(client.visa_category or "").strip().lower(), {})
+                              .get("label") or client.visa_category),
             "application_reference": client.application_reference,
+            "on_hold_from_stage": (_stage_label(client.held_from_status)
+                                   if getattr(client, "held_from_status", None) else None),
             "added_on": _iso(client.created_at),
             "last_updated": _iso(client.updated_at),
-            "recent_notes": [
-                {"by": nt.author_name, "on": _iso(nt.created_at), "note": nt.body} for nt in notes
-            ],
         })
+        if ctx is None or ctx.has("clients.view_sensitive"):
+            detail["passport_number"] = client.passport_number
+        else:
+            # Same rule as _serialize_client: the key is OMITTED and a flag set — never a null,
+            # which the prompt (rightly) tells the model to read as "not filled in yet".
+            detail["passport_hidden"] = True
+        # Everything else the client screen holds — WhatsApp, guardian, academics, test scores,
+        # budget, refusals, lead source, consents. See _client_intake_profile for why this is
+        # derived from the UI serializer rather than typed out here.
+        for key, value in _client_intake_profile(client).items():
+            detail.setdefault(key, value)
+        detail["recent_notes"] = [
+            {"by": nt.author_name, "on": _iso(nt.created_at), "note": nt.body} for nt in notes
+        ]
         return detail
 
     def clients_needing_attention(limit: int = 15) -> dict:
@@ -709,8 +988,9 @@ def build_org_tools(db: Session, organization_id: int, ctx=None, viewer_user_id=
 
         Includes BOTH team-scheduled events (interviews, appointments, biometrics, document
         deadlines, follow-ups) AND auto-derived client key dates: each active client's
-        interview/travel key date, and any client passport expiring in the window. Recently
-        overdue items (past ~14 days, not yet done) are included so nothing is missed.
+        interview/travel key date, their next follow-up date from the profile, and any client
+        passport expiring in the window. Recently overdue items (past ~14 days, not yet done)
+        are included so nothing is missed.
         - within_days: how far ahead to look, 1-180 (default 30).
         - include_done: set true to also include events already marked done.
         """
@@ -767,6 +1047,19 @@ def build_org_tools(db: Session, organization_id: int, ctx=None, viewer_user_id=
             d = c.target_date
             events.append({"date": d.isoformat() if d else None, "time": None,
                            "title": f"Key date — {c.full_name}", "type": "client_deadline",
+                           "client": c.full_name, "stage": _stage_label(c.status),
+                           "overdue": bool(d and d < today), "source": "client_key_date"})
+        # The "Next follow-up" date a counsellor sets on the profile — same derivation (and
+        # same skip of decided cases) as the calendar screen, so the assistant and the
+        # calendar never disagree about who is due a follow-up.
+        for c in (_base()
+                  .filter(models.EnterpriseClient.next_followup_date.isnot(None),
+                          models.EnterpriseClient.next_followup_date >= start,
+                          models.EnterpriseClient.next_followup_date <= end,
+                          models.EnterpriseClient.status.notin_([catalog.STAGE_APPROVED, catalog.STAGE_REJECTED])).all()):
+            d = c.next_followup_date
+            events.append({"date": d.isoformat() if d else None, "time": None,
+                           "title": f"Follow-up — {c.full_name}", "type": "client_followup",
                            "client": c.full_name, "stage": _stage_label(c.status),
                            "overdue": bool(d and d < today), "source": "client_key_date"})
         for c in (_base()
@@ -1453,13 +1746,16 @@ def build_org_tools(db: Session, organization_id: int, ctx=None, viewer_user_id=
     # say about them. Both are needed: a member deliberately denied `documents.view` or
     # `clients.view_sensitive` would otherwise get raw document text and passport numbers just by
     # asking the assistant for them — which defeats the point of denying the capability at all.
+    # The client screen itself is gated on clients.view, so the tools that return client
+    # rows — and, since the full-profile change, the whole intake block — are gated the same
+    # way. Every built-in role that holds ai.assistant also holds clients.view; this only
+    # bites a custom role or a per-member deny, which is exactly where it should.
+    can_view_clients = ctx is None or ctx.has("clients.view")
+    client_record_tools = [count_clients, search_clients, get_client_details,
+                           clients_needing_attention, list_recent_activity]
     tools = [
         get_portal_overview,
-        count_clients,
-        search_clients,
-        get_client_details,
-        clients_needing_attention,
-        list_recent_activity,
+        *(client_record_tools if can_view_clients else []),
         get_team_workload,
         list_upcoming_calendar_events,
         # Deliberately ungated: the help guide is product documentation (no org data),
@@ -1570,7 +1866,11 @@ def _system_instruction(organization_name: str, user_name: str, role: str) -> st
         "offices, the credit wallet and what it is being spent on, the workspace's plan and "
         "settings, and Rilono's shared catalog of universities and courses. ALWAYS use the "
         "provided tools to look up real data before answering anything factual — never guess or "
-        "invent numbers, names or details. If the tools return nothing, say so plainly.\n\n"
+        "invent numbers, names or details. If the tools return nothing, say so plainly. Every client "
+        "name, ID, email, number or date in your answer MUST come from a tool result in this turn: if "
+        "you have not called a tool yet, you cannot name a client — look them up first. A 'which one "
+        "do you mean?' question is only ever answered from a multiple_matches list a tool actually "
+        "returned, never from memory.\n\n"
         "The client pipeline is one ordered list of stages, grouped into the phases of the "
         f"student's journey:\n{stages}\n"
         "A case runs lead → university phase (choosing universities, applying, accepting an "
@@ -1595,11 +1895,22 @@ def _system_instruction(organization_name: str, user_name: str, role: str) -> st
         "- Be genuinely helpful and informative — give a complete, useful answer, never a bare one-liner. "
         "When the data supports it, write a few sentences or a short structured list rather than a single "
         "line, and add the context a busy staff member would actually want.\n"
-        "- When the question is about a SPECIFIC client, call get_client_details and summarize who they are: "
-        "their visa type and destination, current status, intake, key date, assigned counselor, and the most "
-        "recent note if there is one — then suggest a sensible next step for the staff member.\n"
-        "- When listing or counting clients, show each client's status plus the detail relevant to the "
-        "question, and finish with a short takeaway (e.g. how the pipeline is split, or who is most urgent).\n"
+        "- When the question is about a SPECIFIC client, call get_client_details — it returns the FULL profile "
+        "exactly as the client screen shows it (contact details incl. WhatsApp and current city, personal details, "
+        "guardian, the case, academics and test scores, budget/funding, prior refusals, lead source, consents, "
+        "latest notes). Answer the exact field asked about. A null field means it isn't filled in on the profile "
+        "yet — say so and that it can be added by opening the client and editing; never say you have no access to "
+        "it. The ONE exception is the passport number: passport_hidden means it is restricted by this member's "
+        "permissions ('View sensitive fields'), not blank. When asked to summarize who they are: visa type and "
+        "destination, current status, intake, key date, assigned counselor, most recent note — then suggest a "
+        "sensible next step for the staff member.\n"
+        "- When listing or counting clients, use the filters count_clients and search_clients share — stage, "
+        "destination, visa type, when added/updated, and the profile filters (current city, nationality, study "
+        "level, lead source, English test status, follow-up due). Show each client's status plus the detail "
+        "relevant to the question, and finish with a short takeaway (e.g. how the pipeline is split, or who is "
+        "most urgent). For a profile field with no filter (gender, budget, funding, field of study, a test "
+        "score, a guardian), list the relevant clients and look them up with get_client_details. For 'where do "
+        "our clients/leads come from' use get_portal_overview's breakdowns.\n"
         "- For 'who needs attention' questions, use the attention tool and give the reason for each, most "
         "urgent first.\n"
         "- You can also read the TEXT inside documents staff have uploaded for a client (passports, offer "
@@ -1608,8 +1919,9 @@ def _system_instruction(organization_name: str, user_name: str, role: str) -> st
         "document's text hasn't been extracted yet, say it isn't available to read.\n"
         "- For anything about the schedule, calendar, upcoming events, deadlines, interviews, biometrics, "
         "appointments, follow-ups or what's overdue, call list_upcoming_calendar_events — it covers both "
-        "team-scheduled events and auto-derived client key dates (interview/travel dates, passport expiries). "
-        "Lead with what's soonest or overdue, and name the client and date.\n"
+        "team-scheduled events and auto-derived client key dates (interview/travel dates, next follow-up dates, "
+        "passport expiries). Lead with what's soonest or overdue, and name the client and date. For 'who is due "
+        "or overdue for a follow-up' as a count or list, count_clients/search_clients with followup= work too.\n"
         "- Use light formatting for readability: short **bold** labels and tight bullet lists; keep it "
         "skimmable. Don't pad with filler or repeat the question back, and never invent data.\n"
         "- Questions about universities and courses are about Rilono's SHARED catalog (the Course "
@@ -1680,6 +1992,7 @@ class TurnUsage:
     cost_usd: Decimal = field(default_factory=lambda: Decimal("0"))
     model: Optional[str] = None
     tools_called: list = field(default_factory=list)
+    empty_retries: int = 0
     hit_round_cap: bool = False
 
     def as_dict(self) -> dict:
@@ -1730,6 +2043,21 @@ def _meter_round(response, *, model_name: str, source: str, usage: TurnUsage,
         source, model_name, response,
         user_id=user_id, organization_id=organization_id,
     )
+
+
+def _is_empty_candidate(response) -> bool:
+    """True when the model answered with a candidate that has NO parts at all — no text, no
+    function call (finish_reason STOP, zero output tokens). gemini-2.5-flash does this now
+    and then on a perfectly ordinary question; observed far more often as the tool
+    declarations grow. A blocked prompt (no candidates) is deliberately NOT treated as
+    empty — retrying a block is pointless."""
+    try:
+        candidates = list(response.candidates or [])
+        if not candidates:
+            return False
+        return len(list(candidates[0].content.parts)) == 0
+    except Exception:
+        return False
 
 
 def _function_calls_in(response) -> list:
@@ -1811,6 +2139,7 @@ def _run_metered_tool_loop(*, model_name: str, system: str, tools: list, history
     contents.append(protos.Content(role="user", parts=[protos.Part(text=message)]))
 
     response = None
+    empty_retries = 2
     for round_index in range(MAX_TOOL_ROUNDS):
         response = model.generate_content(contents=contents, tools=library)
         _meter_round(response, model_name=model_name, source=source, usage=usage,
@@ -1818,6 +2147,18 @@ def _run_metered_tool_loop(*, model_name: str, system: str, tools: list, history
 
         calls = _function_calls_in(response)
         if not calls:
+            if empty_retries and _is_empty_candidate(response):
+                # No text AND no call: without this the user gets the generic "couldn't
+                # find an answer" and is still billed for the round. The empties are
+                # stochastic (measured ~0-20% per call on gemini-2.5-flash depending on
+                # the declaration set), so re-asking the same contents up to twice recovers
+                # almost all of them; each re-ask is metered like any other round and
+                # consumes one of the round cap.
+                empty_retries -= 1
+                usage.empty_retries += 1
+                logger.info("Enterprise AI: empty candidate from %s, re-asking once (org_id=%s)",
+                            model_name, organization_id)
+                continue
             break
 
         contents.append(response.candidates[0].content)
@@ -2041,7 +2382,11 @@ def _inr(paise) -> str:
 
 def _deep_scan_client_block(client: models.EnterpriseClient) -> str:
     """EVERY staff-entered profile field, so the audit can catch errors in the
-    record itself (typos, placeholders, impossible dates), not just in documents."""
+    record itself (typos, placeholders, impossible dates), not just in documents.
+    Includes the intake block (city, guardian, academics, test scores, budget/funding,
+    refusals…) — until 2026-08-22 only the core fields below were sent, so an IELTS
+    certificate contradicting the profile's score, or a transcript contradicting the
+    year of passing, could not be flagged."""
     consent = (
         f"yes ({_iso(client.client_consent_confirmed_at)})"
         if getattr(client, "client_consent_confirmed_at", None) else "NOT confirmed"
@@ -2065,6 +2410,8 @@ def _deep_scan_client_block(client: models.EnterpriseClient) -> str:
         f"Target date (interview/travel/intake deadline): {_iso(client.target_date) or '—'}",
         f"Data-processing consent confirmed: {consent}",
         f"Record created: {_iso(client.created_at) or '—'} · last updated: {_iso(client.updated_at) or '—'}",
+        "— Profile / intake (rest of the record; '—' = not filled in) —",
+        *[line for _key, line in _intake_profile_lines(client)],
     ]
     return "\n".join(bits)
 
@@ -2199,6 +2546,11 @@ _DEEP_SCAN_EXTRACT_SYSTEM = (
     "Return STRICT JSON only, with no prose or code fences."
 )
 
+# Bump when the schema below changes: the per-document facts are cached on the document
+# row keyed by (version, text), so a schema change re-extracts each document once instead
+# of auditing new fields against facts that were never extracted.
+_DEEP_SCAN_FACTS_VERSION = "2"
+
 _DEEP_SCAN_FACTS_SCHEMA = (
     "{\n"
     '  "document_type": "what this document is (as labeled or clearly evident)",\n'
@@ -2211,6 +2563,12 @@ _DEEP_SCAN_FACTS_SCHEMA = (
     '  "institution": "school / bank / sponsor / issuer name, or null",\n'
     '  "financials": [{"label": "", "amount": "", "currency": "", "as_of_date": ""}],\n'
     '  "key_dates": [{"label": "", "date": ""}],\n'
+    '  "addresses": ["every postal address or city of residence as written"],\n'
+    '  "test_scores": [{"test": "IELTS / TOEFL / PTE / Duolingo / GRE / GMAT / SAT / other as written", '
+    '"score": "overall and band/section scores as written", "date": "test date or null"}],\n'
+    '  "qualifications": [{"qualification": "degree / diploma / certificate as written", '
+    '"institution": "", "year": "year of passing / graduation or null", "grade_or_score": "CGPA / % / class as written, or null"}],\n'
+    '  "sponsor_or_guardian_names": ["sponsor / guardian / parent names as written, with the stated relation"],\n'
     '  "audit_notes": ["anything a case auditor should know from THIS document only"]\n'
     "}"
 )
@@ -2233,7 +2591,7 @@ def _facts_for_document(doc, model_state: dict) -> tuple[Optional[dict], str]:
     text = (getattr(doc, "extracted_text", None) or "").strip()
     if not text:
         return None, "no_text"
-    text_hash = hashlib.sha256(text.encode("utf-8")).hexdigest()
+    text_hash = hashlib.sha256(f"v{_DEEP_SCAN_FACTS_VERSION}\n{text}".encode("utf-8")).hexdigest()
     if getattr(doc, "deep_scan_facts_hash", None) == text_hash and getattr(doc, "deep_scan_facts", None):
         try:
             return json.loads(doc.deep_scan_facts), "cached"
@@ -2421,7 +2779,8 @@ Check at minimum (report anything else irregular too):
 4. Missing documents that are ALREADY DUE at this client's current stage for this destination and visa type — judge against the destination checklist and the stage scope below, not a generic one.
 5. Staff data-entry quality — placeholder/test values, typos, invalid email/phone formats, wrong-looking passport numbers, contradictions between profile fields and stage records or documents.
 6. Cross-source contradictions — anything in notes, emails, universities, interview results or payments that contradicts the profile, the documents, or each other.
-7. Process health — unconfirmed data-processing consent, failed/unpaid/disputed/refunded payments, poor mock-interview verdicts close to the appointment, red-flagged documents never resolved.
+7. Process health — unconfirmed data-processing consent, failed/unpaid/disputed/refunded payments, poor mock-interview verdicts close to the appointment, red-flagged documents never resolved. Institution-share or marketing consent shown as 'not recorded' is an info-level reminder to collect it — not a refusal and never critical on its own.
+8. Academic & background consistency — the profile's intake fields vs the documents: English/aptitude test scores and dates vs the certificates' test_scores, qualification / year of passing / grades vs transcripts and degree certificates, city of residence vs addresses on bank and other letters, guardian vs sponsor_or_guardian_names on sponsorship/financial documents, and funding source / budget band vs the financial evidence (e.g. 'loan sanctioned' with no sanction letter, a sponsor letter from someone who is not the recorded guardian). A profile field shown as '—' is simply not filled in — note it at most as info, never as a contradiction.
 
 Every finding must cite its evidence with sources. If the file is genuinely clean, return few or no findings — do not manufacture problems.
 {_deep_scan_stage_scope(client)}{_deep_scan_destination_rules(client)}

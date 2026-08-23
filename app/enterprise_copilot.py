@@ -27,6 +27,7 @@ from app import enterprise_catalog as catalog
 # one ledger row per model round-trip, attributed to the org, and a turn cost the
 # credit meter can weight.
 from app.enterprise_ai import ChatTurnResult, TurnUsage, _meter_round
+from app.enterprise_ai import _intake_profile_lines as _shared_intake_lines
 from app.utils import gemini_service as gemini_utils
 
 logger = logging.getLogger("rilono.enterprise_copilot")
@@ -109,18 +110,40 @@ def _mask_passport(value) -> Optional[str]:
     return f"•••• {p[-3:]}"
 
 
+# The consultancy's internal working data about the client — not the client's own
+# profile. Withheld on the invite-link surface exactly like priority.
+_STAFF_ONLY_PROFILE_FIELDS = frozenset({
+    "lead_source", "lead_source_detail", "prior_refusal_notes", "next_followup_date",
+    "marketing_consent_channels", "marketing_consent_at",
+    "institution_share_consent", "institution_share_consent_at",
+})
+
+
+def _intake_profile_lines(client: models.EnterpriseClient, *, for_client: bool) -> list:
+    """(field, 'Label: value') for the intake block — WhatsApp, city, gender, guardian,
+    academics, test scores, budget/funding, refusals, lead source, follow-up, consents.
+    Rendered by enterprise_ai._intake_profile_lines (the same lines Deep Scan audits, from
+    the client API's own serializer), minus the staff-only fields on the client surface."""
+    return _shared_intake_lines(client, skip=_STAFF_ONLY_PROFILE_FIELDS if for_client else frozenset())
+
+
 def build_client_profile_block(
     client: models.EnterpriseClient,
     *,
     for_client: bool = False,
     allow_sensitive: bool = True,
 ) -> str:
-    """The client's CRM profile as prompt context (same field set the staff can
-    already see in the dashboard; deep scan sends the same fields to the model).
+    """The client's CRM profile as prompt context — the FULL record the client screen
+    shows: the core case fields below plus the intake block (WhatsApp, current city,
+    gender, guardian, academics, test scores, budget/funding, prior refusals, lead
+    source, follow-up, consents). Before 2026-08-22 only the core fields were sent, so
+    the Copilot could not answer "what is my current city" or fill a form's guardian /
+    test-score fields from the record.
 
     for_client=True is the invite-link surface: the passport number is masked
     (portal precedent — inbox-anchored auth must not yield the full number) and
-    the org's internal priority triage is omitted.
+    the org's internal working data — priority, lead source, refusal notes,
+    follow-up date, consents — is omitted (_STAFF_ONLY_PROFILE_FIELDS).
 
     allow_sensitive=False is a staff member without `clients.view_sensitive`: the
     passport is OMITTED, never masked — same rule as _serialize_client and the
@@ -155,6 +178,11 @@ def build_client_profile_block(
     ]
     if not for_client:
         lines.insert(-1, f"Priority: {_fmt(client.priority)}")
+        lines.append(f"Office / branch: {_fmt(getattr(client, 'branch_name', None))}")
+    intake = [line for _key, line in _intake_profile_lines(client, for_client=for_client)]
+    if intake:
+        lines.append("— Profile / intake (rest of the CRM record; '—' = not filled in yet) —")
+        lines.extend(intake)
     return "\n".join(lines)
 
 
@@ -324,7 +352,7 @@ Your role:
 - Assist with the client's application work: university and visa forms, financial and health documents, and related workflow tasks.
 - Help fill application fields and prepare responses with utmost accuracy, grounded in the CLIENT PROFILE and CLIENT DOCUMENTS below.
 - If page/form context is attached, reference specific field labels and explain exactly what should be entered for THIS client.
-- Cross-check every suggestion against the client's profile and documents. If a required detail is missing, ambiguous, or inconsistent, say so and ask the staff member to confirm with the client — NEVER invent client data.
+- Cross-check every suggestion against the client's profile and documents. If a required detail is missing, ambiguous, or inconsistent, say so and ask the staff member to confirm with the client — NEVER invent client data. A profile field shown as "—" is simply not filled in on the CRM record yet: say so and suggest adding it on the client's profile rather than guessing.
 - If multiple valid options exist, explain the tradeoffs and ask which applies to this client.
 - Keep responses practical, structured, and professional. Prioritize correctness over speed.
 
@@ -507,7 +535,7 @@ who is applying for {destination} ({visa_label}).
 Your role:
 - You are talking DIRECTLY TO THE CLIENT — address them in the second person, warmly and clearly.
 - Answer their questions about their own application: their profile, their documents, typical next steps, timelines, forms, and financial or health requirements for {destination}.
-- Ground every answer in the CLIENT PROFILE and CLIENT DOCUMENTS below. If a detail is missing, ambiguous, or inconsistent, say so plainly and suggest they confirm with their consultancy — NEVER invent their data.
+- Ground every answer in the CLIENT PROFILE and CLIENT DOCUMENTS below. If a detail is missing, ambiguous, or inconsistent, say so plainly and suggest they confirm with their consultancy — NEVER invent their data. A profile field shown as "—" is not on record yet: tell them so and that their consultancy can add it.
 - For decisions about their case (which university, which documents to submit, deadlines their consultancy manages), give the factual picture and recommend they confirm with {company} — the consultancy runs their application.
 - Keep responses practical, encouraging, and easy to follow. Avoid jargon; explain any required term in one phrase.
 
