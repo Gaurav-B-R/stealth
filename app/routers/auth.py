@@ -379,6 +379,12 @@ def register(
     # Age confirmation. Minors need a parent/guardian to consent on their behalf
     # (India DPDP: under 18; EU/UK GDPR: under 16). We capture a self-attestation
     # here; true verifiable parental consent is a separate, fuller flow.
+    from app import countries as _residence
+    try:
+        user.current_residence_country = _residence.normalize_residence_country(user.current_residence_country)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+
     if not user.age_confirmed:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -512,7 +518,7 @@ def register(
         full_name=user.full_name,
         university=university_name,  # Auto-filled from database (or developer email)
         phone=user.phone,
-        current_residence_country=user.current_residence_country or "United States",
+        current_residence_country=user.current_residence_country,
         referral_code=generate_unique_referral_code(db),
         referred_by_user_id=referrer.id if referrer else None,
         acquisition_channel=acq["acquisition_channel"],
@@ -931,7 +937,8 @@ def _find_or_create_oauth_user(
         hashed_password=get_password_hash(_secrets.token_urlsafe(32)),  # unusable; reset to set one
         full_name=(name or None),
         university=(university.university_name if university else None),
-        current_residence_country="United States",
+        # Google signup never asks for it; onboarding requires it before the dashboard.
+        current_residence_country=None,
         referral_code=generate_unique_referral_code(db),
         accepted_terms_privacy_at=now,
         accepted_terms_privacy_ip=consent_ip,

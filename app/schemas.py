@@ -10,7 +10,7 @@ class UserBase(BaseModel):
     phone: Optional[str] = None
     visa_case_status: Optional[str] = None
     current_situation_story: Optional[str] = None
-    current_residence_country: Optional[str] = "United States"
+    current_residence_country: Optional[str] = None
     preferred_country: Optional[str] = "United States"
     profile_picture: Optional[str] = None
 

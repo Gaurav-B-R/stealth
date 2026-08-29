@@ -106,10 +106,17 @@ def submit_onboarding(
     if meta and meta.get("name"):
         current_user.preferred_country = meta["name"]
 
-    # Optional fields — only overwrite when provided.
+    # Home country is REQUIRED once onboarding completes: Google signups never chose one
+    # (signup path stores None since 2026-08-24), and the AI surfaces reason from it.
+    from app import countries as _residence
     home = (payload.home_country or "").strip()
     if home:
-        current_user.current_residence_country = home
+        try:
+            current_user.current_residence_country = _residence.normalize_residence_country(home)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc))
+    elif not (current_user.current_residence_country or "").strip():
+        raise HTTPException(status_code=400, detail="Select your home country.")
     university = (payload.university or "").strip()
     if university:
         current_user.university = university

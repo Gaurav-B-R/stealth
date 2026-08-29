@@ -16,7 +16,7 @@ class User(Base):
     phone = Column(String, nullable=True)
     visa_case_status = Column(String, nullable=True)  # new | refused
     current_situation_story = Column(Text, nullable=True)
-    current_residence_country = Column(String, nullable=True, default="United States")
+    current_residence_country = Column(String, nullable=True)
     profile_picture = Column(String, nullable=True)
     is_active = Column(Boolean, default=True)
     email_verified = Column(Boolean, default=False)

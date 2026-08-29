@@ -1369,29 +1369,22 @@ function closeMobileNav() {
     syncMobileNavState();
 }
 
+// Canonical residence-country list — MUST stay identical to app/countries.py
+// RESIDENCE_COUNTRIES (tests/test_residence_country.py compares the two). Until 2026-08-24
+// this dropdown offered only the 9 pricing countries and pre-selected "United States".
+const RESIDENCE_COUNTRIES = ['Afghanistan', 'Albania', 'Algeria', 'Andorra', 'Angola', 'Antigua and Barbuda', 'Argentina', 'Armenia', 'Australia', 'Austria', 'Azerbaijan', 'Bahamas', 'Bahrain', 'Bangladesh', 'Barbados', 'Belarus', 'Belgium', 'Belize', 'Benin', 'Bhutan', 'Bolivia', 'Bosnia and Herzegovina', 'Botswana', 'Brazil', 'Brunei', 'Bulgaria', 'Burkina Faso', 'Burundi', 'Cabo Verde', 'Cambodia', 'Cameroon', 'Canada', 'Central African Republic', 'Chad', 'Chile', 'China', 'Colombia', 'Comoros', 'Congo (Democratic Republic)', 'Congo (Republic)', 'Costa Rica', 'Cote d\'Ivoire', 'Croatia', 'Cuba', 'Cyprus', 'Czech Republic', 'Denmark', 'Djibouti', 'Dominica', 'Dominican Republic', 'Ecuador', 'Egypt', 'El Salvador', 'Equatorial Guinea', 'Eritrea', 'Estonia', 'Eswatini', 'Ethiopia', 'Fiji', 'Finland', 'France', 'Gabon', 'Gambia', 'Georgia', 'Germany', 'Ghana', 'Greece', 'Grenada', 'Guatemala', 'Guinea', 'Guinea-Bissau', 'Guyana', 'Haiti', 'Honduras', 'Hong Kong', 'Hungary', 'Iceland', 'India', 'Indonesia', 'Iran', 'Iraq', 'Ireland', 'Israel', 'Italy', 'Jamaica', 'Japan', 'Jordan', 'Kazakhstan', 'Kenya', 'Kiribati', 'Kosovo', 'Kuwait', 'Kyrgyzstan', 'Laos', 'Latvia', 'Lebanon', 'Lesotho', 'Liberia', 'Libya', 'Liechtenstein', 'Lithuania', 'Luxembourg', 'Macau', 'Madagascar', 'Malawi', 'Malaysia', 'Maldives', 'Mali', 'Malta', 'Marshall Islands', 'Mauritania', 'Mauritius', 'Mexico', 'Micronesia', 'Moldova', 'Monaco', 'Mongolia', 'Montenegro', 'Morocco', 'Mozambique', 'Myanmar', 'Namibia', 'Nauru', 'Nepal', 'Netherlands', 'New Zealand', 'Nicaragua', 'Niger', 'Nigeria', 'North Korea', 'North Macedonia', 'Norway', 'Oman', 'Pakistan', 'Palau', 'Palestine', 'Panama', 'Papua New Guinea', 'Paraguay', 'Peru', 'Philippines', 'Poland', 'Portugal', 'Qatar', 'Romania', 'Russia', 'Rwanda', 'Saint Kitts and Nevis', 'Saint Lucia', 'Saint Vincent and the Grenadines', 'Samoa', 'San Marino', 'Sao Tome and Principe', 'Saudi Arabia', 'Senegal', 'Serbia', 'Seychelles', 'Sierra Leone', 'Singapore', 'Slovakia', 'Slovenia', 'Solomon Islands', 'Somalia', 'South Africa', 'South Korea', 'South Sudan', 'Spain', 'Sri Lanka', 'Sudan', 'Suriname', 'Sweden', 'Switzerland', 'Syria', 'Taiwan', 'Tajikistan', 'Tanzania', 'Thailand', 'Timor-Leste', 'Togo', 'Tonga', 'Trinidad and Tobago', 'Tunisia', 'Turkey', 'Turkmenistan', 'Tuvalu', 'Uganda', 'Ukraine', 'United Arab Emirates', 'United Kingdom', 'United States', 'Uruguay', 'Uzbekistan', 'Vanuatu', 'Vatican City', 'Venezuela', 'Vietnam', 'Yemen', 'Zambia', 'Zimbabwe'];
+const POPULAR_RESIDENCE_COUNTRIES = ['India', 'Nigeria', 'Pakistan', 'Bangladesh', 'Nepal', 'Sri Lanka', 'China', 'Vietnam', 'Philippines', 'United Arab Emirates', 'United States', 'United Kingdom'];
+function residenceCountryOptions(selected) {
+    const opt = (name) => `<option value="${escapeHtml(name)}" ${name === selected ? 'selected' : ''}>${escapeHtml(name)}</option>`;
+    return '<option value="">Select your country…</option>'
+        + `<optgroup label="Popular">${POPULAR_RESIDENCE_COUNTRIES.map(opt).join('')}</optgroup>`
+        + `<optgroup label="All countries">${RESIDENCE_COUNTRIES.map(opt).join('')}</optgroup>`;
+}
+
 function initializeRegisterCountrySelector() {
     const countrySelect = document.getElementById('registerCountry');
     if (!countrySelect) return;
-
-    const countryFlagsByCode = {
-        US: '🇺🇸',
-        IN: '🇮🇳',
-        GB: '🇬🇧',
-        CA: '🇨🇦',
-        AU: '🇦🇺',
-        DE: '🇩🇪',
-        AE: '🇦🇪',
-        SG: '🇸🇬',
-        JP: '🇯🇵'
-    };
-    const countries = Object.entries(PRICING_COUNTRY_CONFIG).map(([code, entry]) => ({
-        name: entry.country,
-        flag: countryFlagsByCode[code] || '🌍'
-    }));
-    countrySelect.innerHTML = [
-        '<option value="">Select country</option>',
-        ...countries.map((country) => `<option value="${escapeHtml(country.name)}">${country.flag} ${escapeHtml(country.name)}</option>`)
-    ].join('');
+    countrySelect.innerHTML = residenceCountryOptions('');
 
     countrySelect.value = 'United States';
 }
@@ -2970,7 +2963,7 @@ function showRegister(skipURLUpdate = false) {
     const consentInput = document.getElementById('registerConsent');
     if (universityInput) universityInput.value = '';
     if (messageEl) messageEl.style.display = 'none';
-    if (countryInput) countryInput.value = 'United States';
+    if (countryInput) countryInput.value = '';   // no pre-selected country — it must be a real answer
     if (referralInput) {
         referralInput.value = getReferralCodeFromURL() || '';
     }
@@ -3334,9 +3327,10 @@ function renderOnboardingForm() {
         <select id="onbCountry" style="${inp}"><option value="">Select a country…</option>${countryOpts}</select></div>
       <div style="margin-bottom:14px">${lbl('Visa type <span style=\"color:#be123c\">*</span>')}
         <select id="onbVisa" style="${inp}" disabled><option value="">Select a country first…</option></select></div>
+      <div style="margin-bottom:14px">${lbl('Home country <span style=\"color:#be123c\">*</span>')}
+        <select id="onbHome" style="${inp}">${residenceCountryOptions((currentUser && currentUser.current_residence_country) || '')}</select></div>
       <details style="margin:6px 0 4px"><summary><svg class="onb-chev" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"><polyline points="9 6 15 12 9 18"></polyline></svg>Add more details <span style="color:#94a3b8;font-weight:600">(optional)</span></summary>
         <div style="margin-top:12px;display:grid;gap:12px">
-          <div>${lbl('Home country')}<input id="onbHome" placeholder="e.g. India" style="${inp}"></div>
           <div>${lbl('Target university')}<input id="onbUni" placeholder="e.g. University of Toronto" style="${inp}"></div>
           <div>${lbl('University email')}<input id="onbUniEmail" type="email" placeholder="you@university.edu" style="${inp}"></div>
           <div>${lbl('Intake')}<select id="onbIntake" style="${inp}"><option value="">Select intake…</option></select></div>
@@ -3345,8 +3339,10 @@ function renderOnboardingForm() {
     const visaSel = document.getElementById('onbVisa');
     const intakeSel = document.getElementById('onbIntake');
     const submit = document.getElementById('onbSubmit');
+    const homeSel = document.getElementById('onbHome');
+    if (homeSel) homeSel.addEventListener('change', () => updateSubmit());
     const updateSubmit = () => {
-        const ok = Boolean(countrySel.value && visaSel.value);
+        const ok = Boolean(countrySel.value && visaSel.value && homeSel && homeSel.value);
         submit.disabled = !ok;
         // Disabled → a clean solid grey (clearly "pick a country first"), not a faded
         // gradient that reads as broken. Enabled → the vibrant gradient lights up.
@@ -3381,7 +3377,9 @@ async function submitOnboarding() {
     const submit = document.getElementById('onbSubmit');
     const country = (document.getElementById('onbCountry') || {}).value || '';
     const visa = (document.getElementById('onbVisa') || {}).value || '';
+    const home = (document.getElementById('onbHome') || {}).value || '';
     if (!country || !visa) { if (errEl) errEl.textContent = 'Please choose a country and visa type.'; return; }
+    if (!home) { if (errEl) errEl.textContent = 'Please select your home country.'; return; }
     const val = (id) => ((document.getElementById(id) || {}).value || '').trim() || null;
     const payload = {
         destination_country_code: country,
@@ -10544,6 +10542,10 @@ async function handleRegister(e) {
     const confirmPassword = getValue('registerPasswordConfirm');
 
     // Validate required fields
+    if (!userData.current_residence_country) {
+        showMessage('Please select your current country of residence.', 'error');
+        return;
+    }
     if (!userData.email || !userData.password) {
         showMessage('Please fill in all required fields (Email, Password)', 'error');
         return;

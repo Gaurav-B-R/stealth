@@ -398,7 +398,7 @@ def build_user_account_snapshot(user: models.User) -> dict:
         "phone": user.phone,
         "visa_case_status": user.visa_case_status,
         "current_situation_story": user.current_situation_story,
-        "current_residence_country": user.current_residence_country or "United States",
+        "current_residence_country": user.current_residence_country or "Not provided",
         # Destination journey — changing country/visa (e.g. onboarding to Australia)
         # must mark the snapshot stale so it rebuilds with the correct country. Without
         # these, a US-defaulted snapshot would persist and the AI would keep saying "US F-1".
@@ -1493,7 +1493,7 @@ def save_student_profile_to_r2(
             "phone": user.phone,
             "visa_case_status": user.visa_case_status,
             "current_situation_story": user.current_situation_story,
-            "current_residence_country": user.current_residence_country or "United States",
+            "current_residence_country": user.current_residence_country or "Not provided",
             "destination_country": destination_country,
             "destination_country_code": _scope_country,
             "visa_type": visa_type_label,
@@ -1510,7 +1510,7 @@ def save_student_profile_to_r2(
             "target_country": destination_country,
             "destination_country_code": _scope_country,
             "visa_type": visa_type_label,
-            "current_residence_country": user.current_residence_country or "United States",
+            "current_residence_country": user.current_residence_country or "Not provided",
             "intake_semester": preferred_intake,
             "intake_year": preferred_year
         },
