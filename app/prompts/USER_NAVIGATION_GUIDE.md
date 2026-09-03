@@ -17,7 +17,11 @@ This guide helps users navigate the Rilono web app UI quickly.
 
 ## Dashboard Left Menu
 - `Overview` : Journey status, document health summary, and embedded AI chat
-- `Universities` : Shortlist & Recommendations, Course Finder, SOP Studio
+- `Universities` : Course Finder (`Browse catalog` / `AI shortlist` / `My shortlist` tabs) and SOP Studio
+  - Every AI shortlist result and every saved university carries a chance-of-admission badge:
+    `High chance` (comfortably within the student's profile), `Medium chance` (a realistic fit)
+    or `Low chance` (ambitious). It is Rilono AI's estimate from the profile the student entered,
+    never an admission decision, and a good shortlist deliberately mixes all three.
 - `Documents` : Upload and manage documents, validation status, stage mapping
 - `Interview Prep` (sub-tab labels adapt to the student's destination — e.g. a US student
   sees "F-1 Visa Interview Prep", an Australian student sees "Student Visa Interview Prep";
@@ -35,6 +39,12 @@ This guide helps users navigate the Rilono web app UI quickly.
 - `Manage Subscription` : Opens `/subscription`
 - `Feature Request` : Opens feature request modal
 - `Logout` : Signs out
+
+## Destination, Intake & Year
+- Change intake/year: Dashboard → `Profile` tab → `Destination Preferences` card → set `Intake` and `Year` → `Save Preferences`.
+- The `Country` field in that card is read-only; it mirrors the destination saved on the account.
+- Change the destination country or visa type: Dashboard → `Settings` tab → `Destination & visa type` → `Change destination or visa type` (needs an emailed confirmation code, and documents tied to the old destination are removed).
+- The intake and year saved in that card are also stamped onto every document uploaded from the `Documents` tab.
 
 ## Email Notification Controls
 - Unsubscribe link is present in email footer (small and low-visibility) for notification emails.

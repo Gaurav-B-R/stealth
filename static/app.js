@@ -3913,12 +3913,13 @@ function renderUniversitiesUI() {
 
     const statusColors = { considering: '#64748b', applied: '#1d4ed8', admitted: '#065f46', rejected: '#be123c' };
     const statusOpts = ['considering', 'applied', 'admitted', 'rejected'];
-    const diffBadgeColors = { reach: '#be123c', match: '#1d4ed8', safety: '#065f46' };
+    // Fit badge label + color both come from CF_FIT — one map for both B2C surfaces.
     const savedRows = (d.entries || []).map((e) => {
         const sel = statusOpts.map((s) => `<option value="${s}"${e.status === s ? ' selected' : ''}>${s.charAt(0).toUpperCase() + s.slice(1)}</option>`).join('');
         const meta = [e.program, e.location].filter(Boolean).join(' · ');
         const extras = [];
-        if (e.admission_difficulty) extras.push(`<span style="font-size:10px;font-weight:700;text-transform:uppercase;color:${diffBadgeColors[e.admission_difficulty] || '#64748b'}">${escapeHtml(e.admission_difficulty)}</span>`);
+        const fit = CF_FIT[e.admission_difficulty];
+        if (fit) extras.push(`<span title="${escapeAttr(fit.hint)}" style="font-size:11px;font-weight:700;color:${fit.color}">${fit.label}</span>`);
         if (e.qs_world_rank) extras.push(`<span style="font-size:11px;color:#b45309;font-weight:600">QS ${escapeHtml(e.qs_world_rank)}</span>`);
         if (e.application_fee) extras.push(`<span style="font-size:11px;color:#64748b">Fee: ${escapeHtml(e.application_fee)}</span>`);
         const isHttp = (u) => typeof u === 'string' && /^https?:\/\//i.test(u) && !/["'<>`]/.test(u);
@@ -4024,7 +4025,16 @@ async function coursesFetch(path, opts) {
 const CF_INP = 'width:100%;box-sizing:border-box;background:#ffffff;border:1px solid #e2e8f0;border-radius:10px;color:#0f172a;font-size:13.5px;padding:9px 11px';
 const CF_LBL = (t) => `<div style="font-size:11.5px;font-weight:700;color:#64748b;margin:0 0 5px">${t}</div>`;
 const CF_CARD = (inner, extra) => `<div style="background:#ffffff;border:1px solid #e2e8f0;border-radius:16px;padding:18px 20px;${extra || ''}">${inner}</div>`;
-const CF_FIT = { reach: { label: 'Reach', color: '#be123c' }, match: { label: 'Match', color: '#1d4ed8' }, safety: { label: 'Safety', color: '#065f46' } };
+// Display labels ONLY. The reach/match/safety KEYS are the AI + DB tokens
+// (course_catalog.py fit_level -> university_shortlist_entries.admission_difficulty)
+// and must never change: every server validator substitutes "match" or NULL on a
+// mismatch, silently. One map feeds both B2C surfaces — the AI result pill
+// (cfActiveRecHtml) and the saved "My shortlist" rows (renderUniversitiesUI).
+const CF_FIT = {
+    reach: { label: 'Low chance', color: '#be123c', hint: 'Low chance of admission — ambitious for the profile you entered' },
+    match: { label: 'Medium chance', color: '#1d4ed8', hint: 'Medium chance of admission — a realistic fit for the profile you entered' },
+    safety: { label: 'High chance', color: '#065f46', hint: 'High chance of admission — comfortably within the profile you entered' },
+};
 // Advanced-filter keys mirrored to the query string — one place, so chips, inputs
 // and the request can never drift.
 const CF_ADV_KEYS = ['min_tuition', 'require_tuition', 'no_app_fee', 'scholarships_only', 'max_ielts', 'max_toefl',
@@ -4619,7 +4629,7 @@ function cfActiveRecHtml(rec) {
         return `<div style="background:#ffffff;border:1px solid #e2e8f0;border-radius:14px;padding:14px 16px">
             <div style="display:flex;justify-content:space-between;gap:8px;flex-wrap:wrap">
               <div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap">
-                <span style="font-size:10.5px;font-weight:800;text-transform:uppercase;color:#fff;background:${fit.color};border-radius:999px;padding:2px 9px">${fit.label}</span>
+                <span title="${escapeAttr(fit.hint)}" style="font-size:10.5px;font-weight:700;color:#fff;background:${fit.color};border-radius:999px;padding:3px 10px">${fit.label}</span>
                 ${it.in_catalog ? '<span style="font-size:10.5px;font-weight:700;color:#065f46">✓ Verified</span>' : '<span style="font-size:10.5px;font-weight:700;color:#b45309" title="Double-check details on the official page">Verify on official page</span>'}
                 ${it.qs_world_rank ? `<span style="font-size:10.5px;color:#b45309;font-weight:700">🏆 QS ${escapeHtml(it.qs_world_rank)}</span>` : ''}
               </div>
@@ -4642,6 +4652,7 @@ function cfActiveRecHtml(rec) {
           ${srcBadge}
         </div>
         ${rec.summary ? `<div style="font-size:13px;color:#334155;margin-bottom:12px">${escapeHtml(rec.summary)}</div>` : ''}
+        <div style="font-size:12px;color:#64748b;margin:0 0 10px">High / Medium / Low chance is Rilono AI's estimate from the profile you entered — not an admission decision. A good shortlist mixes all three.</div>
         <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(290px,1fr));gap:12px">${cards}</div>`);
 }
 

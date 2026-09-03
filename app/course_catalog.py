@@ -2073,7 +2073,11 @@ def recommend_courses(
         + "REQUEST:\n" + "\n".join(request_lines) + "\n\n"
         + source_rules
         + f"- Return up to {max_results} recommendations ranked best-fit first, mixing reach/match/safety when possible.\n"
-        "- Only programs in the destination country.\n"
+        + ("- In `summary` and `why_recommended` prose, never use the words reach, match or safety as "
+           "labels — the student's UI shows these as a high, medium or low chance of admission. Keep "
+           "emitting the fit_level enum exactly as specified in the schema.\n"
+           if for_student else "")
+        + "- Only programs in the destination country.\n"
         + ("- NEVER recommend a university already listed on the student's shortlist above — one that "
            "already admitted or already rejected this student must not come back as a suggestion. "
            "Shortlist around them and say in the summary how this set complements what they hold.\n"

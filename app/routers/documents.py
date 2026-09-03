@@ -1479,7 +1479,7 @@ def save_student_profile_to_r2(
     # Build comprehensive student profile
     comprehensive_data = {
         # File metadata for LLM understanding
-        "_file_description": f"Complete student profile, documentation preferences, uploaded documents summary, and {visa_type_label} journey status for {destination_country}",
+        "_file_description": f"Complete student profile, destination preferences, uploaded documents summary, and {visa_type_label} journey status for {destination_country}",
         "_file_purpose": f"Use this data to provide personalized {destination_country} {visa_type_label} guidance based on the student's current status and documents",
 
         # Student Profile Information
@@ -1505,7 +1505,10 @@ def save_student_profile_to_r2(
         },
         "user_account": user_account_snapshot,
 
-        # Documentation Preferences
+        # Destination preferences (the "Destination Preferences" card in the UI).
+        # The JSON key below deliberately stays "documentation_preferences": it is a
+        # persisted R2 snapshot contract read back by ai_chat.py. Renaming it would
+        # silently drop intake/destination from AI context for existing snapshots.
         "documentation_preferences": {
             "target_country": destination_country,
             "destination_country_code": _scope_country,

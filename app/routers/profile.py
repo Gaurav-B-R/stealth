@@ -447,7 +447,7 @@ def update_documentation_preferences(
     _refresh_student_profile_snapshot_safe(db=db, user_id=current_user.id)
     
     return {
-        "message": "Documentation preferences updated successfully",
+        "message": "Destination preferences updated successfully",
         "preferences": {
             "country": current_user.preferred_country,
             "intake": current_user.preferred_intake,

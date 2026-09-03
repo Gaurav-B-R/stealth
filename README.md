@@ -8,7 +8,7 @@ An AI-powered study-abroad platform built with FastAPI and Python. Students can 
 - 📄 **Document Uploads**: Upload and manage visa-related documents with metadata
 - 🔒 **Zero-Knowledge Encryption**: Files encrypted with a key derived from the user's password
 - 🧠 **AI Validation & Extraction**: Automated document validation and text extraction
-- 🧭 **Visa Journey Dashboard**: Track progress and documentation preferences
+- 🧭 **Visa Journey Dashboard**: Track progress and destination preferences
 - 💬 **AI Chat Assistant**: Context-aware guidance based on uploaded documents
 - 🎨 **Modern UI**: Beautiful, responsive design with smooth animations
 
@@ -81,7 +81,7 @@ An AI-powered study-abroad platform built with FastAPI and Python. Students can 
    - Click "Login" in the navigation bar
    - Enter your email and password
 
-3. **Set Documentation Preferences**:
+3. **Set Destination Preferences**:
    - Open your dashboard
    - Choose target country, intake, and year
 

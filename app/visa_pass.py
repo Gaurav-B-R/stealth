@@ -220,7 +220,7 @@ def pass_benefits() -> list[str]:
     return [
         "Unlimited Chrome-extension usage",
         "Unlimited document audits (Gemini)",
-        "Unlimited AI university shortlists — QS + national rank, reach/match/safety, "
+        "Unlimited AI university shortlists — QS + national rank, high/medium/low chance of admission, "
         "estimated tuition and application fees",
         "Unlimited AI SOP / motivation-letter drafts and refinements",
         f"{PASS_COURSE_FINDER_RUNS} AI Course Finder shortlists — verified courses, fees, "

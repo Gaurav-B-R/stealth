@@ -315,7 +315,7 @@ STUDENT INFORMATION:
 - Current Situation / Story: {student_profile.get('current_situation_story', 'Not provided')}
 - Account Created: {student_profile.get('account_created', 'Unknown')}
 
-DOCUMENTATION PREFERENCES:
+DESTINATION PREFERENCES:
 - Destination Country: {target_country}
 - Visa Type: {visa_type}
 - Intake Semester: {doc_prefs.get('intake_semester', 'Not set')}
