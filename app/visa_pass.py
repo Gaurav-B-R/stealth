@@ -66,8 +66,14 @@ FREE_SOP_GENERATIONS = int(os.getenv("VISA_PASS_FREE_SOP", "3") or "3")
 # per-request search fee (not just tokens) would break the ≤MAX_SERVE_COST_PAISE
 # serve-cost assumption under unlimited use. Browsing the catalog is always free —
 # only the AI generation action is metered (same boundary as enterprise).
-FREE_COURSE_FINDER_RUNS = int(os.getenv("VISA_PASS_FREE_COURSE_FINDER", "1") or "1")
+FREE_COURSE_FINDER_RUNS = int(os.getenv("VISA_PASS_FREE_COURSE_FINDER", "2") or "2")
 PASS_COURSE_FINDER_RUNS = int(os.getenv("VISA_PASS_COURSE_FINDER_RUNS", "15") or "15")
+# Free tier sees only the first N picks of a Course Finder shortlist in full; every
+# later pick is returned masked (no identifying fields) and rendered blurred behind a
+# Visa-Pass CTA — the same hook as the red-flag scan's one-revealed-flag. Masking is
+# applied at READ time from the stored full result, so buying the pass unlocks the
+# student's past shortlists too (and an expired pass re-locks them).
+FREE_COURSE_FINDER_VISIBLE_RESULTS = int(os.getenv("VISA_PASS_FREE_COURSE_FINDER_VISIBLE", "2") or "2")
 
 # Hard-paywall when the free quota is exhausted (the whole point of the model).
 ENFORCE = os.getenv("VISA_PASS_ENFORCE", "true").strip().lower() in {"1", "true", "yes", "on"}
@@ -204,7 +210,7 @@ def feature_entitlement(subscription: models.Subscription, feature_key: str) -> 
     else:
         remaining = max(limit - used, 0)
         locked = used >= limit
-    return {
+    out = {
         "key": feature["key"],
         "label": feature["label"],
         "tier": "pass" if is_pass else "free",
@@ -214,6 +220,10 @@ def feature_entitlement(subscription: models.Subscription, feature_key: str) -> 
         "unlimited": unlimited,
         "locked": bool(locked),
     }
+    if feature["key"] == "course_finder":
+        # Lets every client disclose the partial reveal BEFORE a metered run is spent.
+        out["free_visible_results"] = max(0, int(FREE_COURSE_FINDER_VISIBLE_RESULTS))
+    return out
 
 
 def pass_benefits() -> list[str]:
@@ -223,7 +233,7 @@ def pass_benefits() -> list[str]:
         "Unlimited AI university shortlists — QS + national rank, high/medium/low chance of admission, "
         "estimated tuition and application fees",
         "Unlimited AI SOP / motivation-letter drafts and refinements",
-        f"{PASS_COURSE_FINDER_RUNS} AI Course Finder shortlists — verified courses, fees, "
+        f"{PASS_COURSE_FINDER_RUNS} AI Course Finder shortlists with every pick unlocked — verified courses, fees, "
         "deadlines and entry requirements for your destination",
         f"{PASS_VOICE_INTERVIEWS} full AI voice mock interviews",
         "Full red-flag reveal — no blur",

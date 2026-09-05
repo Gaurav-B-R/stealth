@@ -7,7 +7,7 @@ tables are global (no org/user scoping), only these thin routes differ:
 - GET  /api/courses/catalog         FREE advanced-filter browse (paged)
 - POST /api/courses/recommend       AI course shortlist (Visa-Pass metered)
 - GET  /api/courses/recs            the student's stored past shortlists
-- GET  /api/courses/recs/{id}       one stored shortlist (full items)
+- GET  /api/courses/recs/{id}       one stored shortlist (free tier: first picks only, rest masked)
 - POST /api/courses/recs/{id}/save  copy one recommendation onto the shortlist tab
 
 Country-specific by design: browse and AI both default to the student's profile
@@ -22,6 +22,7 @@ nothing because no AI call happens.
 """
 import json
 import os
+import re
 from typing import Optional
 
 from fastapi import APIRouter, Body, Depends, HTTPException, Request, status
@@ -153,7 +154,64 @@ def _student_history_block(db: Session, user: models.User, country_code: str) ->
     return "\n".join(lines)
 
 
-def _serialize_rec(row: models.UserCourseFinderRec, *, include_items: bool = True) -> dict:
+def _mask_items_for_free(items: list) -> list:
+    """Free tier: the first FREE_COURSE_FINDER_VISIBLE_RESULTS picks in full, every later
+    pick reduced to {locked, fit_level}. The stored row keeps the full list; the client
+    never receives a hidden pick's name, fees, requirements or URLs, so the blur cannot
+    be lifted from devtools. fit_level alone is kept as the teaser ("High chance 🔒").
+    Like the red-flag scan, masking keys off has_active_pass only — the VISA_PASS_ENFORCE
+    kill switch governs quota, never what a free account gets to see."""
+    visible = max(0, int(visa_pass.FREE_COURSE_FINDER_VISIBLE_RESULTS))
+    hidden = [it for it in items[visible:] if isinstance(it, dict)]
+    out = []
+    for i, item in enumerate(items):
+        if i < visible:
+            out.append(_scrub_hidden_names(item, hidden) if isinstance(item, dict) else item)
+            continue
+        fit = str(item.get("fit_level") or "").strip().lower() if isinstance(item, dict) else ""
+        out.append({"locked": True, "fit_level": fit if fit in {"reach", "match", "safety"} else None})
+    return out
+
+
+def _hidden_name_patterns(hidden: list) -> list:
+    """Regexes for each hidden pick's university name (case-insensitive, leading "The"
+    optional). Course names are deliberately NOT scrubbed: two picks often share one
+    ("Master of Data Science"), and a program name identifies nothing on its own."""
+    pats = []
+    for it in hidden:
+        name = re.sub(r"^(?i:the)\s+", "", str(it.get("university_name") or "").strip())
+        if len(name) >= 4:
+            pats.append(re.compile(r"(?i)\b(?:the\s+)?" + re.escape(name) + r"\b"))
+    return pats
+
+
+def _scrub_hidden_names(item: dict, hidden: list) -> dict:
+    """A visible pick's prose is generated in the same model call as the hidden ones and
+    can cross-reference them ("cheaper than Monash…") — worse, the student's own notes
+    are spliced into that prompt, so "compare every university in pick 1" is a one-run
+    bypass with no devtools. Replace any hidden university's name in the visible pick's
+    free-text fields. Exact-name only; the prompt's no-cross-reference rule covers the
+    abbreviations this cannot."""
+    pats = _hidden_name_patterns(hidden)
+    if not pats:
+        return item
+    def clean(text):
+        out = str(text)
+        for pat in pats:
+            out = pat.sub("another university", out)
+        return out
+    scrubbed = dict(item)
+    if scrubbed.get("why_recommended"):
+        scrubbed["why_recommended"] = clean(scrubbed["why_recommended"])
+    reqs = scrubbed.get("key_requirements")
+    if isinstance(reqs, list):
+        scrubbed["key_requirements"] = [clean(r) if isinstance(r, str) else r for r in reqs]
+    return scrubbed
+
+
+def _serialize_rec(row: models.UserCourseFinderRec, *, include_items: bool = True, reveal_all: bool) -> dict:
+    """`reveal_all` is deliberately required (no default): forgetting it must fail at the
+    call site rather than ship a free account the full shortlist."""
     try:
         items = json.loads(row.recommendations) if row.recommendations else []
         if not isinstance(items, list):
@@ -166,21 +224,28 @@ def _serialize_rec(row: models.UserCourseFinderRec, *, include_items: bool = Tru
             query = {}
     except Exception:
         query = {}
+    visible = max(0, int(visa_pass.FREE_COURSE_FINDER_VISIBLE_RESULTS))
+    locked_count = 0 if reveal_all else max(0, len(items) - visible)
     data = {
         "id": int(row.id),
         "country_code": row.country_code,
         "degree_level": row.degree_level,
         "discipline": row.discipline,
         "query": query,
-        "summary": row.summary,
+        # The overview is written with the whole shortlist in view and routinely names
+        # the universities in it — with picks hidden it would hand over exactly what the
+        # blur withholds, so a free account gets no summary until the pass unlocks it.
+        "summary": None if locked_count else row.summary,
         "catalog_based": bool(row.catalog_based),
         "grounded": bool(row.grounded),
         "created_at": row.created_at.isoformat() if row.created_at else None,
         "count": len(items),
+        # Free tier: how many picks are masked (0 for pass holders) — drives the CTA.
+        "locked_count": locked_count,
         # model_used deliberately omitted — internal only, same as enterprise.
     }
     if include_items:
-        data["recommendations"] = items
+        data["recommendations"] = items if reveal_all else _mask_items_for_free(items)
     return data
 
 
@@ -417,7 +482,7 @@ def courses_recommend(
 
     return {
         "destination_country": course_catalog.country_name(code),
-        "rec": _serialize_rec(rec_row),
+        "rec": _serialize_rec(rec_row, reveal_all=visa_pass.has_active_pass(subscription)),
         "entitlement": visa_pass.feature_entitlement(subscription, FEATURE_KEY),
     }
 
@@ -431,6 +496,9 @@ def courses_recs_list(
     """The student's stored past shortlists (newest first) — a metered result is
     never lost to a reload."""
     take = max(1, min(int(limit or 20), 50))
+    # Subscription first: resolving it can commit (pass expiry downgrade), which would
+    # expire already-loaded rows and re-SELECT each one during serialization.
+    reveal_all = visa_pass.has_active_pass(get_or_create_user_subscription(db, current_user.id))
     rows = (
         db.query(models.UserCourseFinderRec)
         .filter(models.UserCourseFinderRec.user_id == current_user.id)
@@ -438,7 +506,7 @@ def courses_recs_list(
         .limit(take)
         .all()
     )
-    return {"recs": [_serialize_rec(r, include_items=False) for r in rows]}
+    return {"recs": [_serialize_rec(r, include_items=False, reveal_all=reveal_all) for r in rows]}
 
 
 @router.get("/recs/{rec_id}")
@@ -447,6 +515,10 @@ def courses_rec_detail(
     current_user: models.User = Depends(get_current_active_user),
     db: Session = Depends(get_db),
 ):
+    # Masked from the stored full row at read time: a pass bought after the run
+    # unlocks it here, an expired pass re-locks it. (Subscription before the row —
+    # see courses_recs_list.)
+    reveal_all = visa_pass.has_active_pass(get_or_create_user_subscription(db, current_user.id))
     row = (
         db.query(models.UserCourseFinderRec)
         .filter(
@@ -457,7 +529,7 @@ def courses_rec_detail(
     )
     if not row:
         raise HTTPException(status_code=404, detail="Shortlist not found.")
-    return {"rec": _serialize_rec(row)}
+    return {"rec": _serialize_rec(row, reveal_all=reveal_all)}
 
 
 @router.post("/recs/{rec_id}/save")
@@ -469,6 +541,7 @@ def courses_rec_save_to_shortlist(
 ):
     """Copy one recommendation onto the student's university shortlist (free,
     idempotent on university+program — clicking twice must not duplicate)."""
+    has_pass = visa_pass.has_active_pass(get_or_create_user_subscription(db, current_user.id))
     row = (
         db.query(models.UserCourseFinderRec)
         .filter(
@@ -485,6 +558,14 @@ def courses_rec_save_to_shortlist(
         items = []
     if not isinstance(items, list) or payload.index >= len(items):
         raise HTTPException(status_code=400, detail="Recommendation not found in this shortlist.")
+    # The client hides the save button on masked picks; this is the server-side half —
+    # otherwise POSTing a hidden index would copy the pick's real name/fees onto the
+    # shortlist and lift the blur.
+    if payload.index >= max(0, int(visa_pass.FREE_COURSE_FINDER_VISIBLE_RESULTS)) and not has_pass:
+        raise HTTPException(
+            status_code=status.HTTP_402_PAYMENT_REQUIRED,
+            detail="This pick is hidden on the free plan — unlock the Visa Success Pass to save it.",
+        )
     item = items[payload.index]
     if not isinstance(item, dict):
         raise HTTPException(status_code=400, detail="Recommendation not found in this shortlist.")

@@ -22,12 +22,15 @@ This guide helps users navigate the Rilono web app UI quickly.
     `High chance` (comfortably within the student's profile), `Medium chance` (a realistic fit)
     or `Low chance` (ambitious). It is Rilono AI's estimate from the profile the student entered,
     never an admission decision, and a good shortlist deliberately mixes all three.
+  - Free plan: an AI shortlist shows only its first 2 picks in full; the rest are blurred with a
+    `Get the Visa Success Pass` prompt. The pass unlocks every pick, including in past shortlists.
 - `Documents` : Upload and manage documents, validation status, stage mapping
-- `Interview Prep` (sub-tab labels adapt to the student's destination — e.g. a US student
-  sees "F-1 Visa Interview Prep", an Australian student sees "Student Visa Interview Prep";
-  refer to them by the destination-appropriate name, never the US one for a non-US student) :
-  - `<Visa> Interview Prep (Rilono AI)` — guided question-by-question coaching
-  - `<Visa> Mock Interview (Rilono AI)` — full mock interview simulation
+- `Interview Prep` (the sidebar sub-tabs are short; each module's page header carries the
+  student's destination visa name — "F-1 Visa", "UK Student Visa", "Canada Study Permit",
+  "Australian Student Visa" or "German Student Visa" + "Interview Prep". Refer to the visa by the
+  destination-appropriate name, never the US one for a non-US student) :
+  - `Guided Prep (Rilono AI)` — question-by-question coaching (page header `<Visa> Interview Prep (Rilono AI)`)
+  - `Mock Interview (Rilono AI)` — full mock interview simulation (page header `<Visa> Mock Interview (Rilono AI)`)
   - `Recent Interview Experiences` (US) / `Recent Applicant Experiences` (other destinations)
 - `Rilono Copilot` : Chrome extension tab
 - `News` : Latest visa and student updates for the student's destination

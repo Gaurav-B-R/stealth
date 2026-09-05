@@ -256,6 +256,7 @@
         ["red_flag_scan","red-flag scan","red-flag scans"],
         ["university_shortlist","AI university shortlist","AI university shortlists"],
         ["sop_generator","SOP draft or edit","SOP drafts or edits"],
+        ["course_finder","AI Course Finder run (top picks only)","AI Course Finder runs (top picks only)"],
       ].filter(p=>{ const q=f&&f[p[0]]; return q && !q.unlimited && q.limit>0 && typeof q.remaining==="number"; })
        .map(p=>{ const n=Math.max(f[p[0]].remaining,0); return n+" "+(n===1?p[1]:p[2]); });
       if(!parts.length) return "You're on the free plan.";

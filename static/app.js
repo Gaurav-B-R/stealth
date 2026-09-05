@@ -4504,7 +4504,8 @@ function cfRenderAI() {
           <button id="cfAiRunBtn" onclick="cfRunRecommend()" style="background:linear-gradient(135deg,#6366f1,#a855f7);color:#fff;border:none;border-radius:10px;padding:10px 18px;font-weight:700;cursor:pointer">Generate shortlist</button>
           <span id="cfAiMsg" style="font-size:13px;color:#be123c"></span>
         </div>
-        ${locked ? `<div style="margin-top:10px;font-size:12.5px;color:#64748b">${ent.tier === 'pass' ? 'You have used all your Course Finder runs on this pass.' : 'You have used your free Course Finder run.'} <a href="/visa-pass" style="color:#9aa0ff;font-weight:600">Get the Visa Pass</a>.</div>` : ''}
+        ${locked ? `<div style="margin-top:10px;font-size:12.5px;color:#64748b">${ent.tier === 'pass' ? 'You have used all your Course Finder runs on this pass.' : `You have used your ${ent.limit === 1 ? 'free Course Finder run' : `${ent.limit} free Course Finder runs`}.`} <a href="/visa-pass" onclick="handleUpgradeToPro('course_finder'); return false;" style="color:#9aa0ff;font-weight:600">Get the Visa Success Pass</a>.</div>` : ''}
+        ${!locked && ent.tier === 'free' && ent.free_visible_results > 0 ? `<div style="margin-top:10px;font-size:12.5px;color:#64748b">Free plan: your top ${ent.free_visible_results} pick${ent.free_visible_results === 1 ? '' : 's'} are shown in full — the Visa Success Pass reveals every pick.</div>` : ''}
         `}
       `)}
       <div id="cfActiveRec" style="margin-top:14px">${_cf.activeRec ? cfActiveRecHtml(_cf.activeRec) : ''}</div>
@@ -4614,12 +4615,52 @@ async function cfRunRecommend() {
     }
 }
 
+// Free tier: the server returns every pick past the visible window as {locked, fit_level}
+// only — nothing here is real data, so the blur is cosmetic on top of a real gate. The fit
+// pill stays readable as the teaser; the body is deliberately worded as "hidden", never as
+// a plausible sentence about the course (find-in-page and reader mode see through blur).
+function cfLockedRecCardHtml(it, index, rec) {
+    const fit = CF_FIT[it.fit_level];
+    const pill = fit
+        ? `<span title="${escapeAttr(fit.hint)}" style="font-size:10.5px;font-weight:700;color:#fff;background:${fit.color};border-radius:999px;padding:3px 10px">${fit.label}</span>`
+        : '';
+    const level = cfLevelLabel(rec && rec.degree_level) || 'Program';
+    const chip = (t) => `<span style="font-size:11px;background:#f1f5f9;color:#334155;border-radius:999px;padding:2px 9px">${t}</span>`;
+    return `<div role="group" aria-label="Hidden pick ${index + 1}" style="background:#ffffff;border:1px dashed #cbd5e1;border-radius:14px;padding:14px 16px">
+        <div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap">${pill}<span style="font-size:10.5px;font-weight:700;color:#64748b">🔒 Pick ${index + 1}</span></div>
+        <div style="position:relative">
+          <div aria-hidden="true" style="filter:blur(5px);user-select:none;pointer-events:none">
+            <div style="font-weight:700;color:#0f172a;margin-top:6px">${escapeHtml(level)} — name hidden</div>
+            <div style="font-size:12.5px;color:#64748b">University hidden · Location hidden</div>
+            <div style="font-size:12.5px;color:#334155;margin-top:6px">Why this pick fits your profile is hidden on the free plan. Unlock the pass to read the reasoning, fees, intakes and entry requirements.</div>
+            <div style="font-size:12px;color:#64748b;margin-top:6px">Tuition hidden · Intakes hidden · Deadline hidden</div>
+            <div style="display:flex;gap:5px;flex-wrap:wrap;margin-top:7px">${chip('Requirement hidden')}${chip('Requirement hidden')}</div>
+          </div>
+          <div style="position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:8px;padding:12px;text-align:center;background:linear-gradient(180deg,rgba(255,255,255,.3),rgba(255,255,255,.88))">
+            <div style="font-weight:800;color:#0f172a;font-size:13px">Hidden on the free plan</div>
+            <a href="/visa-pass" onclick="handleUpgradeToPro('course_finder'); return false;" aria-label="Get the Visa Success Pass to unlock pick ${index + 1}" style="background:linear-gradient(135deg,#6366f1,#a855f7);color:#fff;border-radius:9px;padding:7px 14px;font-weight:700;font-size:12px;text-decoration:none">Unlock with the Visa Success Pass</a>
+          </div>
+        </div>
+      </div>`;
+}
+
+// One purchase banner, rendered as a full-width grid row between the picks the student
+// got and the ones they didn't — so they see their real results first.
+function cfLockedBannerHtml(rec) {
+    const n = rec.locked_count;
+    return `<div style="grid-column:1/-1;display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap;background:linear-gradient(135deg,rgba(99,102,241,.08),rgba(168,85,247,.08));border:1px solid rgba(99,102,241,.25);border-radius:12px;padding:10px 14px">
+        <div style="font-size:13px;color:#0f172a"><strong>🔒 ${n} more pick${n === 1 ? '' : 's'} hidden on the free plan.</strong> The Visa Success Pass unlocks every pick in this shortlist — and in the ones you run next.</div>
+        <a href="/visa-pass" onclick="handleUpgradeToPro('course_finder'); return false;" style="background:linear-gradient(135deg,#6366f1,#a855f7);color:#fff;border-radius:9px;padding:8px 16px;font-weight:700;font-size:12.5px;text-decoration:none;white-space:nowrap">Get the Visa Success Pass</a>
+      </div>`;
+}
+
 function cfActiveRecHtml(rec) {
     const items = rec.recommendations || [];
     const srcBadge = rec.catalog_based
         ? '<span style="font-size:11px;font-weight:700;color:#065f46;background:rgba(6,95,70,.08);border-radius:999px;padding:2px 9px">✓ Catalog data</span>'
         : '<span style="font-size:11px;font-weight:700;color:#1d4ed8;background:rgba(29,78,216,.08);border-radius:999px;padding:2px 9px">🌐 Live research</span>';
     const cards = items.map((it, i) => {
+        if (it && it.locked) return cfLockedRecCardHtml(it, i, rec);
         const fit = CF_FIT[it.fit_level] || CF_FIT.match;
         const site = cfSafeUrl(it.website_url);
         const page = cfSafeUrl(it.course_url);
@@ -4645,7 +4686,9 @@ function cfActiveRecHtml(rec) {
               <button onclick="cfSaveRecItem(${i})" ${saved ? 'disabled' : ''} style="margin-left:auto;background:${saved ? '#dcfce7' : '#f1f5f9'};color:${saved ? '#065f46' : '#0f172a'};border:1px solid #e2e8f0;border-radius:9px;padding:7px 14px;font-weight:700;font-size:12px;cursor:${saved ? 'default' : 'pointer'}">${saved ? '✓ Added' : '+ Add to my shortlist'}</button>
             </div>
           </div>`;
-    }).join('');
+    });
+    const firstLocked = items.findIndex((it) => it && it.locked);
+    if (rec.locked_count > 0 && firstLocked >= 0) cards.splice(firstLocked, 0, cfLockedBannerHtml(rec));
     return CF_CARD(`
         <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:8px">
           <div style="font-weight:800;font-size:15px;color:#0f172a">Your shortlist${rec.query && rec.query.field_of_study ? ` — ${escapeHtml(rec.query.field_of_study)}` : ''}</div>
@@ -4653,7 +4696,7 @@ function cfActiveRecHtml(rec) {
         </div>
         ${rec.summary ? `<div style="font-size:13px;color:#334155;margin-bottom:12px">${escapeHtml(rec.summary)}</div>` : ''}
         <div style="font-size:12px;color:#64748b;margin:0 0 10px">High / Medium / Low chance is Rilono AI's estimate from the profile you entered — not an admission decision. A good shortlist mixes all three.</div>
-        <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(290px,1fr));gap:12px">${cards}</div>`);
+        <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(290px,1fr));gap:12px">${cards.join('')}</div>`);
 }
 
 async function cfSaveRecItem(index) {
@@ -4665,7 +4708,12 @@ async function cfSaveRecItem(index) {
         const el = document.getElementById('cfActiveRec');
         if (el) el.innerHTML = cfActiveRecHtml(rec);
         showMessage(res.already_saved ? 'Already on your shortlist.' : 'Added to your shortlist.', 'success');
-    } catch (e) { showMessage(e.message || 'Could not save to your shortlist.', 'error'); }
+    } catch (e) {
+        showMessage(e.message || 'Could not save to your shortlist.', 'error');
+        // 402 here means the pass lapsed since this shortlist was fetched unmasked —
+        // re-fetch so the cards the server now hides stop looking saveable.
+        if (e.status === 402 && rec.id) cfOpenRec(rec.id);
+    }
 }
 
 async function cfLoadHistory() {
@@ -4684,7 +4732,7 @@ async function cfLoadHistory() {
         return `<div onclick="cfOpenRec(${r.id})" style="display:flex;justify-content:space-between;gap:10px;padding:10px 0;border-bottom:1px solid #f1f5f9;cursor:pointer">
             <div style="min-width:0">
               <div style="font-weight:600;color:#0f172a;font-size:13px">${bits || 'Course shortlist'}</div>
-              <div style="font-size:11.5px;color:#94a3b8">${r.count} picks · ${r.catalog_based ? 'catalog data' : 'live research'}</div>
+              <div style="font-size:11.5px;color:#94a3b8">${r.locked_count > 0 ? `${r.count - r.locked_count} of ${r.count} picks visible` : `${r.count} picks`} · ${r.catalog_based ? 'catalog data' : 'live research'}</div>
             </div>
             <span style="font-size:11.5px;color:#94a3b8;white-space:nowrap">${escapeHtml(when)}</span>
           </div>`;
@@ -4693,6 +4741,20 @@ async function cfLoadHistory() {
         <div style="font-weight:800;font-size:14px;color:#0f172a;margin-bottom:4px">Your past shortlists</div>
         <div style="font-size:12px;color:#64748b;margin-bottom:6px">Every run is saved — a metered shortlist is never lost.</div>
         ${rows}`);
+}
+
+// A pass bought mid-session: the open shortlist was served masked, so re-fetch it (the
+// server now reveals every pick) and refresh the entitlement chip + disclosure line.
+// Called from the subscription-change notifier; a no-op if Course Finder was never opened.
+async function cfOnPassActivated() {
+    try {
+        if (_cfMeta) _cfMeta = await coursesFetch('/meta');
+        if (_cf.activeRec && _cf.activeRec.locked_count > 0 && _cf.activeRec.id) {
+            const data = await coursesFetch(`/recs/${_cf.activeRec.id}`);
+            if (data && data.rec) _cf.activeRec = data.rec;
+        }
+        if (_cf.tab === 'ai' && document.getElementById('cfPanel')) { cfRenderAI(); cfLoadHistory(); }
+    } catch (e) { /* the next tab open re-fetches anyway */ }
 }
 
 async function cfOpenRec(recId) {
@@ -4724,7 +4786,7 @@ function updateVisaJourneyHeading() {
 }
 
 // Per-destination phrases for the AI assistant copy. US keeps its F-1 wording; other countries adapt.
-const VISA_JOURNEY_PHRASE = { US: 'F-1 visa', UK: 'UK student visa', CA: 'Canada study permit', AU: 'Australia student visa', DE: 'German student visa' };
+const VISA_JOURNEY_PHRASE = { US: 'F-1 visa', UK: 'UK student visa', CA: 'Canada study permit', AU: 'Australian student visa', DE: 'German student visa' };
 function currentVisaJourneyPhrase() {
     const code = (currentUser && currentUser.destination_country_code) || 'US';
     return VISA_JOURNEY_PHRASE[code] || 'student visa';
@@ -4737,7 +4799,9 @@ function currentVisaStagesPhrase() {
     return (COPILOT_TAB_COPY[code] || COPILOT_TAB_COPY.US).stages;
 }
 // Shorter visa prefix used inside the interviews module (the sidebar is narrow).
-const VISA_INTERVIEW_PREFIX = { US: 'F-1 Visa', UK: 'UK Student Visa', CA: 'Study Permit', AU: 'Student Visa', DE: 'German Visa' };
+// Title-case twin of VISA_JOURNEY_PHRASE / VISA_INTERVIEW_CONTEXT — the page headers must name
+// the visa exactly the way the coaching placeholder, chat tooltip and AI persona do.
+const VISA_INTERVIEW_PREFIX = { US: 'F-1 Visa', UK: 'UK Student Visa', CA: 'Canada Study Permit', AU: 'Australian Student Visa', DE: 'German Student Visa' };
 
 // Rilono Copilot tab + AI-chat welcome copy per destination (the HTML defaults to US F-1 wording).
 const COPILOT_TAB_COPY = {
@@ -4779,10 +4843,13 @@ function updateVisaSectionLabels() {
     setText('visaNavLabel', label);
     setText('visaSectionHeading', label);
 
-    // Interviews module titles + sub-nav (the HTML hardcodes US F-1 wording).
+    // Interviews module titles carry the destination's visa name; the sidebar sub-nav
+    // does NOT — it sits under "Interview Prep" in a narrow column, and "UK Student Visa
+    // Interview Prep (Rilono AI)" / "UK Student Visa Mock Interview (Rilono AI)" wrapped
+    // to three lines each and repeated the visa name three times on one screen.
     const prefix = VISA_INTERVIEW_PREFIX[code] || 'Student Visa';
-    setText('subnavLabelPrep', `${prefix} Interview Prep (Rilono AI)`);
-    setText('subnavLabelMock', `${prefix} Mock Interview (Rilono AI)`);
+    setText('subnavLabelPrep', 'Guided Prep (Rilono AI)');
+    setText('subnavLabelMock', 'Mock Interview (Rilono AI)');
     setText('prepModuleTitle', `🎯 ${prefix} Interview Prep (Rilono AI)`);
     setText('mockModuleTitle', `🧠 ${prefix} Mock Interview (Rilono AI)`);
     setText('prepCoachingPlaceholder', `Start Prep Session to begin a guided ${currentVisaJourneyPhrase()} interview coaching flow.`);
@@ -5203,6 +5270,7 @@ function maybeAddSubscriptionChangeNotifications(previousSubscription, nextSubsc
 
     if (previousSnapshot.plan !== nextSnapshot.plan) {
         if (nextSnapshot.plan === 'pro') {
+            cfOnPassActivated();
             addNotification(
                 'Visa Success Pass Active',
                 'Your Visa Success Pass is now active. Premium features are unlocked.',
