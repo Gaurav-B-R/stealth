@@ -120,15 +120,11 @@ def _read_decrypted_r2_text(r2_client, key: str) -> str:
 
 
 def _build_gemini_model(model_name: str = MODEL_NAME):
-    if gemini_utils.USE_VERTEX_AI and gemini_utils.VERTEX_AI_AVAILABLE:
-        from vertexai.generative_models import GenerativeModel
-
-        return GenerativeModel(model_name), "vertex"
-
-    if gemini_utils.GENAI_AVAILABLE and gemini_utils.genai:
-        return gemini_utils.genai.GenerativeModel(model_name), "genai"
-
-    raise RuntimeError("Gemini is not configured (service account or API key missing)")
+    if not gemini_utils.is_ai_configured():
+        raise RuntimeError("Gemini is not configured for the selected provider")
+    if gemini_utils.USE_VERTEX_AI:
+        return gemini_utils.GenerativeModel(model_name), "vertex"
+    return gemini_utils.genai.GenerativeModel(model_name), "genai"
 
 
 def _is_due_for_today(now_utc: datetime) -> bool:

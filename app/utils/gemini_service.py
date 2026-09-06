@@ -9,88 +9,98 @@ from PIL import Image
 from pathlib import Path
 from datetime import datetime
 
-# Configure authentication - Check for service account first
+# Keep the existing generic credential path for non-Gemini consumers such as
+# officer_tts. A dedicated Gemini credential does not change their billing/auth.
 SERVICE_ACCOUNT_PATH = os.getenv("GOOGLE_APPLICATION_CREDENTIALS", "service_account.json")
-GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "")
-USE_VERTEX_AI = False
-VERTEX_AI_AVAILABLE = False
-
-# Check if service account file exists in current directory
 if not os.path.exists(SERVICE_ACCOUNT_PATH):
-    # Try project root directory
     current_dir_service_account = Path(__file__).parent.parent.parent / "service_account.json"
     if current_dir_service_account.exists():
         SERVICE_ACCOUNT_PATH = str(current_dir_service_account)
 
-# Import the Vertex AI stack ONLY when a service account file is actually present.
-# The aiplatform/vertexai import tree costs ~135 MB of resident memory, and every
-# use of GenerativeModel/Part in this module is gated on USE_VERTEX_AI — so when
-# the file is absent (every Render boot logs "Using Gemini API key"), importing it
-# eagerly was pure dead weight that pushed the 512 MB Starter instance into OOM.
-if os.path.exists(SERVICE_ACCOUNT_PATH):
-    try:
-        from google.cloud import aiplatform
-        from vertexai.generative_models import GenerativeModel, Part
-        VERTEX_AI_AVAILABLE = True
-    except ImportError:
-        print("⚠ Warning: google-cloud-aiplatform not installed. Install with: pip install google-cloud-aiplatform")
-
-# Also import standard Gemini API as fallback
+GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "")
+GEMINI_PROVIDER = os.getenv("GEMINI_PROVIDER", "developer").strip().lower()
+if GEMINI_PROVIDER not in {"developer", "vertex"}:
+    raise RuntimeError("GEMINI_PROVIDER must be developer or vertex")
+USE_VERTEX_AI = GEMINI_PROVIDER == "vertex"
+VERTEX_AI_AVAILABLE = False
 GENAI_AVAILABLE = False
 genai = None
-try:
-    import google.generativeai as genai
-    GENAI_AVAILABLE = True
-except ImportError:
-    GENAI_AVAILABLE = False
-    print("⚠ Warning: google-generativeai not installed. Install with: pip install google-generativeai")
+CLOUD_PROJECT = (os.getenv("GOOGLE_CLOUD_PROJECT", "") or os.getenv("GCP_PROJECT", "")).strip()
+CLOUD_LOCATION = (os.getenv("GOOGLE_CLOUD_LOCATION", "") or os.getenv("GCP_LOCATION", "global")).strip()
+CLOUD_SERVICE_ACCOUNT_PATH = os.getenv("GEMINI_VERTEX_CREDENTIALS", SERVICE_ACCOUNT_PATH)
+_CLOUD_CREDENTIALS = None
+_GENAI_CLIENT = None
 
-# Configure authentication
-if os.path.exists(SERVICE_ACCOUNT_PATH) and VERTEX_AI_AVAILABLE:
-    # Use Vertex AI with service account
-    os.environ["GOOGLE_APPLICATION_CREDENTIALS"] = SERVICE_ACCOUNT_PATH
-    USE_VERTEX_AI = True
-    # Initialize Vertex AI
+
+def get_genai_client(http_options=None):
+    """Modern SDK client using only the explicitly selected Gemini provider.
+
+    Explicit credentials prevent the SDK from picking up GEMINI_API_KEY from the
+    environment in Cloud mode. The old key can remain for unrelated Cloud TTS.
+    """
+    global _GENAI_CLIENT
+    if not is_ai_configured():
+        raise RuntimeError("The selected Gemini provider is not configured")
+    if http_options is None and _GENAI_CLIENT is not None:
+        return _GENAI_CLIENT
+    from google import genai as modern_genai
+    if USE_VERTEX_AI:
+        client = modern_genai.Client(
+            enterprise=True, project=CLOUD_PROJECT, location=CLOUD_LOCATION,
+            credentials=_CLOUD_CREDENTIALS, http_options=http_options,
+        )
+    else:
+        client = modern_genai.Client(
+            enterprise=False, api_key=GEMINI_API_KEY, http_options=http_options,
+        )
+    if http_options is None:
+        _GENAI_CLIENT = client
+    return client
+
+
+if USE_VERTEX_AI:
+    # Use the current SDK without the heavyweight google-cloud-aiplatform stack.
+    from functools import partial
+    from types import SimpleNamespace
+    from app.utils.gemini_cloud import GenerativeModel as CloudGenerativeModel, Part
+
+    GenerativeModel = partial(CloudGenerativeModel, client_factory=get_genai_client)
+    # Existing direct legacy-model callers must select the same Cloud provider.
+    genai = SimpleNamespace(GenerativeModel=GenerativeModel)
     try:
-        # Get project ID from service account JSON
-        import json
-        with open(SERVICE_ACCOUNT_PATH, 'r') as f:
-            service_account_info = json.load(f)
-            project_id = service_account_info.get('project_id', '')
-            location = os.getenv("GCP_LOCATION", "us-central1")
-        
-        if project_id:
-            aiplatform.init(project=project_id, location=location)
-            print(f"✓ Using Vertex AI with service account: {SERVICE_ACCOUNT_PATH}")
-            print(f"  Project: {project_id}, Location: {location}")
-        else:
-            print("⚠ Warning: Could not find project_id in service account JSON")
-            USE_VERTEX_AI = False
-    except Exception as e:
-        print(f"⚠ Warning: Failed to initialize Vertex AI: {str(e)}")
-        USE_VERTEX_AI = False
-
-if not USE_VERTEX_AI:
-    # Validate API key format (should start with AIza for Gemini)
+        from google.oauth2 import service_account
+        if not CLOUD_PROJECT or not CLOUD_LOCATION:
+            raise ValueError("Cloud project and location are required")
+        _CLOUD_CREDENTIALS = service_account.Credentials.from_service_account_file(
+            CLOUD_SERVICE_ACCOUNT_PATH,
+            scopes=["https://www.googleapis.com/auth/cloud-platform"],
+        )
+        VERTEX_AI_AVAILABLE = True
+        GENAI_AVAILABLE = True
+        print(f"✓ Gemini provider: Google Cloud; project={CLOUD_PROJECT}; location={CLOUD_LOCATION}")
+    except Exception as exc:
+        # Keep Cloud selected even on failure: never resume the old paid key.
+        print(f"⚠ Gemini Cloud credentials unavailable ({type(exc).__name__}); AI requests are disabled")
+else:
+    try:
+        import google.generativeai as genai
+        GENAI_AVAILABLE = True
+    except ImportError:
+        print("⚠ Warning: google-generativeai is not installed")
     if GEMINI_API_KEY and not GEMINI_API_KEY.startswith("AIza"):
-        # Invalid API key format (likely a Resend key or other service key)
-        print(f"⚠ Warning: GEMINI_API_KEY doesn't appear to be a valid Gemini API key (should start with 'AIza'). Ignoring it.")
+        print("⚠ Warning: GEMINI_API_KEY has an invalid format; ignoring it")
         GEMINI_API_KEY = ""
-    
     if GEMINI_API_KEY and GENAI_AVAILABLE:
-        # Use standard Gemini API with API key
         genai.configure(api_key=GEMINI_API_KEY)
         print("✓ Using Gemini API key for authentication")
     else:
-        print("⚠ Warning: Neither service account JSON nor valid GEMINI_API_KEY found. Document text extraction will be disabled.")
+        print("⚠ Warning: Gemini Developer API key is not configured")
 
 
 def is_ai_configured() -> bool:
-    """True when Gemini is usable via either the Vertex AI service account path
-    or a valid Gemini API key. Callers use this to fail fast with a clean
-    'temporarily unavailable' message instead of a 500 when AI isn't configured."""
-    if USE_VERTEX_AI and VERTEX_AI_AVAILABLE:
-        return True
+    """Whether the selected provider has usable local credential configuration."""
+    if USE_VERTEX_AI:
+        return bool(VERTEX_AI_AVAILABLE and _CLOUD_CREDENTIALS is not None)
     key = (GEMINI_API_KEY or "").strip()
     return bool(GENAI_AVAILABLE and key and key.startswith("AIza"))
 
@@ -360,10 +370,7 @@ def validate_and_extract_document(
     }
     """
     # Check if we have authentication configured
-    has_service_account = os.path.exists(SERVICE_ACCOUNT_PATH)
-    has_valid_api_key = GEMINI_API_KEY and GEMINI_API_KEY.startswith("AIza")
-    
-    if not has_service_account and not has_valid_api_key:
+    if not is_ai_configured():
         return None
     
     try:
@@ -570,9 +577,9 @@ Remember: Output ONLY the JSON object, nothing else."""
             
             if USE_VERTEX_AI and VERTEX_AI_AVAILABLE:
                 img_bytes = io.BytesIO()
-                image.save(img_bytes, format='JPEG')
+                image.save(img_bytes, format='PNG')
                 img_bytes.seek(0)
-                image_part = Part.from_data(img_bytes.read(), mime_type="image/jpeg")
+                image_part = Part.from_data(img_bytes.read(), mime_type="image/png")
                 response = _gen(
                     document_model_candidates, [validation_prompt, image_part]
                 )
@@ -693,9 +700,9 @@ Remember: Output ONLY the JSON object, nothing else."""
                 
                 if USE_VERTEX_AI and VERTEX_AI_AVAILABLE:
                     img_bytes = io.BytesIO()
-                    image.save(img_bytes, format='JPEG')
+                    image.save(img_bytes, format='PNG')
                     img_bytes.seek(0)
-                    image_part = Part.from_data(img_bytes.read(), mime_type="image/jpeg")
+                    image_part = Part.from_data(img_bytes.read(), mime_type="image/png")
                     response = _gen(
                         document_model_candidates, [validation_prompt, image_part]
                     )
@@ -775,10 +782,7 @@ def extract_text_from_document(file_contents: bytes, filename: str, mime_type: s
     Returns extracted text as a string, or None if extraction fails.
     """
     # Check if we have authentication configured
-    has_service_account = os.path.exists(SERVICE_ACCOUNT_PATH)
-    has_valid_api_key = GEMINI_API_KEY and GEMINI_API_KEY.startswith("AIza")
-    
-    if not has_service_account and not has_valid_api_key:
+    if not is_ai_configured():
         return None
     
     try:
@@ -818,9 +822,9 @@ def extract_text_from_document(file_contents: bytes, filename: str, mime_type: s
             if USE_VERTEX_AI and VERTEX_AI_AVAILABLE:
                 # Vertex AI format - convert image to bytes
                 img_bytes = io.BytesIO()
-                image.save(img_bytes, format='JPEG')
+                image.save(img_bytes, format='PNG')
                 img_bytes.seek(0)
-                image_part = Part.from_data(img_bytes.read(), mime_type="image/jpeg")
+                image_part = Part.from_data(img_bytes.read(), mime_type="image/png")
                 response = _generate_content_with_fallback(
                     document_model_candidates, [prompt, image_part]
                 )
@@ -981,9 +985,9 @@ def extract_text_from_document(file_contents: bytes, filename: str, mime_type: s
                 if USE_VERTEX_AI and VERTEX_AI_AVAILABLE:
                     # Vertex AI format - convert image to bytes
                     img_bytes = io.BytesIO()
-                    image.save(img_bytes, format='JPEG')
+                    image.save(img_bytes, format='PNG')
                     img_bytes.seek(0)
-                    image_part = Part.from_data(img_bytes.read(), mime_type="image/jpeg")
+                    image_part = Part.from_data(img_bytes.read(), mime_type="image/png")
                     response = _generate_content_with_fallback(
                         document_model_candidates, [prompt, image_part]
                     )
@@ -1039,9 +1043,7 @@ def scan_document_red_flags(
     per-destination rule set the upload-validation prompt uses is injected here, so an
     AU student's CoE/OSHC/financial evidence is judged by Australian rules, not US ones.
     """
-    has_service_account = os.path.exists(SERVICE_ACCOUNT_PATH)
-    has_valid_api_key = GEMINI_API_KEY and GEMINI_API_KEY.startswith("AIza")
-    if not has_service_account and not has_valid_api_key:
+    if not is_ai_configured():
         return None
 
     try:
@@ -1071,10 +1073,10 @@ def scan_document_red_flags(
         if file_extension in SUPPORTED_IMAGE_TYPES:
             image = Image.open(io.BytesIO(file_contents))
             if USE_VERTEX_AI and VERTEX_AI_AVAILABLE:
-                buf = io.BytesIO(); image.save(buf, format="JPEG"); buf.seek(0)
+                buf = io.BytesIO(); image.save(buf, format="PNG"); buf.seek(0)
                 response = _generate_content_with_fallback(
                     model_candidates,
-                    [prompt, Part.from_data(buf.read(), mime_type="image/jpeg")],
+                    [prompt, Part.from_data(buf.read(), mime_type="image/png")],
                     usage_source="red_flag_scan",
                 )
             else:
