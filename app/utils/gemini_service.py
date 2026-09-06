@@ -9,8 +9,8 @@ from PIL import Image
 from pathlib import Path
 from datetime import datetime
 
-# Keep the existing generic credential path for non-Gemini consumers such as
-# officer_tts. A dedicated Gemini credential does not change their billing/auth.
+# Keep the generic credential path for Developer-mode compatibility. Cloud mode
+# shares its dedicated credential and selected project with officer_tts.
 SERVICE_ACCOUNT_PATH = os.getenv("GOOGLE_APPLICATION_CREDENTIALS", "service_account.json")
 if not os.path.exists(SERVICE_ACCOUNT_PATH):
     current_dir_service_account = Path(__file__).parent.parent.parent / "service_account.json"
@@ -36,7 +36,7 @@ def get_genai_client(http_options=None):
     """Modern SDK client using only the explicitly selected Gemini provider.
 
     Explicit credentials prevent the SDK from picking up GEMINI_API_KEY from the
-    environment in Cloud mode. The old key can remain for unrelated Cloud TTS.
+    environment in Cloud mode. Cloud TTS also uses the dedicated Cloud identity.
     """
     global _GENAI_CLIENT
     if not is_ai_configured():
