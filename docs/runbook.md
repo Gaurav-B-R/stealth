@@ -75,11 +75,9 @@ Force daily notification job manually:
 python -c "from app.services.daily_ai_notifications import run_daily_ai_notification_job; print(run_daily_ai_notification_job(force=True))"
 ```
 
-Force F1 news ingestion manually:
+Latest-news ingestion and automated university/course research are retired. Their scheduler, manual and forced job entrypoints are inert, including when old environment flags are enabled. The admin catalog refresh endpoint returns HTTP 410. Maintain catalog records manually; stored records and earlier research history are retained.
 
-```bash
-python -c "from app.services.f1_visa_news_ingestion import run_f1_news_ingestion_job; print(run_f1_news_ingestion_job(force=True))"
-```
+The published applicant-experiences feature retains its existing on-demand Google Search behavior and cache. It is the sole remaining allowed Gemini Search grounding path. See [catalog and news policy](catalog-and-news-policy.md).
 
 Admin-triggered daily notification run (authenticated admin session required):
 

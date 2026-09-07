@@ -143,25 +143,23 @@ def test_bulk_growth_is_shared_and_never_allocated_to_current_profile(monkeypatc
     assert row["product"] == "shared" and row["trigger"] == "automation"
 
 
-def test_catalog_counts_empty_grounded_reply_before_fallback(monkeypatch, ledger):
-    generate = Mock(side_effect=[response(""), response('{"courses": []}')])
+def test_catalog_grounding_stays_disabled_when_old_flag_is_true(monkeypatch, ledger):
+    factory = Mock(side_effect=AssertionError("Catalog must not create a search client"))
     monkeypatch.setattr(gemini_service, "is_ai_configured", lambda: True)
-    monkeypatch.setattr(gemini_service, "get_genai_client", lambda **kwargs: SimpleNamespace(models=SimpleNamespace(generate_content=generate)))
+    monkeypatch.setattr(gemini_service, "get_genai_client", factory)
     monkeypatch.setattr(course_catalog, "GROUNDING_ENABLED", True)
-    result = course_catalog._grounded_generate("Offline prompt", ["gemini-2.5-pro", "gemini-2.5-flash"], "catalog_test")
-    assert result[0] == '{"courses": []}'
-    assert len(ledger) == 2 and sum(row["total_tokens"] for row in ledger.values()) == 42
-    assert all(row["product"] == "shared" and row["user_id"] is None for row in ledger.values())
-    assert all(call.kwargs["config"].automatic_function_calling.disable for call in generate.call_args_list)
+    assert course_catalog._grounded_generate("Offline prompt", ["gemini-2.5-pro"], "catalog_test") is None
+    factory.assert_not_called()
+    assert not ledger
 
 
-def test_news_records_provider_attempt_before_response_logging_can_fail(monkeypatch, ledger):
+def test_experiences_records_provider_attempt_before_response_logging_can_fail(monkeypatch, ledger):
     generate = Mock(side_effect=[response("first"), response("second")])
     client = SimpleNamespace(models=SimpleNamespace(generate_content=generate))
     monkeypatch.setattr(news, "latest_genai_types", types)
     monkeypatch.setattr(news, "_log_gemini_prompt", Mock())
     monkeypatch.setattr(news, "_log_gemini_response", Mock(side_effect=[ValueError("offline parsing issue"), None]))
-    result, meta = news._generate_content_with_grounding(client, "Offline prompt", "gemini-2.5-pro", "news.f1_latest", False)
+    result, meta = news._generate_content_with_grounding(client, "Offline prompt", "gemini-2.5-pro", "news.f1_interview_experiences", False)
     assert result.text == "second" and meta["grounded"]
     assert len(ledger) == 2 and all(row["usage_state"] == "measured" for row in ledger.values())
     assert all(row["product"] == "shared" and row["user_id"] is None for row in ledger.values())

@@ -384,14 +384,16 @@ test('tiny imported charges retain their recorded decimal precision', () => {
 });
 
 
-test('a local review that omits subscription records hides and skips B2C revenue', async () => {
+test('removed or hidden B2C revenue panels skip revenue requests', async () => {
     const app = setup();
     app.refs.b2cRevenuePanel.hidden = true;
     await app.loadB2cRevenue();
     assert.equal(app.requests.length, 0);
+    app.refs.b2cRevenuePanel = null;
+    await app.loadB2cRevenue();
+    assert.equal(app.requests.length, 0);
     const html = fs.readFileSync(path.join(__dirname, '../static/admin_console.html'), 'utf8');
-    const panel = html.slice(html.indexOf('<section id="adminB2cRevenuePanel">')).split('</section>')[0];
-    for (const id of ['adminB2cRevenue', 'adminB2cActive', 'adminB2cCost', 'adminB2cConversion']) assert.match(panel, new RegExp(`id="${id}"`));
+    assert.doesNotMatch(html, /adminB2cRevenuePanel|B2C Revenue Model/);
 });
 
 

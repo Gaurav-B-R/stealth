@@ -726,6 +726,7 @@ def build_system_prompt(
     else:
         common_instructions = [
             "- IMPORTANT: Read and use the ATTACHED RAW STUDENT PROFILE FILE directly to personalize your responses",
+            "- New university or course recommendations must come from Course Finder's saved database. This chat has no catalog lookup: direct requests for a new shortlist or alternative institutions/programs to Course Finder instead of suggesting them from memory. You may discuss institutions and courses already in the attached profile or documents. Do not invent catalog facts, fees or entry requirements, or claim to have searched the internet.",
             "- Reference the student's name, university, and current journey stage when giving advice",
             "- Guide them based on their current stage and what the next step is",
             "- Consider their intake semester/year when providing timeline guidance",

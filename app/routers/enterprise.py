@@ -15398,8 +15398,7 @@ def enterprise_course_finder_recommend(
     db: Session = Depends(get_db),
     current_user: models.User = Depends(get_current_active_user),
 ):
-    """Billed AI course shortlist from the verified catalog (grounded live-search
-    fallback while a destination is still seeding). Charge choreography mirrors
+    """Billed AI course shortlist from saved catalog records only. Charge choreography mirrors
     Deep Scan: rate-limit → wallet pre-check → generate → fail WITHOUT charging →
     persist result + debit atomically."""
     _, organization, role = _require_enterprise_membership(
@@ -15418,9 +15417,6 @@ def enterprise_course_finder_recommend(
 
     from app import course_catalog
 
-    if not course_catalog.ai_available():
-        raise HTTPException(status_code=503, detail="AI recommendations are not configured.")
-
     code = (payload.country_code or "").strip().upper()
     if client is not None and not code:
         code = (client.destination_country_code or "").strip().upper()
@@ -15435,9 +15431,6 @@ def enterprise_course_finder_recommend(
         budget = course_catalog.normalize_budget(payload.budget)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
-
-    # Hard-block a broke wallet BEFORE spending any Gemini tokens.
-    credits.enforce_action_or_402(db, organization.id, COURSE_FINDER_ACTION_KEY)
 
     catalog_rows, _total = course_catalog.query_catalog(
         db,
@@ -15457,6 +15450,22 @@ def enterprise_course_finder_recommend(
             discipline=discipline,
             limit_universities=20,
         )
+
+    def no_matches_response(message=None):
+        return {
+            "permissions": _enterprise_permissions_for_role(role),
+            "rec": None,
+            "no_matches": True,
+            "message": f"{message or 'No matching courses are saved in the catalog. Try different filters.'} No credits were used.",
+            "credits_charged": 0,
+        }
+
+    if not any(courses for _university, courses in catalog_rows):
+        return no_matches_response()
+    if not course_catalog.ai_available():
+        raise HTTPException(status_code=503, detail="AI recommendations are not configured.")
+    # Hard-block a broke wallet BEFORE spending any Gemini tokens.
+    credits.enforce_action_or_402(db, organization.id, COURSE_FINDER_ACTION_KEY)
 
     usage_token = ai_usage.set_usage_account(organization_id=organization.id)
     try:
@@ -15478,6 +15487,8 @@ def enterprise_course_finder_recommend(
     if not result.get("available"):
         raise HTTPException(status_code=503, detail=result.get("message") or "Recommendations are unavailable right now.")
     recommendations = result.get("recommendations") or []
+    if not recommendations and result.get("no_matches"):
+        return no_matches_response(result.get("message") or result.get("summary"))
     if not recommendations:
         # Nothing usable came back — never bill the consultancy for an empty result.
         raise HTTPException(

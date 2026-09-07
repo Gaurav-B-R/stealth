@@ -80,7 +80,6 @@ At runtime, it integrates with:
 4. Enterprise credential sync into `users`
 5. Scheduler startup:
    - daily AI notifications
-   - F1 news ingestion
 
 ## Background Processing
 
@@ -88,12 +87,11 @@ At runtime, it integrates with:
   - Service: `app/services/daily_ai_notifications.py`
   - Purpose: analyze profile + document artifacts and send proactive nudges
   - Default schedule: 06:00 UTC (poll loop)
-- F1 news ingestion:
-  - Service: `app/services/f1_visa_news_ingestion.py`
-  - Purpose: ingest and normalize latest F1 news items into DB
-  - Default schedule: 08:00 UTC (poll loop)
+- Catalog research and latest-news ingestion are retired. They are not started with the app; their compatibility entrypoints perform no AI calls or database writes, even with `force=True` or old enable flags.
+- B2C and B2B Course Finder rank saved course records with tool-free Gemini calls. No catalog discovery, refresh, web-search fallback or link probing runs during recommendations.
+- Published applicant experiences retain their existing on-demand Google Search and caching behavior.
 
-Both schedulers run in-process threads and are started by web app startup.
+Other configured background services continue to run. See [catalog and news policy](catalog-and-news-policy.md).
 
 ## Security Model (Current)
 

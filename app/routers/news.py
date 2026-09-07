@@ -570,8 +570,12 @@ def _generate_content_with_grounding(
     """
     Generate content with Google Search grounding enabled.
     Falls back to regular generation if grounded call path is unavailable.
-    This helper is intentionally used only by News/Interview endpoints.
+    Only the published applicant-experiences feature remains active.
     """
+    # Legacy news jobs and direct callers cannot restart spending through this
+    # shared helper. The existing experiences label keeps its unchanged path.
+    if label != "news.f1_interview_experiences":
+        raise RuntimeError("Latest-news generation is disabled")
     grounding_errors: List[str] = []
     _log_gemini_prompt(label, model_name, prompt, extra="grounding=enabled")
 
@@ -645,112 +649,17 @@ def _generate_content_with_grounding(
         raise RuntimeError(f"generation_failed_after_grounding_attempts: {details}; base_error={str(exc)}")
 
 
+def _latest_news_disabled() -> Dict[str, Any]:
+    """The retired feed returns no content and never refreshes retained records."""
+    return {"status": "disabled", "enabled": False, "reason": "latest_news_service_disabled",
+            "items": [], "count": 0, "source": "disabled", "fetched_at": None}
+
+
 def _generate_news_with_gemini(
     destination_name: str, visa_label: str, residence_country: str
 ) -> Dict[str, Any]:
-    client, auth_mode = _build_latest_genai_client()
-
-    now_utc_iso = datetime.now(timezone.utc).isoformat()
-
-    prompt = f"""You are a research assistant for {destination_name} student-visa applicants.
-Task: Provide the latest important updates on the {destination_name} {visa_label}, tailored for students from or residing in {residence_country}.
-
-Student context:
-- Destination country: {destination_name}
-- Visa: {visa_label}
-- Student's current country of residence: {residence_country}
-- Current date/time (UTC): {now_utc_iso}
-
-Requirements:
-- Include ONLY updates directly about the {destination_name} {visa_label}: policy, rules, process, appointments, fees, financial requirements, or documentation.
-- EXCLUDE updates that are primarily about other countries' visas (e.g., if the destination is Australia, do not include US F-1, UK, or Canada news).
-- Prioritize updates that materially affect students applying for the {destination_name} {visa_label}, especially those from or residing in {residence_country}.
-- Treat the current UTC date/time above as "now" when determining recency.
-- Include only updates published within the last {NEWS_MAX_ITEM_AGE_DAYS} days.
-- Include source links for each update
-- Keep summaries clear and concise
-- Use a mix of official updates and credible reporting/community coverage when relevant.
-- Do not invent links. Only return source URLs that came from grounded web search results.
-- Return ONLY valid JSON
-
-Output JSON format:
-{{
-  "generated_at_utc": "{now_utc_iso}",
-  "items": [
-    {{
-      "title": "short headline",
-      "summary": "2-3 sentence summary",
-      "why_it_matters": "1 sentence impact for students",
-      "source_name": "publication or official source",
-      "source_url": "https://...",
-      "published_date": "YYYY-MM-DD or unknown"
-    }}
-  ]
-}}
-
-Provide 4 to 8 items. If no qualifying recent updates exist, return an empty items array."""
-
-    # Inherit the master chain (Gemini 3.1 Pro first, live fallbacks only).
-    model_candidates = gemini_utils.get_model_candidates(
-        primary_env="F1_LATEST_NEWS_MODEL",
-        candidates_env="F1_LATEST_NEWS_MODEL_CANDIDATES",
-    )
-    last_error = None
-    empty_result: Optional[Dict[str, Any]] = None
-
-    for model_name in model_candidates:
-        try:
-            response, generation_meta = _generate_content_with_grounding(
-                client,
-                prompt,
-                model_name=model_name,
-                label="news.f1_latest",
-                allow_non_grounded_fallback=ALLOW_NON_GROUNDED_NEWS_FALLBACK,
-            )
-            data = _clean_and_parse_json(getattr(response, "text", ""))
-            items = _normalize_items(data.get("items", []))
-            items = [_sanitize_item_published_date(item, now_utc=datetime.now(timezone.utc)) for item in items]
-            items, stale_removed, undated_removed = _filter_recent_news_items(
-                items=items,
-                now_utc=datetime.now(timezone.utc),
-            )
-            if not items:
-                empty_result = empty_result or {
-                    "items": [],
-                    "model_used": model_name,
-                    "grounded": bool(generation_meta.get("grounded")),
-                    "grounding_method": str(generation_meta.get("grounding_method") or ""),
-                    "auth_mode": auth_mode,
-                    "stale_items_removed": stale_removed,
-                    "undated_items_removed": undated_removed,
-                }
-                continue
-            return {
-                "items": items,
-                "model_used": model_name,
-                "grounded": bool(generation_meta.get("grounded")),
-                "grounding_method": str(generation_meta.get("grounding_method") or ""),
-                "auth_mode": auth_mode,
-                "stale_items_removed": stale_removed,
-                "undated_items_removed": undated_removed,
-            }
-        except Exception as exc:
-            last_error = exc
-            print(f"⚠ News model attempt failed [{model_name}] auth={auth_mode}: {str(exc)}")
-            continue
-
-    if empty_result is not None:
-        return empty_result
-
-    print(f"⚠ News generation fallback: returning empty items after model failures: {str(last_error)}")
-    return {
-        "items": [],
-        "model_used": "none",
-        "grounded": False,
-        "grounding_method": "none",
-        "stale_items_removed": 0,
-        "undated_items_removed": 0,
-    }
+    """Compatibility entry point: latest-news generation has been retired."""
+    return _latest_news_disabled()
 
 
 def _generate_interview_experiences_with_gemini(
@@ -960,37 +869,12 @@ def _serialize_news_rows(rows, destination_code: str, meta: Dict[str, str]) -> D
 @router.get("/f1-latest")
 def get_f1_latest_news(
     current_user: models.User = Depends(get_current_active_user),
-    db: Session = Depends(get_db),
 ):
-    """
-    Return the latest student-visa news for THIS user's destination country
-    (Australia → AU news, Canada → CA news, etc.; unknown destinations fall back
-    to the US). News is generated on demand and cached for ~24h per destination.
-    """
+    """Retired latest-news feed; authentication stays required, generation stays off."""
     destination = _resolve_user_destination(current_user)
     meta = NEWS_DESTINATIONS[destination]
-    now_utc = datetime.now(timezone.utc)
-
-    rows = _news_rows_for(db, destination)
-    if _news_rows_are_fresh(rows, now_utc):
-        return _serialize_news_rows(rows, destination, meta)
-
-    # Stale or missing → generate fresh for this destination (guarded against stampede).
-    with _news_gen_lock:
-        rows = _news_rows_for(db, destination)  # re-check inside the lock
-        if not _news_rows_are_fresh(rows, now_utc):
-            residence = _resolve_user_residence_country(current_user)
-            try:
-                result = _generate_news_with_gemini(meta["name"], meta["visa"], residence)
-                items = result.get("items") or []
-                if items:
-                    _persist_news(db, destination, items)
-                    rows = _news_rows_for(db, destination)
-            except Exception as exc:
-                # Keep serving whatever we have (possibly stale) rather than erroring out.
-                print(f"⚠ On-demand news generation failed for {destination}: {exc}")
-
-    return _serialize_news_rows(rows, destination, meta)
+    return {**_latest_news_disabled(), "destination_country_code": destination,
+            "destination_name": meta["name"], "destination_visa": meta["visa"]}
 
 
 @router.get("/f1-interview-experiences")

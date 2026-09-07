@@ -10,7 +10,6 @@ let turnstileWidgetIds = {
     forgotPassword: null,
     resetPassword: null
 };
-let newsRequestInFlight = false;
 let visaInterviewRequestInFlight = false;
 let visaInterviewFiltersInitialized = false;
 let documentUploadInProgress = false;
@@ -833,7 +832,6 @@ const APP_ROUTE_TITLES = Object.freeze({
     '/interviews': 'Visa Interview Prep · Rilono',
     '/universities': 'University Shortlist · Rilono',
     '/courses': 'Course Finder · Rilono',
-    '/news': 'Visa News · Rilono',
     '/copilot': 'AI Copilot · Rilono',
     '/sop': 'SOP Studio · Rilono',
     '/rilono-ai': 'Rilono AI Assistant · Rilono',
@@ -1037,7 +1035,7 @@ const DASHBOARD_PATH_TO_TAB = {
     '/interviews': 'visa',
     '/universities': 'universities',
     '/courses': 'courses',
-    '/news': 'news',
+    '/news': 'overview',  // Retired news bookmarks open the dashboard.
     '/copilot': 'copilot',
     '/sop': 'sop',
     '/rilono-ai': 'records',
@@ -4390,7 +4388,7 @@ function cfRenderResults() {
         const filtered = cfActiveAdvCount() > 0 || _cf.q || _cf.level || _cf.discipline || _cf.maxTuition;
         box.innerHTML = CF_CARD(filtered
             ? `<div style="color:#64748b;font-size:13.5px">No matches for these filters. <button onclick="cfClearAdv()" style="background:none;border:none;color:#4f46e5;font-weight:700;cursor:pointer">Clear all filters</button></div>`
-            : `<div style="color:#64748b;font-size:13.5px">Nothing here yet — our research agent is still enriching this destination. Check back soon or try the AI shortlist tab.</div>`);
+            : `<div style="color:#64748b;font-size:13.5px">No courses are saved for this destination yet. Recommendations become available when courses are added to the catalog.</div>`);
         return;
     }
     const cards = unis.map((u, i) => cfUniCardHtml(u, i)).join('');
@@ -4405,7 +4403,7 @@ function cfUniCardHtml(u, idx) {
     const fresh = cfDaysAgo(u.last_verified_at);
     const badge = u.last_verified_at
         ? `<span style="font-size:11px;font-weight:700;color:#065f46;background:rgba(6,95,70,.08);border-radius:999px;padding:2px 9px">✓ Verified ${fresh}d ago</span>`
-        : `<span style="font-size:11px;font-weight:700;color:#b45309;background:rgba(180,83,9,.08);border-radius:999px;padding:2px 9px">⏳ Enriching soon</span>`;
+        : `<span style="font-size:11px;font-weight:700;color:#b45309;background:rgba(180,83,9,.08);border-radius:999px;padding:2px 9px">No verification recorded</span>`;
     const site = cfSafeUrl(u.website_url);
     const ranks = [];
     if (u.qs_world_rank) ranks.push(`QS ${escapeHtml(u.qs_world_rank)}`);
@@ -4454,7 +4452,7 @@ function cfUniCardHtml(u, idx) {
                 <th style="padding:0 10px 4px 0">App. fee</th><th></th></tr></thead>
               <tbody>${rows}</tbody>
             </table>
-          </div>` : '<div style="margin-top:10px;font-size:12px;color:#94a3b8">Courses for this university are still being researched.</div>'}
+          </div>` : '<div style="margin-top:10px;font-size:12px;color:#94a3b8">No courses are saved for this university yet.</div>'}
     `, 'margin-bottom:12px');
 }
 
@@ -4588,7 +4586,12 @@ async function cfRunRecommend() {
         // share #cfPanel) — only repaint when the AI tab is still the active one;
         // the updated state renders on the next cfSetTab('ai') either way.
         if (_cf.tab === 'ai') { cfRenderAI(); cfLoadHistory(); }
-        else showMessage('Your Course Finder shortlist is ready — open the AI shortlist tab.', 'success');
+        if (res.no_matches) {
+            const message = res.message || 'No matching courses are saved in the catalog. No run was used.';
+            const liveMsg = document.getElementById('cfAiMsg');
+            if (_cf.tab === 'ai' && liveMsg) liveMsg.textContent = message;
+            else showMessage(message, 'info');
+        } else if (_cf.tab !== 'ai') showMessage('Your Course Finder shortlist is ready — open the AI shortlist tab.', 'success');
     } catch (e) {
         if (e.status === 402) {
             // The banner said "N left" — refresh the entitlement so it and the
@@ -4658,7 +4661,7 @@ function cfActiveRecHtml(rec) {
     const items = rec.recommendations || [];
     const srcBadge = rec.catalog_based
         ? '<span style="font-size:11px;font-weight:700;color:#065f46;background:rgba(6,95,70,.08);border-radius:999px;padding:2px 9px">✓ Catalog data</span>'
-        : '<span style="font-size:11px;font-weight:700;color:#1d4ed8;background:rgba(29,78,216,.08);border-radius:999px;padding:2px 9px">🌐 Live research</span>';
+        : '<span style="font-size:11px;font-weight:700;color:#1d4ed8;background:rgba(29,78,216,.08);border-radius:999px;padding:2px 9px">Earlier recommendation</span>';
     const cards = items.map((it, i) => {
         if (it && it.locked) return cfLockedRecCardHtml(it, i, rec);
         const fit = CF_FIT[it.fit_level] || CF_FIT.match;
@@ -4671,7 +4674,7 @@ function cfActiveRecHtml(rec) {
             <div style="display:flex;justify-content:space-between;gap:8px;flex-wrap:wrap">
               <div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap">
                 <span title="${escapeAttr(fit.hint)}" style="font-size:10.5px;font-weight:700;color:#fff;background:${fit.color};border-radius:999px;padding:3px 10px">${fit.label}</span>
-                ${it.in_catalog ? '<span style="font-size:10.5px;font-weight:700;color:#065f46">✓ Verified</span>' : '<span style="font-size:10.5px;font-weight:700;color:#b45309" title="Double-check details on the official page">Verify on official page</span>'}
+                ${it.in_catalog ? '<span style="font-size:10.5px;font-weight:700;color:#065f46">✓ Catalog record</span>' : '<span style="font-size:10.5px;font-weight:700;color:#b45309" title="Double-check details on the official page">Verify on official page</span>'}
                 ${it.qs_world_rank ? `<span style="font-size:10.5px;color:#b45309;font-weight:700">🏆 QS ${escapeHtml(it.qs_world_rank)}</span>` : ''}
               </div>
             </div>
@@ -4732,7 +4735,7 @@ async function cfLoadHistory() {
         return `<div onclick="cfOpenRec(${r.id})" style="display:flex;justify-content:space-between;gap:10px;padding:10px 0;border-bottom:1px solid #f1f5f9;cursor:pointer">
             <div style="min-width:0">
               <div style="font-weight:600;color:#0f172a;font-size:13px">${bits || 'Course shortlist'}</div>
-              <div style="font-size:11.5px;color:#94a3b8">${r.locked_count > 0 ? `${r.count - r.locked_count} of ${r.count} picks visible` : `${r.count} picks`} · ${r.catalog_based ? 'catalog data' : 'live research'}</div>
+              <div style="font-size:11.5px;color:#94a3b8">${r.locked_count > 0 ? `${r.count - r.locked_count} of ${r.count} picks visible` : `${r.count} picks`} · ${r.catalog_based ? 'catalog data' : 'earlier recommendation'}</div>
             </div>
             <span style="font-size:11.5px;color:#94a3b8;white-space:nowrap">${escapeHtml(when)}</span>
           </div>`;
@@ -6473,81 +6476,6 @@ async function consumeInterviewSession(sessionType) {
         console.error('Session quota check failed:', error);
         showMessage('Unable to validate session quota. Please try again.', 'error');
         return false;
-    }
-}
-
-async function loadF1VisaNews() {
-    if (!authToken) return;
-
-    const newsContainer = document.getElementById('newsContainer');
-    const metaInfo = document.getElementById('newsMetaInfo');
-    if (!newsContainer || !metaInfo) return;
-
-    if (newsRequestInFlight) return;
-    newsRequestInFlight = true;
-
-    newsContainer.innerHTML = '<div class="news-loading">Loading visa news...</div>';
-
-    try {
-        const response = await fetch(`${API_BASE}/api/news/f1-latest`, {
-            headers: {
-                'Authorization': `Bearer ${authToken}`
-            }
-        });
-
-        const data = await response.json();
-        if (!response.ok) {
-            throw new Error(data.detail || 'Failed to load news');
-        }
-
-        const items = Array.isArray(data.items) ? data.items : [];
-        if (items.length === 0) {
-            const emptyDest = (data.destination_name || '').replace(/^the /, '');
-            newsContainer.innerHTML = `<div class="news-loading">No recent ${escapeHtml(emptyDest || 'visa')} student-visa updates yet. Check back soon.</div>`;
-        } else {
-            newsContainer.innerHTML = items.map((item) => {
-                const title = escapeHtml(item.title || 'Update');
-                const summary = escapeHtml(item.summary || '');
-                const impact = escapeHtml(item.why_it_matters || '');
-                const sourceName = escapeHtml(item.source_name || 'Source');
-                const sourceUrl = item.source_url && (item.source_url.startsWith('http://') || item.source_url.startsWith('https://'))
-                    ? item.source_url
-                    : '';
-                const safeSourceUrl = sourceUrl ? encodeURI(sourceUrl) : '';
-                const publishedDate = escapeHtml(item.published_date || 'unknown');
-                const sourceLink = safeSourceUrl
-                    ? `<a href="${safeSourceUrl}" target="_blank" rel="noopener noreferrer" class="news-item-link">Read Source</a>`
-                    : '<span class="news-item-link" style="opacity:0.6; cursor:not-allowed;">No Link</span>';
-
-                return `
-                    <article class="news-item">
-                        <h4 class="news-item-title">${title}</h4>
-                        <p class="news-item-summary">${summary}</p>
-                        ${impact ? `<p class="news-item-impact"><strong>Why this matters:</strong> ${impact}</p>` : ''}
-                        <div class="news-item-footer">
-                            <div class="news-item-source">${sourceName} • ${publishedDate}</div>
-                            ${sourceLink}
-                        </div>
-                    </article>
-                `;
-            }).join('');
-        }
-
-        const fetchedAt = data.fetched_at ? new Date(data.fetched_at) : null;
-        const fetchedText = fetchedAt && !Number.isNaN(fetchedAt.getTime())
-            ? fetchedAt.toLocaleString()
-            : '';
-        const destName = (data.destination_name || '').replace(/^the /, '');
-        const destPrefix = destName ? `${destName} student-visa news` : 'Visa news';
-        metaInfo.textContent = fetchedText
-            ? `${destPrefix} · Last updated: ${fetchedText}`
-            : `${destPrefix} · ${data.count || 0} updates`;
-    } catch (error) {
-        console.error('Error loading F1 visa news:', error);
-        newsContainer.innerHTML = '<div class="news-loading">Unable to load visa news right now. Please try again shortly.</div>';
-        metaInfo.textContent = 'Failed to load updates';
-    } finally {
-        newsRequestInFlight = false;
     }
 }
 
@@ -9592,6 +9520,7 @@ async function deleteAdminUser(userId, userEmail = 'this user') {
 }
 
 function switchDashboardTab(tabName) {
+    if (tabName === 'news') tabName = 'overview'; // Retired latest-news feature.
     // The standalone Universities page was folded into Course Finder: its saved shortlist is
     // Course Finder's "My shortlist" tab and its AI recommendations duplicated the AI shortlist.
     if (tabName === 'universities') { tabName = 'courses'; _cf.tab = 'shortlist'; }
@@ -9667,8 +9596,7 @@ function switchDashboardTab(tabName) {
         loadCourseFinder();
     } else if (tabName === 'sop') {
         loadSopStudio();
-    } else if (tabName === 'news') {
-        loadF1VisaNews();
+
     } else if (tabName === 'admin') {
         loadAdminUsers();
     }
@@ -9695,10 +9623,6 @@ function openVisaAiPrompt(prompt) {
     setTimeout(() => {
         sendQuickMessage(prompt);
     }, 120);
-}
-
-function openVisaNewsSection() {
-    switchDashboardTab('news');
 }
 
 function showPrivacy(skipURLUpdate = false) {

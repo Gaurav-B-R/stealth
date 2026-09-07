@@ -11,10 +11,6 @@ from app.services.daily_ai_notifications import (
     start_daily_ai_notification_scheduler,
     stop_daily_ai_notification_scheduler,
 )
-from app.services.f1_visa_news_ingestion import (
-    start_f1_news_ingestion_scheduler,
-    stop_f1_news_ingestion_scheduler,
-)
 from app.services.enterprise_calendar_reminders import (
     start_enterprise_calendar_reminder_scheduler,
     stop_enterprise_calendar_reminder_scheduler,
@@ -22,10 +18,6 @@ from app.services.enterprise_calendar_reminders import (
 from app.services.document_retention import (
     start_document_retention_scheduler,
     stop_document_retention_scheduler,
-)
-from app.services.course_catalog_refresh import (
-    start_course_catalog_refresh_scheduler,
-    stop_course_catalog_refresh_scheduler,
 )
 from app.services.ai_billing_sync import start_ai_accounting_maintenance, stop_ai_accounting_maintenance
 from app.schema_patch import (
@@ -380,10 +372,8 @@ def startup_backfill_subscriptions():
         db.close()
     enterprise.seed_enterprise_user()
     start_daily_ai_notification_scheduler()
-    start_f1_news_ingestion_scheduler()
     start_enterprise_calendar_reminder_scheduler()
     start_document_retention_scheduler()
-    start_course_catalog_refresh_scheduler()
     start_ai_accounting_maintenance()
     from app import fx
     fx.prime()  # warm the live USD→INR rate in the background
@@ -395,10 +385,8 @@ def startup_backfill_subscriptions():
 def shutdown_background_services():
     stop_ai_accounting_maintenance()
     stop_daily_ai_notification_scheduler()
-    stop_f1_news_ingestion_scheduler()
     stop_enterprise_calendar_reminder_scheduler()
     stop_document_retention_scheduler()
-    stop_course_catalog_refresh_scheduler()
 
 # Serve static files
 static_dir = os.path.join(os.path.dirname(__file__), "..", "static")
@@ -608,8 +596,8 @@ _SPA_ROUTE_META = {
         "canonical": f"{SITE_ORIGIN}/courses", "noindex": True,
     },
     "/news": {
-        "title": "Visa News · Rilono", "description": "Review visa news relevant to your journey.",
-        "canonical": f"{SITE_ORIGIN}/news", "noindex": True,
+        "title": "Your Dashboard · Rilono", "description": "Manage your study-abroad journey.",
+        "canonical": f"{SITE_ORIGIN}/dashboard", "noindex": True,
     },
     "/copilot": {
         "title": "AI Copilot · Rilono", "description": "Use Rilono Copilot for your study-abroad journey.",

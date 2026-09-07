@@ -59,7 +59,10 @@ if not (str(engine.url).startswith("sqlite") and "_demo_video.db" in str(engine.
 # Demo identity
 # ---------------------------------------------------------------------------
 NOW = datetime.utcnow().replace(microsecond=0)
-TODAY = NOW.date()
+# Org "today" is the IST date (the org's offices are all Asia/Kolkata, which is what the
+# server's org_today() resolves); DEMO_TODAY=YYYY-MM-DD pins it, in step with the client seed.
+TODAY = (date.fromisoformat(os.environ["DEMO_TODAY"]) if os.environ.get("DEMO_TODAY")
+         else (NOW + timedelta(hours=5, minutes=30)).date())
 
 ORG_SLUG = "meridian"
 ORG_NAME = "Meridian Overseas Education"
@@ -530,9 +533,13 @@ def _txn(org, when, ttype, credits_delta, *, action_key=None, description=None,
 
 
 def _business_time(rng: random.Random, day: datetime) -> datetime:
-    """A time between 03:30 and 13:30 UTC (09:00-19:00 IST) on `day`."""
+    """A business-hours time (09:00-19:00) on `day`, as IST WALL-CLOCK stored naive.
+
+    The credits ledger prints created_at through the SPA's fmtDateTime(), which parses the
+    API's offset-less ISO string in the browser zone (Asia/Kolkata for the demo) — so a UTC
+    value would show 5h30 early ("4:05 am"). Storing the wall-clock keeps the ledger readable."""
     minutes = rng.randint(0, 600)
-    return day.replace(hour=3, minute=30, second=0) + timedelta(minutes=minutes, seconds=rng.randint(0, 59))
+    return day.replace(hour=9, minute=0, second=0) + timedelta(minutes=minutes, seconds=rng.randint(0, 59))
 
 
 def _client_debit_description(action_key: str, client: str, rng: random.Random) -> str:
@@ -605,6 +612,7 @@ def create_wallet_and_ledger(session, org, sub, users: dict) -> tuple:
     ]
     assert sum(cost(a) for a, _c, _w in pre_spend) == 100
     for action_key, client, when in pre_spend:
+        when = when + timedelta(hours=5, minutes=30)   # fixed UTC-ish stamps -> IST wall-clock (see _business_time)
         if client is None:
             rows.append(_txn(org, when, "debit", -cost(action_key), action_key=action_key,
                              description="Rilono AI assistant — 5 messages", user=owner))
@@ -644,7 +652,7 @@ def create_wallet_and_ledger(session, org, sub, users: dict) -> tuple:
                          reference_type="client", user=client_user(client)))
 
     # 3) Growth grant on the renewal morning ...........................................
-    grant_at = PERIOD_START + timedelta(hours=4, minutes=12)
+    grant_at = PERIOD_START + timedelta(hours=9, minutes=42)   # renewal morning, IST wall-clock
     allowance = int(billing.included_credits_for("growth"))
     rows.append(_txn(org, grant_at, "bonus", allowance,
                      description=f"Growth plan — {allowance:,} credits included this month",
@@ -691,7 +699,7 @@ def create_wallet_and_ledger(session, org, sub, users: dict) -> tuple:
                 when = lo + timedelta(minutes=rng.randint(30, span_min))
                 if when.weekday() == 6:
                     when -= timedelta(days=1)
-                when = when.replace(hour=rng.randint(4, 12), minute=rng.randint(0, 59), second=rng.randint(0, 59))
+                when = when.replace(hour=rng.randint(9, 18), minute=rng.randint(0, 59), second=rng.randint(0, 59))
                 when = max(lo, min(when, latest - timedelta(minutes=5)))
             if action_key == "ai_copilot":
                 who = rng.choice([owner, users["rahul.verma@example.com"], users["arjun.menon@example.com"],

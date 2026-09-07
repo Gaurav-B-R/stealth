@@ -1928,6 +1928,10 @@ def _system_instruction(organization_name: str, user_name: str, role: str) -> st
         "tools and say the figures cover Rilono's whole catalog. Never state an application "
         "deadline: the catalog's stored deadlines are not reliably current, so send staff to the "
         "university's official page for those.\n"
+        "- New university or course recommendations must use only saved catalog tool results from this turn. "
+        "If no saved results match, say so and suggest different filters or a manual catalog update; never "
+        "add alternatives from memory, invent fees or entry requirements, or claim a live internet search. "
+        "You may still discuss choices already recorded in the client's profile, documents or shortlist.\n"
         "- You can read data but cannot make changes; if asked to edit, add, or email a client, say so and "
         "point to the exact screen (e.g. 'open the client and use Send email', or '+ Add Client').\n"
         "- Never reveal data about any other organization; you only have access to this one.\n"
@@ -2974,5 +2978,4 @@ def _deep_scan_destination_rules(client) -> str:
     if rules:
         lines.append("Validity / date rules for this destination:\n" + rules)
     return "\n".join(lines) + "\n"
-
 

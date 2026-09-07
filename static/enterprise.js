@@ -6381,7 +6381,7 @@
             <div class="field"><label>Notes for Rilono AI</label><input id="uniCfNotes" placeholder="e.g. prefers co-op programs, needs scholarships" maxlength="300" value="${esc(f.notes)}"></div>
           </div>
           <div class="uni-ai-foot">
-            <button class="btn btn-primary" id="uniCfRun" ${uni.aiBusy ? "disabled" : ""}>${uni.aiBusy ? '<span class="spinner"></span> Rilono AI is researching…' : `✨ Generate shortlist · ${esc(String(cost))} cr`}</button>
+            <button class="btn btn-primary" id="uniCfRun" ${uni.aiBusy ? "disabled" : ""}>${uni.aiBusy ? '<span class="spinner"></span> Matching saved courses…' : `✨ Generate shortlist · ${esc(String(cost))} cr`}</button>
             <span class="muted" id="uniCfMsg"></span>
           </div>`;
       }
@@ -6390,7 +6390,7 @@
           <div class="uni-ai-head">
             <div>
               <div class="cp-card-head" style="margin:0"><h3>✨ AI course shortlist · ${esc(dest)}</h3></div>
-              <p class="muted" style="margin:4px 0 0;font-size:13px">The Course Finder engine, pinned to ${esc(first)}'s case: Rilono AI picks real ${esc(dest)} programs from the verified catalog — fees, intakes, deadlines, entry requirements — matched to their dossier, and never re-suggests a university already on the shortlist.</p>
+              <p class="muted" style="margin:4px 0 0;font-size:13px">The Course Finder engine, pinned to ${esc(first)}'s case: Rilono AI picks real ${esc(dest)} programs from the saved catalog — fees, intakes, deadlines, entry requirements — matched to their dossier, taking their existing shortlist into account.</p>
             </div>
             <span class="uni-cost">${esc(String(cost))} credits</span>
           </div>
@@ -6409,7 +6409,7 @@
         <div class="cp-card cf-rec-card" id="uniActiveRec">
           <div class="cp-card-head">
             <h3>🎯 Shortlist <span class="cf-td-sub">${esc(fmtDateTime(rec.created_at))}${rec.created_by_name ? ` · ${esc(rec.created_by_name)}` : ""}</span></h3>
-            ${rec.catalog_based ? '<span class="cf-verified" title="Built from Rilono\'s verified catalog">✓ Catalog data</span>' : '<span class="cf-verified cf-pending" title="Generated with live search while this destination is still being seeded">🌐 Live research</span>'}
+            ${rec.catalog_based ? '<span class="cf-verified" title="Built from Rilono\'s saved catalog">✓ Catalog data</span>' : '<span class="cf-verified cf-pending" title="Saved before catalog-only recommendations">Earlier recommendation</span>'}
           </div>
           ${rec.summary ? `<p class="cf-rec-summary">${esc(rec.summary)}</p>` : ""}
           <div class="cf-rec-grid">${items.map((it, i) => uniRecItemHtml(it, i, rec)).join("")}</div>
@@ -6426,7 +6426,7 @@
         <div class="cf-rec-top">
           <span class="status-pill" style="background:${fit.color}1a;color:${fit.color}"><span class="sd" style="background:${fit.color}"></span>${fit.label}</span>
           ${it.qs_world_rank ? `<span class="cf-rank">QS #${esc(it.qs_world_rank)}</span>` : ""}
-          ${it.in_catalog ? '<span class="cf-verified" title="From Rilono\'s verified catalog">✓ Verified</span>' : '<span class="cf-verified cf-pending" title="Not yet in our catalog — double-check on the official page">Verify</span>'}
+          ${it.in_catalog ? '<span class="cf-verified" title="From Rilono\'s saved catalog">✓ Catalog record</span>' : '<span class="cf-verified cf-pending" title="Not yet in our catalog — double-check on the official page">Verify</span>'}
         </div>
         <h4>${esc(it.course_name)}</h4>
         <div class="cf-rec-uni">${esc(it.university_name)}${it.location ? ` · ${esc(it.location)}` : ""}</div>
@@ -6492,9 +6492,9 @@
       const btn = $("#uniCfRun");
       // dataset.busy stands bindValidity's sync down (its input listeners stay live
       // through the run), so mid-run edits can't re-enable a button showing a spinner.
-      if (btn) { btn.dataset.busy = "1"; btn.disabled = true; btn.innerHTML = '<span class="spinner"></span> Rilono AI is researching…'; }
+      if (btn) { btn.dataset.busy = "1"; btn.disabled = true; btn.innerHTML = '<span class="spinner"></span> Matching saved courses…'; }
       const msg = $("#uniCfMsg");
-      if (msg) msg.textContent = "Matching verified programs to the dossier — this can take a while.";
+      if (msg) msg.textContent = "Matching saved programs to the dossier — this can take a while.";
       try {
         const r = await api("/course-finder/recommend", {
           method: "POST",
@@ -6513,7 +6513,7 @@
         if (r.wallet) { state.credits = r.wallet; updatePlanChip(); }
         uni.activeRec = r.rec;
         uni.scrollToRec = true;
-        toast(r.credits_charged ? `Shortlist ready — ${r.credits_charged} credits used` : "Shortlist ready", "success");
+        toast(r.no_matches ? (r.message || "No matching courses are saved in the catalog. No credits were used.") : (r.credits_charged ? `Shortlist ready — ${r.credits_charged} credits used` : "Shortlist ready"), r.no_matches ? "info" : "success");
       } catch (ex) {
         if (ex && ex.status === 402) { uni.aiBusy = false; toast(ex.message, "error"); navigate("credits"); return; }
         toast(ex.message || "Couldn't generate the shortlist.", "error");
@@ -6603,7 +6603,7 @@
         <div class="uni-sugg-head">
           <div>
             <div class="cp-card-head" style="margin:0"><h3>🎓 ${list.length} matches in ${esc(dest)}</h3></div>
-            <p class="muted" style="margin:4px 0 0;font-size:13px">Pick the ones worth shortlisting for ${esc(first)}${uni.grounded ? " · rankings checked against live sources" : ""}.</p>
+            <p class="muted" style="margin:4px 0 0;font-size:13px">Pick the ones worth shortlisting for ${esc(first)}${uni.grounded ? " · previously researched rankings" : ""}.</p>
           </div>
           <span class="uni-sugg-saved">✓ Saved — safe to come back to</span>
         </div>
@@ -15454,9 +15454,8 @@
     saved: {}, // "recId:index" → true once added to a client (idempotent UI)
     tab: "browse",
   };
-  // The recommend endpoint can fall back to grounded live search on a thin catalog —
-  // slower than plain AI calls, and (like Deep Scan) a completed run bills even if
-  // the client gave up, so give it a longer leash than AI_API_TIMEOUT_MS.
+  // Catalog matching can take longer than plain AI calls. A completed run bills
+  // even if the client times out, so allow time for the result to be saved.
   const CF_AI_TIMEOUT_MS = 150000;
   const CF_LEVEL_LABELS = { bachelors: "Bachelor's", masters: "Master's", phd: "PhD", diploma: "Diploma", other: "Other" };
   // Profile → Course Finder form defaults. The client's intake record already says what they
@@ -15660,14 +15659,14 @@
       <div class="cf-hero">
         <div class="cf-hero-main">
           <h2>🎓 Course Finder</h2>
-          <p>Universities, courses, fees, intakes &amp; entry requirements across your destinations — researched and kept current by Rilono AI. Browsing is free; personalized AI shortlists cost <b>${esc(String(cfCost()))} credits</b>.</p>
+          <p>Universities, courses, fees, intakes &amp; entry requirements across your destinations — from the saved catalog, maintained by Rilono. Browsing is free; personalized AI shortlists cost <b>${esc(String(cfCost()))} credits</b>.</p>
           <div class="cf-hero-chips">
             ${(m.countries || []).map((x) => `<span class="cf-chip" title="${esc(x.name)}: ${x.universities} universities · ${x.courses} courses">${esc(x.flag_emoji || "")} ${esc(x.code)} · ${x.universities}</span>`).join("")}
           </div>
         </div>
         <div class="cf-hero-stats">
           <div class="cf-stat"><b>${totalUnis}</b><span>Universities</span></div>
-          <div class="cf-stat" title="Universities whose courses &amp; fees Rilono AI has verified from official sources"><b>${totalEnriched}</b><span>Verified</span></div>
+          <div class="cf-stat" title="Universities with a recorded verification date"><b>${totalEnriched}</b><span>Verified</span></div>
           <div class="cf-stat"><b>${totalCourses}</b><span>Courses</span></div>
           <div class="cf-stat"><b>${latest ? esc(cfAgo(latest)) : "—"}</b><span>Data refreshed</span></div>
         </div>
@@ -15984,8 +15983,8 @@
         <div class="empty"><div class="emoji">🛰️</div>
           <h3>${filtered ? "No matches for these filters" : "Nothing here yet"}</h3>
           <p>${filtered
-            ? "Nothing in the verified catalog meets every filter at once. Loosen the strictest one — tuition, test scores or QS rank are the usual culprits — or try the <b>AI Shortlists</b> tab, which can also search live data."
-            : "Rilono's research agent adds &amp; re-verifies universities every day — or try the <b>AI Shortlists</b> tab, which can also search live data."}</p>
+            ? "No saved catalog records match all these filters. Try changing the tuition, test-score or ranking filters."
+            : "No courses are saved for this destination yet. Recommendations become available when courses are added to the catalog."}</p>
           ${filtered ? '<button type="button" class="btn btn-secondary btn-sm" id="cfEmptyClear">Clear all filters</button>' : ""}
         </div>`;
       const clear = $("#cfEmptyClear");
@@ -16062,8 +16061,8 @@
 
   function cfUniCard(u, idx) {
     const verified = u.last_verified_at
-      ? `<span class="cf-verified" title="Last verified by Rilono AI">✓ Verified ${esc(cfAgo(u.last_verified_at))}</span>`
-      : '<span class="cf-verified cf-pending" title="Queued for the research agent">⏳ Enriching soon</span>';
+      ? `<span class="cf-verified" title="Verification date recorded in the catalog">✓ Verified ${esc(cfAgo(u.last_verified_at))}</span>`
+      : '<span class="cf-verified cf-pending" title="No verification date is recorded">No verification recorded</span>';
     const site = cfSafeUrl(u.website_url);
     const courses = u.courses || [];
     const open = idx < 3 && courses.length; // first few expanded so the page never looks empty
@@ -16167,7 +16166,7 @@
           </label>
         </div>
         <div class="cf-ai-actions">
-          <button class="btn btn-primary" id="cfAiRun" ${(!canEdit || !m.ai_available || cf.aiBusy || cfAiBlocker()) ? "disabled" : ""} title="${esc(cfAiBlocker())}">${cf.aiBusy ? '<span class="spinner"></span> Rilono AI is researching…' : `Generate shortlist · ${esc(String(cost))} cr`}</button>
+          <button class="btn btn-primary" id="cfAiRun" ${(!canEdit || !m.ai_available || cf.aiBusy || cfAiBlocker()) ? "disabled" : ""} title="${esc(cfAiBlocker())}">${cf.aiBusy ? '<span class="spinner"></span> Matching saved courses…' : `Generate shortlist · ${esc(String(cost))} cr`}</button>
           ${!canEdit ? '<span class="hint">Viewers can browse, but only editors can run AI actions.</span>' : ""}
         </div>
       </div></div>
@@ -16297,13 +16296,13 @@
     if (budgetProblem) { toast(budgetProblem, "error"); return; }
     cf.aiBusy = true;
     btn.disabled = true;
-    btn.innerHTML = '<span class="spinner"></span> Rilono AI is researching…';
+    btn.innerHTML = '<span class="spinner"></span> Matching saved courses…';
     try {
       const r = await api("/course-finder/recommend", { method: "POST", body, timeout: CF_AI_TIMEOUT_MS });
       if (r.wallet) { state.credits = r.wallet; updatePlanChip(); }
       cf.activeRec = r.rec;
       cf.recs = null; // refresh history below
-      toast(r.credits_charged ? `Shortlist ready — ${r.credits_charged} credits used` : "Shortlist ready", "success");
+      toast(r.no_matches ? (r.message || "No matching courses are saved in the catalog. No credits were used.") : (r.credits_charged ? `Shortlist ready — ${r.credits_charged} credits used` : "Shortlist ready"), r.no_matches ? "info" : "success");
       cfDrawActiveRec();
       cfLoadRecs();
     } catch (ex) {
@@ -16342,7 +16341,7 @@
       <div class="card cf-rec-card"><div class="card-head">
         <h3>🎯 Shortlist ${target} <span class="cf-td-sub">${esc(fmtDateTime(rec.created_at))}</span></h3>
         <div>
-          ${rec.catalog_based ? '<span class="cf-verified" title="Built from Rilono\'s verified catalog">✓ Catalog data</span>' : '<span class="cf-verified cf-pending" title="Generated with live search while this destination is still being seeded">🌐 Live research</span>'}
+          ${rec.catalog_based ? '<span class="cf-verified" title="Built from Rilono\'s saved catalog">✓ Catalog data</span>' : '<span class="cf-verified cf-pending" title="Saved before catalog-only recommendations">Earlier recommendation</span>'}
         </div>
       </div>
       <div class="card-body">
@@ -16363,7 +16362,7 @@
       <div class="cf-rec-top">
         <span class="status-pill" style="background:${fit.color}1a;color:${fit.color}"><span class="sd" style="background:${fit.color}"></span>${fit.label}</span>
         ${it.qs_world_rank ? `<span class="cf-rank">QS #${esc(it.qs_world_rank)}</span>` : ""}
-        ${it.in_catalog ? '<span class="cf-verified" title="From Rilono\'s verified catalog">✓ Verified</span>' : '<span class="cf-verified cf-pending" title="Not yet in our catalog — double-check on the official page">Verify</span>'}
+        ${it.in_catalog ? '<span class="cf-verified" title="From Rilono\'s saved catalog">✓ Catalog record</span>' : '<span class="cf-verified cf-pending" title="Not yet in our catalog — double-check on the official page">Verify</span>'}
       </div>
       <h4>${esc(it.course_name)}</h4>
       <div class="cf-rec-uni">${esc(it.university_name)}${it.location ? ` · ${esc(it.location)}` : ""}</div>

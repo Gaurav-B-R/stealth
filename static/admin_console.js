@@ -66,6 +66,10 @@ const refs = {
     loginBtn: document.getElementById('adminLoginBtn'),
     logoutBtn: document.getElementById('adminLogoutBtn'),
     sessionBadge: document.getElementById('adminSessionBadge'),
+    sidebar: document.getElementById('adminSidebar'),
+    sidebarClose: document.getElementById('adminSidebarClose'),
+    sidebarBackdrop: document.getElementById('adminSidebarBackdrop'),
+    menuToggle: document.getElementById('adminMenuToggle'),
     protectionCard: document.getElementById('adminProtectionCard'),
     protectionText: document.getElementById('adminProtectionText'),
     verifyProtectionBtn: document.getElementById('adminVerifyProtectionBtn'),
@@ -238,17 +242,18 @@ function setDateColumnTimeZoneLabels() {
 }
 
 function bindEvents() {
+    bindAdminNavigation();
     refs.loginForm?.addEventListener('submit', handleLoginSubmit);
     refs.logoutBtn?.addEventListener('click', handleLogout);
     document.getElementById('adminGrowthRunBtn')?.addEventListener('click', runGrowthAnalysis);
     document.getElementById('adminInsightsRefreshBtn')?.addEventListener('click', loadGrowthInsights);
     document.getElementById('adminAccountBackBtn')?.addEventListener('click', closeAccountDetail);
     refs.verifyProtectionBtn?.addEventListener('click', handleProtectionVerifyClick);
-    refs.usersTabBtn?.addEventListener('click', () => handleTabSwitch('users'));
-    refs.enterpriseTabBtn?.addEventListener('click', () => handleTabSwitch('enterprise'));
-    refs.analyticsTabBtn?.addEventListener('click', () => handleTabSwitch('analytics'));
-    refs.financeTabBtn?.addEventListener('click', () => handleTabSwitch('finance'));
-    refs.aiTabBtn?.addEventListener('click', () => handleTabSwitch('ai'));
+    refs.usersTabBtn?.addEventListener('click', () => selectAdminTab('users'));
+    refs.enterpriseTabBtn?.addEventListener('click', () => selectAdminTab('enterprise'));
+    refs.analyticsTabBtn?.addEventListener('click', () => selectAdminTab('analytics'));
+    refs.financeTabBtn?.addEventListener('click', () => selectAdminTab('finance'));
+    refs.aiTabBtn?.addEventListener('click', () => selectAdminTab('ai'));
     refs.usersForm?.addEventListener('submit', handleUserFiltersSubmit);
     refs.usersResetBtn?.addEventListener('click', resetUserFilters);
     refs.usersExportCsvBtn?.addEventListener('click', () => exportUsers('csv'));
@@ -305,6 +310,97 @@ function bindEvents() {
     document.addEventListener('keydown', (event) => {
         if (event.key === 'Escape' && refs.couponModal && !refs.couponModal.hidden) closeCouponModal();
     });
+}
+
+function adminTabButtons() {
+    return [refs.usersTabBtn, refs.enterpriseTabBtn, refs.analyticsTabBtn, refs.financeTabBtn, refs.aiTabBtn].filter(Boolean);
+}
+
+function updateSidebarAccessibility() {
+    const isMobile = window.matchMedia('(max-width: 900px)').matches;
+    const isOpen = document.body.classList.contains('sidebar-open');
+    if (refs.sidebar) refs.sidebar.inert = isMobile && !isOpen;
+    const workspace = document.querySelector('.admin-workspace');
+    if (workspace) workspace.inert = isMobile && isOpen;
+}
+
+function setSidebarOpen(open, { restoreFocus = false } = {}) {
+    const canOpen = open && !refs.sidebar?.hidden && window.matchMedia('(max-width: 900px)').matches;
+    document.body.classList.toggle('sidebar-open', Boolean(canOpen));
+    refs.menuToggle?.setAttribute('aria-expanded', String(Boolean(canOpen)));
+    if (refs.sidebarBackdrop) refs.sidebarBackdrop.hidden = !canOpen;
+    updateSidebarAccessibility();
+    if (canOpen) {
+        const buttons = adminTabButtons();
+        buttons.forEach((button) => {
+            button.tabIndex = button.getAttribute('aria-selected') === 'true' ? 0 : -1;
+        });
+        buttons.find((button) => button.tabIndex === 0)?.focus();
+    } else if (restoreFocus && refs.menuToggle && !refs.menuToggle.hidden) {
+        refs.menuToggle.focus();
+    }
+}
+
+function selectAdminTab(tabName) {
+    const wasDrawerOpen = document.body.classList.contains('sidebar-open');
+    const isNewTab = state.activeTab !== tabName;
+    setSidebarOpen(false);
+    void handleTabSwitch(tabName);
+    if (isNewTab) window.scrollTo({ top: 0, behavior: 'auto' });
+    if (wasDrawerOpen) {
+        const button = adminTabButtons().find((item) => item.dataset.tab === tabName);
+        document.getElementById(button?.getAttribute('aria-controls'))?.focus({ preventScroll: true });
+    }
+}
+
+function bindAdminNavigation() {
+    // CSS can hide the focused control before a breakpoint change is delivered.
+    let navigationHadFocus = false;
+    document.addEventListener('focusin', (event) => {
+        navigationHadFocus = Boolean(refs.sidebar?.contains(event.target) || event.target === refs.menuToggle);
+    });
+    refs.menuToggle?.addEventListener('click', () => setSidebarOpen(!document.body.classList.contains('sidebar-open')));
+    refs.sidebarClose?.addEventListener('click', () => setSidebarOpen(false, { restoreFocus: true }));
+    refs.sidebarBackdrop?.addEventListener('click', () => setSidebarOpen(false, { restoreFocus: true }));
+    refs.sidebar?.addEventListener('keydown', (event) => {
+        const buttons = adminTabButtons();
+        const index = buttons.indexOf(document.activeElement);
+        if (index === -1 || !['ArrowUp', 'ArrowDown', 'Home', 'End'].includes(event.key)) return;
+        event.preventDefault();
+        const next = event.key === 'Home' ? 0 : event.key === 'End' ? buttons.length - 1
+            : (index + (event.key === 'ArrowDown' ? 1 : -1) + buttons.length) % buttons.length;
+        buttons.forEach((button, buttonIndex) => { button.tabIndex = buttonIndex === next ? 0 : -1; });
+        buttons[next].focus();
+    });
+    document.addEventListener('keydown', (event) => {
+        if (!document.body.classList.contains('sidebar-open')) return;
+        if (event.key === 'Escape') {
+            event.preventDefault();
+            setSidebarOpen(false, { restoreFocus: true });
+        } else if (event.key === 'Tab') {
+            const focusable = [...refs.sidebar.querySelectorAll('button:not([hidden]):not([tabindex="-1"])')];
+            const first = focusable[0];
+            const last = focusable[focusable.length - 1];
+            if (event.shiftKey && document.activeElement === first) {
+                event.preventDefault();
+                last?.focus();
+            } else if (!event.shiftKey && document.activeElement === last) {
+                event.preventDefault();
+                first?.focus();
+            }
+        }
+    });
+    window.matchMedia('(max-width: 900px)').addEventListener('change', (event) => {
+        const focusedNavigation = navigationHadFocus || refs.sidebar?.contains(document.activeElement)
+            || document.activeElement === refs.menuToggle || document.body.classList.contains('sidebar-open');
+        setSidebarOpen(false);
+        if (focusedNavigation && !refs.sidebar?.hidden) {
+            const target = event.matches ? refs.menuToggle
+                : adminTabButtons().find((button) => button.getAttribute('aria-selected') === 'true');
+            target?.focus();
+        }
+    });
+    updateSidebarAccessibility();
 }
 
 async function bootstrap() {
@@ -435,6 +531,10 @@ function promptDialog(message, opts) {
 }
 
 function showAuth() {
+    setSidebarOpen(false);
+    document.body.classList.remove('admin-authenticated');
+    if (refs.sidebar) refs.sidebar.hidden = true;
+    if (refs.menuToggle) refs.menuToggle.hidden = true;
     refs.authPanel.hidden = false;
     refs.consolePanel.hidden = true;
     refs.logoutBtn.hidden = true;
@@ -446,6 +546,10 @@ function showAuth() {
 }
 
 function showConsole() {
+    document.body.classList.add('admin-authenticated');
+    if (refs.sidebar) refs.sidebar.hidden = false;
+    if (refs.menuToggle) refs.menuToggle.hidden = false;
+    updateSidebarAccessibility();
     refs.authPanel.hidden = true;
     refs.consolePanel.hidden = false;
     refs.logoutBtn.hidden = false;
@@ -497,6 +601,9 @@ function renderActiveTab() {
     if (refs.aiTabPanel) {
         refs.aiTabPanel.hidden = !isAiTab;
     }
+    adminTabButtons().forEach((button) => {
+        button.tabIndex = button.dataset.tab === state.activeTab ? 0 : -1;
+    });
 }
 
 async function handleTabSwitch(tabName) {
@@ -2231,7 +2338,7 @@ async function loadAiUsage(options = {}) {
 }
 
 async function loadB2cRevenue() {
-    if (refs.b2cRevenuePanel?.hidden) return;
+    if (!refs.b2cRevenuePanel || refs.b2cRevenuePanel.hidden) return;
     try {
         const response = await fetch(`${API_BASE}/api/admin/b2c/revenue`, { headers: buildAuthHeaders(), credentials: 'same-origin' });
         const payload = await response.json().catch(() => ({}));

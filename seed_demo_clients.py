@@ -84,7 +84,10 @@ INSTAGRAM_FORM_TOKEN = "meridian-instagram-sep-intake-b81d4e60"
 
 UTC_NOW = datetime.utcnow().replace(microsecond=0)
 IST_OFFSET = timedelta(hours=5, minutes=30)
-TODAY: date = (UTC_NOW + IST_OFFSET).date()  # org "today" (Asia/Kolkata)
+# Org "today" (Asia/Kolkata). DEMO_TODAY=YYYY-MM-DD pins it (the capture script pins the browser
+# clock to the same date); it must match the server's org_today (IST) when the shots are taken.
+TODAY: date = (date.fromisoformat(os.environ["DEMO_TODAY"]) if os.environ.get("DEMO_TODAY")
+               else (UTC_NOW + IST_OFFSET).date())
 UTC = timezone.utc
 
 
@@ -105,6 +108,21 @@ def at(day_offset: int, hhmm: str = "10:00") -> datetime:
 def on(day: date, hhmm: str = "10:00") -> datetime:
     h, m = (int(x) for x in hhmm.split(":"))
     return datetime.combine(day, time(h, m)) - IST_OFFSET
+
+
+# IST WALL-CLOCK variants. The API serializes these columns with a bare `.isoformat()` (no
+# offset) and the SPA's fmtDateTime() does `new Date(iso)`, which parses a naive string in
+# the BROWSER zone — so a UTC value shows up 5h30 early ("4:42 am" for a 10:12 am lead).
+# Use these for every absolute date-time the UI prints (leads, deep scans, shortlists,
+# notes, emails); keep at()/on() for stage visits, relative-time columns and date maths.
+def ist(day_offset: int, hhmm: str = "10:00") -> datetime:
+    h, m = (int(x) for x in hhmm.split(":"))
+    return datetime.combine(d(day_offset), time(h, m))
+
+
+def ist_on(day: date, hhmm: str = "10:00") -> datetime:
+    h, m = (int(x) for x in hhmm.split(":"))
+    return datetime.combine(day, time(h, m))
 
 
 def visit_iso(dt: datetime) -> str:
@@ -217,9 +235,35 @@ def resolve_branch_id(db, org, key: str) -> int:
 
 
 # ---------------------------------------------------------------------------
-# Placeholder PDF bytes (valid single-page PDF, ~1 KB)
+# Placeholder PDF bytes (valid single-page PDF). Padded to a realistic size per document
+# type — the doc cards print fmtSize(file_size) and a 900-byte "bank statement" is a tell.
 # ---------------------------------------------------------------------------
-def make_pdf_bytes(title: str, lines: list[str]) -> bytes:
+_DOC_SIZE_RULES = [  # (regex on "label filename", typical bytes) — first match wins
+    (r"statement|balance certificate|financial evidence|gic|sperrkonto|blocked account|itr|income tax|salary slip", 2_310_000),
+    (r"transcript|marksheet|mark sheet|degree|diploma cert|academic", 2_650_000),
+    (r"passport", 1_842_000),
+    (r"loan|sanction", 654_000),
+    (r"i-?20|cas statement|\bcas\b|coe|confirmation of enrolment|loa|letter of acceptance|admission|offer letter|offer", 486_000),
+    (r"pal|tal|attestation|oshc|insurance|policy|tk certificate|health", 318_000),
+    (r"ielts|toefl|pte|selt|gre|gmat|trf|test result|score", 236_000),
+    (r"receipt|i-?901|sevis|fee", 128_000),
+    (r"sop|statement of purpose|lor|recommendation|cv|resume|motivation", 148_000),
+]
+
+
+def _doc_target_size(label: str, filename: str) -> int:
+    hay = f"{label} {filename}".lower()
+    base = 540_000
+    for pattern, size in _DOC_SIZE_RULES:
+        if re.search(pattern, hay):
+            base = size
+            break
+    # Deterministic ±9 % jitter so two passports never share a byte count.
+    rng = _rng("docsize", label, filename)
+    return int(base * (1 + rng.uniform(-0.09, 0.09)))
+
+
+def make_pdf_bytes(title: str, lines: list[str], target_size: int | None = None) -> bytes:
     def esc(s: str) -> str:
         s = s.encode("latin-1", "replace").decode("latin-1")
         return s.replace("\\", "\\\\").replace("(", "\\(").replace(")", "\\)")
@@ -237,6 +281,13 @@ def make_pdf_bytes(title: str, lines: list[str]) -> bytes:
         b"<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>",
         b"<< /Length " + str(len(stream)).encode() + b" >>\nstream\n" + stream + b"\nendstream",
     ]
+    if target_size:
+        # An unreferenced binary stream object (what an embedded scan image would weigh).
+        # Still a well-formed PDF: it is listed in the xref and never drawn.
+        head = b"<< /Type /XObject /Subtype /Image /Width 1654 /Height 2339 /ColorSpace /DeviceRGB /BitsPerComponent 8 /Length %d >>\nstream\n"
+        pad = max(0, target_size - sum(len(o) for o in objs) - len(head) - 400)
+        payload = random.Random(hashlib.sha256(title.encode("utf-8", "replace")).digest()).randbytes(pad)
+        objs.append(head % pad + payload + b"\nendstream")
     out = bytearray(b"%PDF-1.4\n%\xe2\xe3\xcf\xd3\n")
     offsets = []
     for i, body in enumerate(objs, start=1):
@@ -1277,7 +1328,7 @@ def _doc(ctx: Ctx, client, *, label: str, filename: str, uploaded_by: str, creat
     body = make_pdf_bytes(f"{label} — {client.full_name}", lines or [
         f"Client: {client.full_name}", f"Document: {label}", f"Destination: {client.destination_country_name}",
         f"Reference: {_code(client.full_name + label, 'AA-99999999')}", f"Issued: {fmt_long((created_at + IST_OFFSET).date())}",
-    ])
+    ], target_size=_doc_target_size(label, filename))
     storage_key = f"enterprise/{ctx.org_id}/clients/{client.id}/{secrets.token_hex(16)}{ext}"
     enterprise_storage.store_document(storage_key, body, content_type="application/pdf")
     extracted = None
@@ -1462,40 +1513,40 @@ def seed_notes(ctx: Ctx) -> None:
     c = ctx.clients
     a = c["aarav"]
     _note(ctx, a, "arjun", "Call with Aarav + father: SBI disbursement letter received. Asked the UIUC DSO (Ms. Lee) to reissue the I-20 with the passport name — "
-                           "she expects a corrected copy within a week. DS-160 to be filed the day it lands.", at(-1, "18:40"))
-    _note(ctx, a, "arjun", "Mock interview 2 done — funding answer much sharper, still vague on the return plan. One more prep session before the DS-160 goes in.", at(-4, "12:30"))
-    _note(ctx, a, None, "Auto-filled from validated Passport: Passport expiry, Date of birth.", on(date(2026, 6, 5), "10:33"))
-    _note(ctx, a, "rahul", "UIUC admit accepted; $1,500 deposit paid 18 Jul. I-20 requested from the DSO; loan sanction letter to follow from SBI.", on(date(2026, 7, 18), "11:05"))
+                           "she expects a corrected copy within a week. DS-160 to be filed the day it lands.", ist(-1, "18:40"))
+    _note(ctx, a, "arjun", "Mock interview 2 done — funding answer much sharper, still vague on the return plan. One more prep session before the DS-160 goes in.", ist(-4, "12:30"))
+    _note(ctx, a, None, "Auto-filled from validated Passport: Passport expiry, Date of birth.", ist_on(date(2026, 6, 5), "10:33"))
+    _note(ctx, a, "rahul", "UIUC admit accepted; $1,500 deposit paid 18 Jul. I-20 requested from the DSO; loan sanction letter to follow from SBI.", ist_on(date(2026, 7, 18), "11:05"))
 
     i = c["ishita"]
-    _note(ctx, i, "arjun", "CAS received (E4G2LEEDS2026X1). Reminded Ishita the £12,006 maintenance must sit untouched for 28 days — statement closes on the 4th.", at(-8, "15:10"))
-    _note(ctx, i, None, "Auto-filled from validated SELT / IELTS-for-UKVI Result: Overall score.", at(-55, "16:02"))
-    _note(ctx, i, "arjun", "Leeds offer firmed. Sunrise Overseas (Rajkot) confirmed the sub-agent split at 20% on the service fee.", at(-27, "10:45"))
+    _note(ctx, i, "arjun", "CAS received (E4G2LEEDS2026X1). Reminded Ishita the £12,006 maintenance must sit untouched for 28 days — statement closes on the 4th.", ist(-8, "15:10"))
+    _note(ctx, i, None, "Auto-filled from validated SELT / IELTS-for-UKVI Result: Overall score.", ist(-55, "16:02"))
+    _note(ctx, i, "arjun", "Leeds offer firmed. Sunrise Overseas (Rajkot) confirmed the sub-agent split at 20% on the service fee.", ist(-27, "10:45"))
 
     k = c["karan"]
-    _note(ctx, k, "rahul", f"IRCC BIL received — biometrics must be given by {fmt_long(d(6))}. VFS Chandigarh slot booked for {fmt_long(d(3))}, 10:40. Reminded Karan to carry the BIL printout.", at(-1, "09:20"))
-    _note(ctx, k, "rahul", "Study permit application submitted on the IRCC portal (S312345678). IMM 5476 filed naming the RCIC.", at(-8, "17:35"))
-    _note(ctx, k, "deepak", "PAL and GIC scanned and verified; LOA verification confirmed by Conestoga in the DLI portal.", at(-26, "15:30"))
+    _note(ctx, k, "rahul", f"IRCC BIL received — biometrics must be given by {fmt_long(d(6))}. VFS Chandigarh slot booked for {fmt_long(d(3))}, 10:40. Reminded Karan to carry the BIL printout.", ist(-1, "09:20"))
+    _note(ctx, k, "rahul", "Study permit application submitted on the IRCC portal (S312345678). IMM 5476 filed naming the RCIC.", ist(-8, "17:35"))
+    _note(ctx, k, "deepak", "PAL and GIC scanned and verified; LOA verification confirmed by Conestoga in the DLI portal.", ist(-26, "15:30"))
 
-    _note(ctx, c["meera"], "kavya", "Immi status moved to Further assessment; no request for information yet. Following up with Deakin about the CoE start-date confirmation.", at(-2, "11:30"))
-    _note(ctx, c["divya"], "arjun", "On hold until the family tops up the Expatrio blocked account (€5,904 short). Father confirmed the transfer goes out this week.", at(-9, "10:05"))
-    _note(ctx, c["siddharth"], "kavya", f"AIP issued by INZ — tuition of NZD 18,500 due by {fmt_long(d(13))}. Passport expires 30 Nov 2026: renewal appointment at PSK Trivandrum booked for {fmt_long(d(9))}.", at(-1, "15:25"))
-    _note(ctx, c["sneha"], "kavya", "Draft shortlist shared: AUT, Otago Polytechnic, Lincoln. IELTS booked for the 27th; family wants a Christchurch option too.", at(-3, "10:15"))
-    _note(ctx, c["vikram"], "arjun", "Monash MBA accepted; AUD 5,000 deposit paid. Loan application with Axis Bank — sanction expected in two weeks.", at(-5, "12:45"))
-    _note(ctx, c["aditya"], "priya", "NTU offer in hand (MSc Financial Engineering). NUS decision expected mid-October; employer sponsorship letter received.", at(-4, "17:00"))
-    _note(ctx, c["priyanka"], "priya", "Scholarship-first strategy: targeting fully funded PhD positions (Purdue, UC Davis). GRE booked for November.", at(-3, "11:05"))
-    lead_ts = on(date(2026, 9, 5), "12:48")
+    _note(ctx, c["meera"], "kavya", "Immi status moved to Further assessment; no request for information yet. Following up with Deakin about the CoE start-date confirmation.", ist(-2, "11:30"))
+    _note(ctx, c["divya"], "arjun", "On hold until the family tops up the Expatrio blocked account (€5,904 short). Father confirmed the transfer goes out this week.", ist(-9, "10:05"))
+    _note(ctx, c["siddharth"], "kavya", f"AIP issued by INZ — tuition of NZD 18,500 due by {fmt_long(d(13))}. Passport expires 30 Nov 2026: renewal appointment at PSK Trivandrum booked for {fmt_long(d(9))}.", ist(-1, "15:25"))
+    _note(ctx, c["sneha"], "kavya", "Draft shortlist shared: AUT, Otago Polytechnic, Lincoln. IELTS booked for the 27th; family wants a Christchurch option too.", ist(-3, "10:15"))
+    _note(ctx, c["vikram"], "arjun", "Monash MBA accepted; AUD 5,000 deposit paid. Loan application with Axis Bank — sanction expected in two weeks.", ist(-5, "12:45"))
+    _note(ctx, c["aditya"], "priya", "NTU offer in hand (MSc Financial Engineering). NUS decision expected mid-October; employer sponsorship letter received.", ist(-4, "17:00"))
+    _note(ctx, c["priyanka"], "priya", "Scholarship-first strategy: targeting fully funded PhD positions (Purdue, UC Davis). GRE booked for November.", ist(-3, "11:05"))
+    lead_ts = ist_on(date(2026, 9, 5), "12:48")
     _note(ctx, c["ananyas"], "arjun",
           f'From lead form "Website enquiries" ({fmt_long(date(2026, 9, 5))} · 12:48 PM):\nFull name: Ananya Sharma\nEmail: ananya.sharma@example.com\n'
           "Phone / WhatsApp: +91 98765 43210\nWhich country are you interested in?: Germany\nPreferred intake: September 2027\n"
           "Anything you'd like to tell us?: Class 12 with 91%, interested in a CS bachelor's at a public university. Would like to know about Studienkolleg.",
           lead_ts)
-    _note(ctx, c["rohan"], "rahul", "Visa granted — passport collected from VFS. Pre-departure briefing done; IRP registration to be booked after arrival.", at(-30, "12:00"))
-    _note(ctx, c["nehak"], "rahul", "Landed in Toronto; study permit issued at POE. Case closed as approved.", at(-12, "09:30"))
-    _note(ctx, c["pranav"], "arjun", "F-1 visa stamped — passport collected from the Mumbai consulate. SEVIS check-in and pre-departure briefing booked.", at(-5, "11:30"))
-    _note(ctx, c["anjali"], "priya", "Subclass 500 granted — VEVO checked, conditions 8105 and 8202 explained.", at(-3, "11:30"))
-    _note(ctx, c["sana"], "rahul", "France-Visas file lodged; VFS biometrics appointment confirmed for next week.", at(-6, "14:00"))
-    _note(ctx, c["lakshmi"], "rahul", "Consulate General Bengaluru appointment confirmed; Sperrkonto and TK insurance certificate ready.", at(-3, "10:00"))
+    _note(ctx, c["rohan"], "rahul", "Visa granted — passport collected from VFS. Pre-departure briefing done; IRP registration to be booked after arrival.", ist(-30, "12:00"))
+    _note(ctx, c["nehak"], "rahul", "Landed in Toronto; study permit issued at POE. Case closed as approved.", ist(-12, "09:30"))
+    _note(ctx, c["pranav"], "arjun", "F-1 visa stamped — passport collected from the Mumbai consulate. SEVIS check-in and pre-departure briefing booked.", ist(-5, "11:30"))
+    _note(ctx, c["anjali"], "priya", "Subclass 500 granted — VEVO checked, conditions 8105 and 8202 explained.", ist(-3, "11:30"))
+    _note(ctx, c["sana"], "rahul", "France-Visas file lodged; VFS biometrics appointment confirmed for next week.", ist(-6, "14:00"))
+    _note(ctx, c["lakshmi"], "rahul", "Consulate General Bengaluru appointment confirmed; Sperrkonto and TK insurance certificate ready.", ist(-3, "10:00"))
     ctx.db.flush()
 
 
@@ -1526,10 +1577,10 @@ def seed_emails(ctx: Ctx) -> None:
                       "<ol><li>The I-20 shows your name as <b>MEHTA, AARAV RAKESH</b> — your passport has no middle name. I have asked the DSO for a corrected copy.</li>"
                       "<li>The HDFC statement is in your father's name — please send the signed <b>sponsor affidavit</b> so the two go together.</li></ol>"
                       "<p>Once both land we file the DS-160 the same day and book the OFC + interview slots.</p><p>Best,<br>Arjun</p>"),
-           created_at=on(date(2026, 8, 24), "12:10"))
+           created_at=ist_on(date(2026, 8, 24), "12:10"))
     _email_row(ctx, a, sent_by=None, subject="Re: Your I-20 has arrived — two things to fix before we file the DS-160",
            body="Thanks Arjun! Dad will sign the affidavit tomorrow. Should he also attach his ITR for the last two years?",
-           body_html=None, created_at=on(date(2026, 8, 24), "19:42"), inbound=True)
+           body_html=None, created_at=ist_on(date(2026, 8, 24), "19:42"), inbound=True)
     _email_row(ctx, a, sent_by="arjun", subject="Mock interview 2 — feedback and what to practise",
            body=("Hi Aarav,\n\nGood progress today. Your funding answer is now crisp (loan + father's savings, with the USD figures).\n\n"
                  "Work on: the return-plan answer — name the role and the employer type you are targeting in Bengaluru, and keep every answer under 20 seconds.\n\n"
@@ -1537,7 +1588,7 @@ def seed_emails(ctx: Ctx) -> None:
            body_html=("<p>Hi Aarav,</p><p>Good progress today. Your funding answer is now crisp (loan + father's savings, with the USD figures).</p>"
                       "<p><b>Work on:</b> the return-plan answer — name the role and the employer type you are targeting in Bengaluru, and keep every answer under 20 seconds.</p>"
                       "<p>We will do one more session before the DS-160 goes in.</p><p>Best,<br>Arjun</p>"),
-           created_at=at(-4, "13:05"))
+           created_at=ist(-4, "13:05"))
     i = c["ishita"]
     _email_row(ctx, i, sent_by="arjun", subject="CAS issued — your 28-day maintenance window",
            body=("Hi Ishita,\n\nLeeds has issued your CAS (E4G2LEEDS2026X1). The £12,006 maintenance must stay in your account for 28 consecutive days — "
@@ -1545,29 +1596,29 @@ def seed_emails(ctx: Ctx) -> None:
            body_html=("<p>Hi Ishita,</p><p>Leeds has issued your CAS (<b>E4G2LEEDS2026X1</b>). The £12,006 maintenance must stay in your account for "
                       "<b>28 consecutive days</b> — your statement closes on the 4th, so please do not move any money before then.</p>"
                       "<p>Next: IHS payment and the online application.</p><p>Best,<br>Arjun</p>"),
-           created_at=at(-8, "15:20"))
+           created_at=ist(-8, "15:20"))
     _email_row(ctx, i, sent_by=None, subject="Re: CAS issued — your 28-day maintenance window",
            body="Got it, thank you! The loan disbursement letter should be ready by Monday — I will upload it through the link.",
-           body_html=None, created_at=at(-7, "09:10"), inbound=True)
+           body_html=None, created_at=ist(-7, "09:10"), inbound=True)
     k = c["karan"]
     _email_row(ctx, k, sent_by="rahul", subject=f"Biometrics booked — VFS Chandigarh, {fmt_long(d(3))}",
            body=(f"Hi Karan,\n\nYour biometrics appointment is confirmed for {fmt_long(d(3))} at 10:40, VFS Global Chandigarh. Carry the BIL printout and your passport.\n\n"
                  f"The IRCC deadline is {fmt_long(d(6))}, so please do not reschedule.\n\nBest,\nRahul"),
            body_html=(f"<p>Hi Karan,</p><p>Your biometrics appointment is confirmed for <b>{fmt_long(d(3))} at 10:40</b>, VFS Global Chandigarh. Carry the BIL printout and your passport.</p>"
                       f"<p>The IRCC deadline is <b>{fmt_long(d(6))}</b>, so please do not reschedule.</p><p>Best,<br>Rahul</p>"),
-           created_at=at(-1, "09:30"))
+           created_at=ist(-1, "09:30"))
     _email_row(ctx, k, sent_by="rahul", subject="Study permit application submitted — what happens next",
            body="Hi Karan,\n\nYour study permit application is in (S312345678). IRCC will send a biometrics instruction letter within a few days; we will book VFS as soon as it lands.\n\nBest,\nRahul",
            body_html="<p>Hi Karan,</p><p>Your study permit application is in (<b>S312345678</b>). IRCC will send a biometrics instruction letter within a few days; we will book VFS as soon as it lands.</p><p>Best,<br>Rahul</p>",
-           created_at=at(-8, "17:50"))
+           created_at=ist(-8, "17:50"))
     _email_row(ctx, c["meera"], sent_by="kavya", subject="Visa status update — further assessment",
            body="Hi Meera,\n\nYour ImmiAccount shows the application in further assessment. No documents have been requested; we check daily and will let you know the moment it changes.\n\nBest,\nKavya",
            body_html="<p>Hi Meera,</p><p>Your ImmiAccount shows the application in <b>further assessment</b>. No documents have been requested; we check daily and will let you know the moment it changes.</p><p>Best,<br>Kavya</p>",
-           created_at=at(-2, "11:35"))
+           created_at=ist(-2, "11:35"))
     _email_row(ctx, c["siddharth"], sent_by="kavya", subject=f"AIP received — tuition due by {fmt_long(d(13))}",
            body=f"Hi Siddharth,\n\nImmigration New Zealand has approved your visa in principle. Unitec tuition (NZD 18,500) must reach them by {fmt_long(d(13))}; the loan disbursement is scheduled for the 12th.\n\nBest,\nKavya",
            body_html=f"<p>Hi Siddharth,</p><p>Immigration New Zealand has <b>approved your visa in principle</b>. Unitec tuition (NZD 18,500) must reach them by <b>{fmt_long(d(13))}</b>; the loan disbursement is scheduled for the 12th.</p><p>Best,<br>Kavya</p>",
-           created_at=at(-4, "16:20"))
+           created_at=ist(-4, "16:20"))
     ctx.db.flush()
 
 
@@ -1597,6 +1648,15 @@ def seed_calendar(ctx: Ctx) -> None:
         (None, "Education fair — Hyderabad (HICC)", "other", 29, "10:00", "priya", False, False, "Stall 42; Priya + Deepak on the desk."),
         ("meera", "Check Immi status @Meera Nair", "task", -3, "10:00", "kavya", False, True, None),
         ("aarav", "Mock interview 2 @Aarav Mehta", "task", -4, "12:00", "arjun", False, True, None),
+        # Done items on the days before today so the month grid does not open on a blank
+        # stretch (done = never overdue), plus today's own items (same-day is never overdue).
+        ("meera", "Fee receipt shared @Meera Nair", "task", -7, "10:30", "kavya", False, True, None),
+        ("ishita", "CAS statement checked @Ishita Rao", "task", -6, "15:00", "arjun", False, True, None),
+        ("vikram", "Deposit confirmation from Monash @Vikram Joshi", "reminder", -5, None, "arjun", False, True, None),
+        ("aditya", "NTU offer acceptance sent @Aditya Kulkarni", "task", -2, "11:00", "priya", False, True, None),
+        ("sana", "Confirm VFS slot @Sana Mirza", "follow_up", -1, "12:30", "rahul", False, True, None),
+        (None, "Team stand-up — September intake review", "other", 0, None, "ananya", False, False, "10 minutes per office; flag any client without a next follow-up."),
+        ("aarav", "Call @Aarav Mehta — DSO reply on the corrected I-20", "follow_up", 0, "16:30", "arjun", False, False, None),
     ]
     for key, title, etype, off, tm, by, notify, done, notes in rows:
         ctx.add(models.EnterpriseCalendarEvent(
@@ -1987,7 +2047,7 @@ def seed_deep_scan(ctx: Ctx) -> None:
                  "the I-20 carries a middle name the passport does not. The sponsor's bank statement also needs the affidavit that is still pending on the document request."),
         findings=json.dumps(findings, ensure_ascii=False), checks_passed=json.dumps(checks, ensure_ascii=False),
         stats=json.dumps(stats), model_used="gemini-2.5-pro", credits_charged=20,
-        triggered_by_user_id=ctx.uid["arjun"], triggered_by_name=ctx.user_name("arjun"), created_at=at(-2, "10:05"),
+        triggered_by_user_id=ctx.uid["arjun"], triggered_by_name=ctx.user_name("arjun"), created_at=ist(-2, "10:05"),
     ))
     ctx.db.flush()
 
@@ -2036,7 +2096,7 @@ def seed_course_finder(ctx: Ctx) -> None:
         summary=("Five STEM-designated MS Computer Science programs matched to an 8.6 CGPA, GRE 324 and TOEFL 104 profile with a ~USD 35k budget. "
                  "One reach with the strongest systems group (UIUC), three solid matches with January starts, and one rolling-admission safety."),
         recommendations=json.dumps(recs_a, ensure_ascii=False), catalog_based=True, grounded=False, model_used="gemini-2.5-pro",
-        credits_charged=5, created_by_user_id=ctx.uid["arjun"], created_by_name=ctx.user_name("arjun"), created_at=on(date(2026, 6, 13), "10:45"),
+        credits_charged=5, created_by_user_id=ctx.uid["arjun"], created_by_name=ctx.user_name("arjun"), created_at=ist_on(date(2026, 6, 13), "10:45"),
     ))
     i = c["ishita"]
     recs_i = [
@@ -2070,7 +2130,7 @@ def seed_course_finder(ctx: Ctx) -> None:
         summary=("Five business-school options for a 74% B.Com with two years of export-pricing experience and a GBP 27k tuition ceiling: one reach (Manchester), "
                  "two matches with January cohorts, and two safeties with rolling admission."),
         recommendations=json.dumps(recs_i, ensure_ascii=False), catalog_based=True, grounded=False, model_used="gemini-2.5-pro",
-        credits_charged=5, created_by_user_id=ctx.uid["arjun"], created_by_name=ctx.user_name("arjun"), created_at=at(-60, "14:10"),
+        credits_charged=5, created_by_user_id=ctx.uid["arjun"], created_by_name=ctx.user_name("arjun"), created_at=ist(-60, "14:10"),
     ))
     k = c["karan"]
     recs_k = [
@@ -2094,7 +2154,7 @@ def seed_course_finder(ctx: Ctx) -> None:
                           "field_of_study": "Applied AI / Data Analytics", "budget": "CAD 20,000 / yr", "notes": "PGWP is the goal; Ontario preferred", "max_results": 3}),
         summary="Three PGWP-eligible Ontario options for a 7.1 CGPA with three years of analytics experience: two college PG certificates inside budget and one university reach.",
         recommendations=json.dumps(recs_k, ensure_ascii=False), catalog_based=True, grounded=False, model_used="gemini-2.5-pro",
-        credits_charged=5, created_by_user_id=ctx.uid["rahul"], created_by_name=ctx.user_name("rahul"), created_at=at(-71, "12:40"),
+        credits_charged=5, created_by_user_id=ctx.uid["rahul"], created_by_name=ctx.user_name("rahul"), created_at=ist(-71, "12:40"),
     ))
     ctx.db.flush()
 
@@ -2163,7 +2223,7 @@ def seed_leads(ctx: Ctx) -> None:
         (web, "Tanya Kapoor", "tanya.kapoor@example.com", "+91 98310 44567", "UK", "January 2027",
          "LLM at a Russell Group university; need help with the personal statement.", "contacted", "referral", -4, "14:20", None),
         (insta, "Mohit Saini", "mohit.saini@example.com", "+91 97170 66890", "Canada", "",
-         "", "contacted", "instagram / utm_campaign=sep-intake", -6, "12:48", None),
+         "", "contacted", "instagram / utm_campaign=sep-intake", -6, "12:35", None),
         (web, "Arnav Bhat", "arnav.bhat@example.com", "+91 99450 11234", "Ireland", "September 2027",
          "MSc Computer Science in Dublin; want to compare UCD and TCD costs.", "contacted", "google / utm_campaign=ireland-msc", -7, "16:15", None),
         (web, "Ananya Sharma", "ananya.sharma@example.com", "+91 98765 43210", "Germany", "September 2027",
@@ -2185,8 +2245,8 @@ def seed_leads(ctx: Ctx) -> None:
             organization_id=ctx.org_id, form_id=form.id, form_name=form.name, full_name=name, email=email, phone=phone,
             answers_json=json.dumps(answers, ensure_ascii=False), status=status,
             converted_client_id=(ctx.clients[conv].id if conv else None), ip_address=f"103.21.{_rng(name).randint(10, 99)}.{_rng(name, 2).randint(10, 250)}",
-            source=source, created_at=(ctx.clients[conv].created_at if conv else at(off, tm)),
-            updated_at=(at(off + 1, "10:00") if status != "new" else None),
+            source=source, created_at=(ctx.clients[conv].created_at + IST_OFFSET if conv else ist(off, tm)),  # IST wall-clock (see ist()),
+            updated_at=(ist(off + 1, "10:00") if status != "new" else None),
         ))
     ctx.db.flush()
 
@@ -2209,8 +2269,11 @@ def seed_finance(ctx: Ctx) -> None:
         ))
 
     def entry(off, kind, cat, amount, method, counterparty, desc, client_key=None, tax=0, ref=None, repeat=False, by="sanjay"):
+        """`off` is a day offset from TODAY, or an absolute `date` for rows that must sit in a
+        specific calendar slice (the Overview compares this month-to-date with the same
+        days of last month, so the previous month needs real volume in its first week)."""
         cl = c[client_key] if client_key else None
-        occurred = d(off) if not repeat else d(off).replace(day=1)
+        occurred = off if isinstance(off, date) else (d(off) if not repeat else d(off).replace(day=1))
         ctx.add(models.EnterpriseFinanceEntry(
             organization_id=ctx.org_id, kind=kind, category=cat, amount_paise=amount, tax_paise=tax, currency="INR",
             occurred_on=occurred, description=desc, counterparty=counterparty, payment_method=method, reference=ref,
@@ -2224,6 +2287,15 @@ def seed_finance(ctx: Ctx) -> None:
     entry(-5, "income", "service_fee", 4_500_000, "bank_transfer", "Meera Nair", "Service fee instalment 3 of 3", "meera", tax=810_000, ref="RCPT-2026-0474")
     entry(-3, "income", "service_fee", 3_500_000, "upi", "Tanvi Agarwal", "Service fee instalment 2 of 3", "tanvi", tax=630_000, ref="RCPT-2026-0479")
     entry(-45, "income", "test_prep", 1_200_000, "cash", "Sneha Iyer", "IELTS coaching — 6 weeks", "sneha")
+    # Last month's first week (absolute dates): the Overview's "vs <last month>" tile compares
+    # month-to-date with the same days of the previous month, so August 1-8 needs real volume
+    # or September reads as a +600% jump.
+    entry(date(2026, 8, 3), "income", "university_commission", 16_000_000, "bank_transfer", "Conestoga College", "Commission — May 2026 intake (3 students)", ref="CON-COM-0826")
+    entry(date(2026, 8, 4), "income", "service_fee", 3_500_000, "upi", "Tanvi Agarwal", "Service fee instalment 1 of 3", "tanvi", tax=630_000, ref="RCPT-2026-0452")
+    entry(date(2026, 8, 5), "income", "service_fee", 4_500_000, "bank_transfer", "Meera Nair", "Service fee instalment 2 of 3", "meera", tax=810_000, ref="RCPT-2026-0455")
+    entry(date(2026, 8, 7), "income", "test_prep", 1_800_000, "upi", "Priyanka Reddy", "GRE coaching — 8 weeks", "priyanka", ref="RCPT-2026-0458")
+    entry(date(2026, 8, 7), "income", "service_fee", 4_000_000, "bank_transfer", "Aisha Siddiqui", "Application service fee — Birmingham / Leeds", "aisha", tax=720_000, ref="RCPT-2026-0460")
+    entry(date(2026, 8, 18), "income", "university_commission", 12_000_000, "bank_transfer", "University of Leeds", "Commission — January 2026 intake, final instalment (2 students)", ref="LDS-COM-0826")
     entry(-40, "expense", "marketing", 6_500_000, "card", "Meta Ads", "Instagram lead campaign — September intake", tax=1_170_000, ref="META-INV-88213")
     entry(-33, "income", "visa_filing", 2_500_000, "upi", "Karan Singh", "IRCC filing & biometrics assistance", "karan", ref="RCPT-2026-0447")
     entry(-27, "expense", "agent_commission", 2_000_000, "bank_transfer", "Sunrise Overseas, Rajkot", "Sub-agent commission — Ishita Rao", "ishita", ref="SUNRISE-0826")
@@ -2378,6 +2450,24 @@ def seed_ai_conversations(ctx: Ctx) -> None:
 # ---------------------------------------------------------------------------
 def seed_catalog_verified(ctx: Ctx) -> int:
     updated = 0
+    # The sandbox DB carries a handful of synthetic "sandbox row" universities
+    # (Northlake Institute of Technology, Prairie Stub University, ...). They sort
+    # to the top of Browse Catalog via seed_rank and must never appear in demo
+    # captures, so retire them (is_active=0) before stamping "Verified" badges.
+    junk = (
+        ctx.db.query(models.CourseCatalogUniversity)
+        .filter(
+            models.CourseCatalogUniversity.is_active.is_(True),
+            (models.CourseCatalogUniversity.summary.ilike("%sandbox row%"))
+            | (models.CourseCatalogUniversity.name.ilike("%Stub University%")),
+        )
+        .all()
+    )
+    for row in junk:
+        row.is_active = False
+        row.updated_at = UTC_NOW
+    ctx.db.flush()
+    ctx.counts["course_catalog_universities (sandbox rows retired)"] = len(junk)
     for cc in ("US", "UK", "CA", "AU", "DE", "IE"):
         rows = (
             ctx.db.query(models.CourseCatalogUniversity)

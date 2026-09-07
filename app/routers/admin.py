@@ -3020,16 +3020,10 @@ def run_course_catalog_refresh_admin(
     limit: int | None = Query(None, ge=1, le=100),
     # 15 comma-separated codes need 44 chars — sized with headroom for growth.
     countries: str | None = Query(None, max_length=80),
-    db: Session = Depends(get_db),
     current_user: models.User = Depends(get_current_admin_user),
     _: None = Depends(require_admin_turnstile_proof),
 ):
-    """Force a catalog agent run NOW, in the background (a batch of grounded Gemini
-    calls takes minutes — too long for a request). `limit` bursts past the daily
-    batch (e.g. limit=50 to seed a country fast); `countries` = CSV like "US,UK".
-    Progress/outcome lands in course_catalog_refresh_runs (see /course-catalog/status)."""
-    import threading as _threading
-
+    """Retired: no admin request can start catalog internet research."""
     _enforce_rate_limit_or_429(
         request=request,
         scope="admin.course_catalog.refresh",
@@ -3037,39 +3031,9 @@ def run_course_catalog_refresh_admin(
         window_seconds=ADMIN_ENDPOINT_RATE_WINDOW_SECONDS,
         extra_key=f"user:{current_user.id}",
     )
-    from datetime import datetime as _dt, timezone as _tz
+    from app.services.course_catalog_refresh import DISABLED_MESSAGE
 
-    from app.services.course_catalog_refresh import run_course_catalog_refresh_job, run_in_progress
-
-    # Immediate feedback beats a silent background skip: the job itself also refuses
-    # to stack onto a live run, but a 409 here stops the double-click → double-spend
-    # pattern at the source.
-    existing_run = (
-        db.query(models.CourseCatalogRefreshRun)
-        .filter(models.CourseCatalogRefreshRun.run_date == _dt.now(_tz.utc).date())
-        .first()
-    )
-    if run_in_progress(existing_run):
-        raise HTTPException(
-            status_code=409,
-            detail="A catalog refresh is already running — check /api/admin/course-catalog/status.",
-        )
-
-    country_list = [c.strip().upper() for c in countries.split(",") if c.strip()] if countries else None
-
-    worker = _threading.Thread(
-        target=run_course_catalog_refresh_job,
-        kwargs={"force": True, "limit": limit, "countries": country_list},
-        name="course-catalog-refresh-manual",
-        daemon=True,
-    )
-    worker.start()
-    return {
-        "status": "started",
-        "limit": limit,
-        "countries": country_list,
-        "note": "Running in the background — check /api/admin/course-catalog/status for the run row.",
-    }
+    raise HTTPException(status_code=410, detail=DISABLED_MESSAGE)
 
 
 @router.get("/course-catalog/status")
@@ -3078,7 +3042,7 @@ def course_catalog_status_admin(
     current_user: models.User = Depends(get_current_admin_user),
     db: Session = Depends(get_db),
 ):
-    """Catalog size/freshness per country + recent agent runs."""
+    """Stored catalog counts and historical research runs; refresh remains disabled."""
     _enforce_rate_limit_or_429(
         request=request,
         scope="admin.course_catalog.status",
@@ -3087,6 +3051,7 @@ def course_catalog_status_admin(
         extra_key=f"user:{current_user.id}",
     )
     from app import course_catalog
+    from app.services.course_catalog_refresh import DISABLED_MESSAGE
 
     runs = (
         db.query(models.CourseCatalogRefreshRun)
@@ -3096,6 +3061,10 @@ def course_catalog_status_admin(
     )
     return {
         **course_catalog.catalog_stats(db),
+        "refresh_enabled": False,
+        "refresh_status": "disabled",
+        "refresh_mode": "database_only",
+        "refresh_message": DISABLED_MESSAGE,
         "runs": [
             {
                 "run_date": r.run_date.isoformat() if r.run_date else None,

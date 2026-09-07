@@ -373,12 +373,12 @@ def courses_recommend(
     current_user: models.User = Depends(get_current_active_user),
     db: Session = Depends(get_db),
 ):
-    """AI course shortlist (Visa-Pass metered). Catalog-first with grounded live-search
-    fallback, personalized to the student's profile, destination and shortlist history.
+    """AI course shortlist (Visa-Pass metered) from saved catalog records only,
+    personalized to the student's profile, destination and shortlist history.
     Quota choreography: rate-limit → atomically RESERVE one run (402 when none left) →
     generate → refund the reservation on any failure. Reserve-before-generate (rather
     than the older check→generate→consume) is deliberate: this is the one B2C feature
-    with a finite paid cap whose purpose is bounding real Gemini/Search spend, and the
+    with a finite paid cap whose purpose is bounding real Gemini spend, and the
     old shape let N parallel requests each pass the check and lost-update the counter."""
     # Validate the brief first: a bad request is a 400 before any rate-limit, paywall or
     # model-availability state is consulted (same order as the enterprise endpoint).
@@ -389,9 +389,6 @@ def courses_recommend(
         raise HTTPException(status_code=400, detail=str(exc))
     _rate_limit_or_429(request, "courses.recommend", RECOMMEND_RATE_LIMIT, RECOMMEND_RATE_WINDOW, current_user.id)
     subscription = get_or_create_user_subscription(db, current_user.id)
-
-    if not course_catalog.ai_available():
-        raise HTTPException(status_code=503, detail="AI recommendations are not configured.")
 
     code = _resolve_country_or_400(current_user, payload.country_code)
 
@@ -413,6 +410,20 @@ def courses_recommend(
             discipline=discipline,
             limit_universities=20,
         )
+
+    def no_matches_response(message=None):
+        return {
+            "destination_country": course_catalog.country_name(code),
+            "rec": None,
+            "no_matches": True,
+            "message": f"{message or 'No matching courses are saved in the catalog. Try different filters.'} No run was used.",
+            "entitlement": visa_pass.feature_entitlement(subscription, FEATURE_KEY),
+        }
+
+    if not any(courses for _university, courses in catalog_rows):
+        return no_matches_response()
+    if not course_catalog.ai_available():
+        raise HTTPException(status_code=503, detail="AI recommendations are not configured.")
 
     # Atomically claim one run BEFORE spending tokens (raises 402 when none left).
     # `reserved` is False only with the VISA_PASS_ENFORCE kill switch off, where the
@@ -443,6 +454,11 @@ def courses_recommend(
         if not result.get("available"):
             raise HTTPException(status_code=503, detail=result.get("message") or "Recommendations are unavailable right now.")
         recommendations = result.get("recommendations") or []
+        if not recommendations and result.get("no_matches"):
+            if reserved:
+                visa_pass.refund_feature(db, subscription, FEATURE_KEY)
+                reserved = False
+            return no_matches_response(result.get("message") or result.get("summary"))
         if not recommendations:
             raise HTTPException(
                 status_code=502,

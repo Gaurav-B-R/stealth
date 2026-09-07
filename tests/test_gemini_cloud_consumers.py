@@ -57,35 +57,13 @@ class GeminiCloudConsumerTests(unittest.TestCase):
         assert enterprise_ai.is_ai_configured() is configured
 
 
-    def test_catalog_grounding_uses_cloud_client_and_preserves_options(self):
-        response = SimpleNamespace(text='{"courses": []}')
-        generate = Mock(return_value=response)
-        factory = Mock(return_value=SimpleNamespace(models=SimpleNamespace(generate_content=generate)))
-        meter = Mock(side_effect=lambda source, model, call, **kwargs: call())
+    def test_catalog_grounding_cannot_create_cloud_requests(self):
+        factory = Mock(side_effect=AssertionError("Catalog web research is disabled"))
         self.patch(gemini_service, "is_ai_configured", lambda: True)
-        self.patch(gemini_service, "GEMINI_API_KEY", "")
         self.patch(gemini_service, "get_genai_client", factory, raising=False)
         self.patch(course_catalog, "GROUNDING_ENABLED", True)
-        self.patch(course_catalog, "_extract_grounding_urls", lambda response: ["https://example.edu"])
-        self.patch(course_catalog, "_extract_grounding_domains", lambda response: ["example.edu"])
-        self.patch(ai_usage, "tracked_gemini_call", meter)
-
-        result = course_catalog._grounded_generate("original prompt", ["original-model"], "catalog-test")
-
-        assert result == (response.text, ["https://example.edu"], ["example.edu"])
-        assert factory.call_args.kwargs["http_options"].timeout == course_catalog.GROUNDED_REQUEST_TIMEOUT_MS
-        kwargs = generate.call_args.kwargs
-        assert kwargs["model"] == "original-model"
-        assert kwargs["contents"] == "original prompt"
-        assert kwargs["config"].temperature == 0.3
-        assert kwargs["config"].tools[0].google_search is not None
-        meter.assert_called_once()
-        assert meter.call_args.args[:2] == ("catalog-test", "original-model")
-        assert meter.call_args.kwargs == {
-            "product": "shared", "trigger": "automation",
-            "pricing_context": {"service_tier": "standard", "input_modalities": ["TEXT"]},
-        }
-        assert kwargs["config"].automatic_function_calling.disable is True
+        assert course_catalog._grounded_generate("offline", ["original-model"], "catalog-test") is None
+        factory.assert_not_called()
 
 
     def test_daily_notifier_uses_shared_cloud_model(self):

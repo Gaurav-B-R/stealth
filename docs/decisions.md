@@ -49,6 +49,7 @@ Status legend:
 - Context: Daily AI notifications and F1 news ingestion need periodic execution.
 - Decision: Start scheduler threads from application startup instead of external worker infrastructure.
 - Consequences: Simple operations in single-instance deploys; multi-instance deployments need care to avoid duplicate runs.
+- Update, 2026-09-07: Latest-news ingestion and catalog research are retired. Their entrypoints cannot start work, even with forced calls or old enable flags. Other schedulers retain this design. See [catalog and news policy](catalog-and-news-policy.md).
 
 ## D-006 Cloudflare R2 As Document/Artifact Store
 
