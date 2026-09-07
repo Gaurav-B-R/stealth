@@ -184,11 +184,7 @@ COURSE_URL_CHECK_WORKERS = max(1, min(16, int(os.getenv("COURSE_CATALOG_URL_CHEC
 
 
 def ai_available() -> bool:
-    has_service_account = os.path.exists(gemini_service.SERVICE_ACCOUNT_PATH)
-    has_valid_api_key = bool(
-        gemini_service.GEMINI_API_KEY and gemini_service.GEMINI_API_KEY.startswith("AIza")
-    )
-    return has_service_account or has_valid_api_key
+    return gemini_service.is_ai_configured()
 
 
 def _model_candidates() -> list[str]:
@@ -359,7 +355,7 @@ def _extract_grounding_domains(response: Any, limit: int = 24) -> set[str]:
 
 
 def _grounded_generate(prompt: str, model_names: list[str] | str, usage_source: str):
-    """Google-Search-grounded JSON generation (google-genai SDK, API-key auth).
+    """Google-Search-grounded JSON generation through the configured Gemini provider.
 
     Tries EVERY configured model candidate before giving up: a dead primary id
     (e.g. `gemini-3.1-pro` 404s while only `-preview` exists) must not silently
@@ -371,12 +367,10 @@ def _grounded_generate(prompt: str, model_names: list[str] | str, usage_source: 
     """
     if not GROUNDING_ENABLED:
         return None
-    api_key = (getattr(gemini_service, "GEMINI_API_KEY", "") or os.getenv("GEMINI_API_KEY", "")).strip()
-    if not api_key or not api_key.startswith("AIza"):
+    if not gemini_service.is_ai_configured():
         return None
     candidates = [model_names] if isinstance(model_names, str) else list(model_names or [])
     try:
-        from google import genai as _genai
         from google.genai import types as _types
     except Exception as exc:
         logger.warning("Course catalog grounding SDK unavailable (%s); using ungrounded model.", exc)
@@ -389,8 +383,7 @@ def _grounded_generate(prompt: str, model_names: list[str] | str, usage_source: 
             # BETWEEN universities, so without this a single hung call blocks the
             # daily run indefinitely — long enough for the stale-run takeover to
             # fire and start a second, concurrent run.
-            client = _genai.Client(
-                api_key=api_key,
+            client = gemini_service.get_genai_client(
                 http_options=_types.HttpOptions(timeout=GROUNDED_REQUEST_TIMEOUT_MS),
             )
             config = _types.GenerateContentConfig(

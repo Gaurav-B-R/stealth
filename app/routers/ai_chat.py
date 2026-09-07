@@ -91,13 +91,11 @@ def sanitize_ai_response_for_public_display(text: str) -> str:
 def _build_ai_chat_model(provider: str, model_name: str, generation_config: Optional[dict] = None):
     """Build the chat model, optionally with a generation config (e.g. a short output cap
     for fast, clipped interview turns). generation_config is a plain dict so it works across
-    both providers; it's translated to each SDK's shape here."""
+    both providers; the shared model adapter handles SDK configuration."""
     if provider == "vertex":
-        from vertexai.generative_models import GenerativeModel, GenerationConfig
-
         if generation_config:
-            return GenerativeModel(model_name, generation_config=GenerationConfig(**generation_config))
-        return GenerativeModel(model_name)
+            return gemini_utils.GenerativeModel(model_name, generation_config=generation_config)
+        return gemini_utils.GenerativeModel(model_name)
     if provider == "genai":
         if generation_config:
             # google.generativeai accepts a plain dict generation_config.
@@ -115,11 +113,10 @@ def _generate_with_ai_chat_model(
 ):
     if inline_session_attachment_parts:
         if provider == "vertex":
-            from vertexai.generative_models import Part
             prompt_parts = [full_prompt]
             for file_part in inline_session_attachment_parts:
                 prompt_parts.append(
-                    Part.from_data(
+                    gemini_utils.Part.from_data(
                         data=file_part["data"],
                         mime_type=file_part["mime_type"],
                     )
@@ -828,13 +825,10 @@ def generate_ai_response(
                 primary_env="RILONO_AI_CHAT_MODEL",
                 candidates_env="RILONO_AI_CHAT_MODEL_CANDIDATES",
             )
-        # Select provider based on available service.
-        if hasattr(gemini_utils, 'USE_VERTEX_AI') and gemini_utils.USE_VERTEX_AI and hasattr(gemini_utils, 'VERTEX_AI_AVAILABLE') and gemini_utils.VERTEX_AI_AVAILABLE:
-            provider = "vertex"
-        elif hasattr(gemini_utils, 'GENAI_AVAILABLE') and gemini_utils.GENAI_AVAILABLE and gemini_utils.genai:
-            provider = "genai"
-        else:
+        # A configured Cloud route must never fall back to the old API-key account.
+        if not gemini_utils.is_ai_configured():
             raise Exception("Rilono AI model provider is not available.")
+        provider = "vertex" if gemini_utils.USE_VERTEX_AI else "genai"
         
         # Build attached documents section
         attached_docs_text = ""

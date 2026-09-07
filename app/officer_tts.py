@@ -6,9 +6,10 @@ other destinations. Gated to Visa Success Pass holders at the endpoint layer, an
 synthesis is metered under the `mock_interview_tts` usage source so TTS spend shows up
 in the admin cost tracker next to Gemini spend.
 
-Auth strategy (first one that works wins):
+In Vertex mode, use the same dedicated Cloud identity and billing project as
+Gemini, with no fallback to API keys. Developer mode retains the existing order:
   1) GOOGLE_TTS_API_KEY env var (dedicated key for texttospeech.googleapis.com)
-  2) The Vertex service account (same one gemini_service uses), via google-auth
+  2) The generic GOOGLE_APPLICATION_CREDENTIALS service account, via google-auth
   3) GEMINI_API_KEY — works when the key's GCP project has the TTS API enabled
 If none work, callers get TtsUnavailable and the client falls back to browser TTS, so
 the interview NEVER breaks because of voice infrastructure.
@@ -17,6 +18,7 @@ the interview NEVER breaks because of voice infrastructure.
 import base64
 import os
 import re
+from threading import Lock
 from typing import Optional
 
 import requests
@@ -28,6 +30,11 @@ TTS_TIMEOUT_SECONDS = 20
 # Neural2 pricing: $16 per 1M characters (byte-for-byte what we meter in ai_usage).
 NEURAL2_USD_PER_MILLION_CHARS = 16.0
 MAX_TTS_CHARS = 1100  # bounds worst-case cost per officer line (~$0.018)
+
+# Keep this token independent of the Gemini SDK's mutable credential token.
+# The copy uses the same service-account identity/key and selected billing project.
+_CLOUD_TTS_AUTH_LOCK = Lock()
+_CLOUD_TTS_AUTH_CACHE = None
 
 # Accent-matched officer voices. Launch: US only. Others stay listed but disabled so
 # adding a country later is a one-line flip (enabled=True) once its persona ships.
@@ -74,7 +81,7 @@ def _clean_for_speech(text: str) -> str:
 
 
 def _service_account_token() -> Optional[str]:
-    """Bearer token from the same service account gemini_service discovered, if any."""
+    """Legacy Developer-mode token from the generic service-account path, if any."""
     sa_path = getattr(gemini_utils, "SERVICE_ACCOUNT_PATH", None)
     if not sa_path or not os.path.exists(sa_path):
         return None
@@ -91,18 +98,55 @@ def _service_account_token() -> Optional[str]:
         return None
 
 
+def _cloud_tts_headers() -> Optional[dict]:
+    """Refresh the dedicated Cloud identity only when needed; pin billing to Cloud."""
+    global _CLOUD_TTS_AUTH_CACHE
+    if not gemini_utils.USE_VERTEX_AI or not gemini_utils.is_ai_configured():
+        return None
+    source = gemini_utils._CLOUD_CREDENTIALS
+    project = gemini_utils.CLOUD_PROJECT
+    try:
+        from google.auth.transport.requests import Request
+
+        with _CLOUD_TTS_AUTH_LOCK:
+            cached = _CLOUD_TTS_AUTH_CACHE
+            if cached is None or cached[0] is not source or cached[1] != project:
+                cached = (source, project, source.with_quota_project(project))
+                _CLOUD_TTS_AUTH_CACHE = cached
+            headers = {}
+            with requests.Session() as session:
+                transport = Request(session=session)
+
+                def bounded_request(*args, **kwargs):
+                    kwargs["timeout"] = TTS_TIMEOUT_SECONDS
+                    return transport(*args, **kwargs)
+
+                cached[2].before_request(bounded_request, "POST", TTS_ENDPOINT, headers)
+            # Enforce the selected project's service usage and billing explicitly.
+            headers["x-goog-user-project"] = project
+            return headers
+    except Exception:
+        return None
+
+
 def _synthesize_call(payload: dict) -> Optional[dict]:
-    """Try each auth mechanism in order; return the TTS JSON response or None."""
-    attempts = []
-    api_key = os.getenv("GOOGLE_TTS_API_KEY", "").strip()
-    if api_key:
-        attempts.append({"params": {"key": api_key}, "headers": {}})
-    token = _service_account_token()
-    if token:
-        attempts.append({"params": {}, "headers": {"Authorization": f"Bearer {token}"}})
-    gemini_key = os.getenv("GEMINI_API_KEY", "").strip()
-    if gemini_key.startswith("AIza"):
-        attempts.append({"params": {"key": gemini_key}, "headers": {}})
+    """Use Cloud exclusively when selected; retain the Developer credential chain."""
+    if gemini_utils.USE_VERTEX_AI:
+        headers = _cloud_tts_headers()
+        if not headers:
+            return None
+        attempts = [{"params": {}, "headers": headers}]
+    else:
+        attempts = []
+        api_key = os.getenv("GOOGLE_TTS_API_KEY", "").strip()
+        if api_key:
+            attempts.append({"params": {"key": api_key}, "headers": {}})
+        token = _service_account_token()
+        if token:
+            attempts.append({"params": {}, "headers": {"Authorization": f"Bearer {token}"}})
+        gemini_key = os.getenv("GEMINI_API_KEY", "").strip()
+        if gemini_key.startswith("AIza"):
+            attempts.append({"params": {"key": gemini_key}, "headers": {}})
 
     for attempt in attempts:
         try:

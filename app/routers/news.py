@@ -553,18 +553,11 @@ def _build_latest_genai_client() -> Tuple[Any, str]:
     if not _load_latest_genai():
         raise HTTPException(status_code=503, detail=PUBLIC_NEWS_GENERATION_ERROR_DETAIL)
 
-    api_key = str(gemini_utils.GEMINI_API_KEY or "").strip()
-    if api_key.startswith("AIza"):
-        return latest_genai.Client(api_key=api_key), "api_key"
-
-    service_account_path = gemini_utils.SERVICE_ACCOUNT_PATH
-    if os.path.exists(service_account_path):
-        project_id = _resolve_vertex_project_id()
-        location = os.getenv("GCP_LOCATION", "us-central1")
-        if project_id:
-            return latest_genai.Client(vertexai=True, project=project_id, location=location), "vertex"
-
-    raise HTTPException(status_code=503, detail=PUBLIC_NEWS_GENERATION_ERROR_DETAIL)
+    try:
+        client = gemini_utils.get_genai_client()
+    except Exception as exc:
+        raise HTTPException(status_code=503, detail=PUBLIC_NEWS_GENERATION_ERROR_DETAIL) from exc
+    return client, "vertex" if gemini_utils.USE_VERTEX_AI else "api_key"
 
 
 def _generate_content_with_grounding(

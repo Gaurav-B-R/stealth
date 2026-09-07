@@ -59,9 +59,8 @@ TOOL_RESULT_CHAR_CAP = max(2_000, int(os.getenv("ENTERPRISE_AI_TOOL_RESULT_CHARS
 # ---------------------------------------------------------------------------
 
 def is_ai_configured() -> bool:
-    """True when a usable Gemini API key is present for the standard SDK path."""
-    key = (gemini_utils.GEMINI_API_KEY or "").strip()
-    return bool(gemini_utils.GENAI_AVAILABLE and key and key.startswith("AIza"))
+    """True when the selected Gemini provider has usable configuration."""
+    return gemini_utils.is_ai_configured()
 
 
 def sanitize_public_ai_text(text: str) -> str:
@@ -2055,7 +2054,7 @@ def _is_empty_candidate(response) -> bool:
         candidates = list(response.candidates or [])
         if not candidates:
             return False
-        return len(list(candidates[0].content.parts)) == 0
+        return len(list(candidates[0].content.parts or [])) == 0
     except Exception:
         return False
 
@@ -2072,7 +2071,12 @@ def _function_calls_in(response) -> list:
         parts = candidates[0].content.parts
     except Exception:
         return []
-    return [p.function_call for p in parts if p and "function_call" in p]
+    calls = []
+    for part in parts or []:
+        call = getattr(part, "function_call", None)
+        if call is not None and getattr(call, "name", ""):
+            calls.append(call)
+    return calls
 
 
 def _capped_tool_result(name: str, result) -> dict:
