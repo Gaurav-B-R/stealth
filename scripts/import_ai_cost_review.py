@@ -18,7 +18,91 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 USER_FIELDS = {"id", "email", "full_name", "is_active", "is_admin", "is_developer",
                "is_enterprise_account", "created_at"}
-OMITTED_USAGE_FIELDS = {"raw_usage_json", "estimated_cost_usd", "search_cost_usd"}
+OMITTED_USAGE_FIELDS = {"estimated_cost_usd", "search_cost_usd"}
+USAGE_COUNTERS = {"prompt_token_count", "candidates_token_count", "total_token_count",
+                  "cached_content_token_count", "thoughts_token_count", "tool_use_prompt_token_count"}
+MODALITY_COUNTERS = {"prompt_tokens_details", "cache_tokens_details", "candidates_tokens_details",
+                    "tool_use_prompt_tokens_details"}
+MODALITIES = {"TEXT", "IMAGE", "VIDEO", "AUDIO", "MODALITY_UNSPECIFIED"}
+TRAFFIC_TYPES = {"TRAFFIC_TYPE_UNSPECIFIED", "ON_DEMAND", "ON_DEMAND_PRIORITY", "ON_DEMAND_FLEX",
+                 "PROVISIONED_THROUGHPUT"}
+# Locations are a fixed allowlist, not arbitrary strings which could contain a
+# credential or prompt. New regions can be added when their pricing is reviewed.
+PRICING_LOCATIONS = {"global", "africa-south1", "asia-east1", "asia-east2", "asia-northeast1",
+                     "asia-northeast2", "asia-northeast3", "asia-south1", "asia-south2",
+                     "asia-southeast1", "asia-southeast2", "australia-southeast1", "australia-southeast2",
+                     "europe-central2", "europe-north1", "europe-north2", "europe-southwest1",
+                     "europe-west1", "europe-west2", "europe-west3", "europe-west4", "europe-west6",
+                     "europe-west8", "europe-west9", "europe-west10", "europe-west12", "me-central1",
+                     "me-central2", "me-west1", "northamerica-northeast1", "northamerica-northeast2",
+                     "northamerica-south1", "southamerica-east1", "southamerica-west1", "us-central1",
+                     "us-east1", "us-east4", "us-east5", "us-south1", "us-west1", "us-west2",
+                     "us-west3", "us-west4"}
+
+
+def _field(mapping, name):
+    if name in mapping:
+        return mapping[name]
+    head, *tail = name.split("_")
+    return mapping.get(head + "".join(part.title() for part in tail))
+
+
+def _safe_counter(value):
+    # Google JSON counters are integers; retain exact digit strings from proto
+    # serializers too. Reject booleans/floats instead of coercing them to usage.
+    if isinstance(value, str) and value.isascii() and value.isdigit() and len(value) <= 19:
+        value = int(value)
+    return value if type(value) is int and 0 <= value <= 2**63 - 1 else None
+
+
+def sanitize_usage_metadata(value):
+    """Copy pricing evidence only. No prompt, response, identifier, or free text."""
+    if isinstance(value, str):
+        try:
+            value = json.loads(value)
+        except (ValueError, TypeError):
+            return None
+    if not isinstance(value, dict):
+        return None
+    clean = {}
+    for field in USAGE_COUNTERS:
+        counter = _safe_counter(_field(value, field))
+        if counter is not None:
+            clean[field] = counter
+    for field in MODALITY_COUNTERS:
+        details = _field(value, field)
+        if not isinstance(details, list):
+            continue
+        pairs = []
+        for detail in details:
+            if not isinstance(detail, dict):
+                break
+            modality, count = detail.get("modality"), _safe_counter(_field(detail, "token_count"))
+            if not isinstance(modality, str) or modality not in MODALITIES or count is None:
+                break
+            pairs.append({"modality": modality, "token_count": count})
+        else:
+            clean[field] = pairs
+    traffic = _field(value, "traffic_type")
+    if isinstance(traffic, str) and traffic in TRAFFIC_TYPES:
+        clean["traffic_type"] = traffic
+    context = value.get("_rilono_pricing")
+    if isinstance(context, dict):
+        pricing = {}
+        tier = context.get("service_tier")
+        if isinstance(tier, str) and tier in {"standard", "priority", "flex", "unspecified", "batch"}:
+            pricing["service_tier"] = tier
+        location = context.get("location")
+        if isinstance(location, str) and location in PRICING_LOCATIONS:
+            pricing["location"] = location
+        modalities = context.get("input_modalities")
+        if isinstance(modalities, list) and all(isinstance(item, str) and item in MODALITIES for item in modalities):
+            pricing["input_modalities"] = modalities
+        if type(context.get("explicit_cache")) is bool:
+            pricing["explicit_cache"] = context["explicit_cache"]
+        if pricing:
+            clean["_rilono_pricing"] = pricing
+    return json.dumps(clean, sort_keys=True, separators=(",", ":")) if clean else None
 
 
 def import_retained_records(source_url: str, destination: Path) -> dict:
@@ -86,6 +170,7 @@ def import_retained_records(source_url: str, destination: Path) -> dict:
                         for row in rows:
                             record = dict(row)
                             record.update(estimated_cost_usd=0, search_cost_usd=0, pricing_status="unavailable")
+                            record["raw_usage_json"] = sanitize_usage_metadata(record.get("raw_usage_json"))
                             stamp = record.get("created_at")
                             if stamp is not None:
                                 stamp = stamp.isoformat()

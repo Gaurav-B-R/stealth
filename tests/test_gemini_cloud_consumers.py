@@ -81,7 +81,10 @@ class GeminiCloudConsumerTests(unittest.TestCase):
         assert kwargs["config"].tools[0].google_search is not None
         meter.assert_called_once()
         assert meter.call_args.args[:2] == ("catalog-test", "original-model")
-        assert meter.call_args.kwargs == {"product": "shared", "trigger": "automation"}
+        assert meter.call_args.kwargs == {
+            "product": "shared", "trigger": "automation",
+            "pricing_context": {"service_tier": "standard", "input_modalities": ["TEXT"]},
+        }
         assert kwargs["config"].automatic_function_calling.disable is True
 
 

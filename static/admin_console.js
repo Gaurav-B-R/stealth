@@ -172,6 +172,9 @@ const refs = {
     aiRangeReset: document.getElementById('adminAiRangeReset'),
     aiRangeError: document.getElementById('adminAiRangeError'),
     aiRangeCost: document.getElementById('adminAiRangeCost'),
+    aiCalculatedCost: document.getElementById('adminAiCalculatedCost'),
+    aiCalculatedCostSub: document.getElementById('adminAiCalculatedCostSub'),
+    aiCalculatedCoverage: document.getElementById('adminAiCalculatedCoverage'),
     aiRangeSub: document.getElementById('adminAiRangeSub'),
     aiRangeAvg: document.getElementById('adminAiRangeAvg'),
     aiRangeAvgSub: document.getElementById('adminAiRangeAvgSub'),
@@ -191,6 +194,7 @@ const refs = {
     aiDailyTotalCalls: document.getElementById('adminAiDailyTotalCalls'),
     aiDailyTotalTokens: document.getElementById('adminAiDailyTotalTokens'),
     aiDailyTotalCost: document.getElementById('adminAiDailyTotalCost'),
+    aiDailyCalculatedTotal: document.getElementById('adminAiDailyCalculatedTotal'),
     aiDailyTotalShare: document.getElementById('adminAiDailyTotalShare'),
     aiProfilesForm: document.getElementById('adminAiProfilesForm'),
     aiProfilesSearch: document.getElementById('adminAiProfilesSearch'),
@@ -2056,6 +2060,9 @@ function formatTokens(value) {
 function aiUsageEmptyState(message) {
     state.aiUsageData = null;
     state.aiSeries = [];
+    if (refs.aiCalculatedCost) refs.aiCalculatedCost.textContent = '$0.00';
+    if (refs.aiCalculatedCostSub) refs.aiCalculatedCostSub.textContent = 'Cost data not loaded';
+    if (refs.aiCalculatedCoverage) refs.aiCalculatedCoverage.textContent = 'Cost data not loaded.';
     [refs.aiTodayCost, refs.ai7Cost, refs.aiMonthCost, refs.aiAllCost, refs.aiRangeCost,
         refs.aiRangeAvg, refs.aiRangeTopDay, refs.aiRangeSaved, refs.aiRangeSearch,
         refs.aiDailyTotalCalls, refs.aiDailyTotalTokens, refs.aiDailyTotalCost].forEach((el) => {
@@ -2066,11 +2073,12 @@ function aiUsageEmptyState(message) {
         if (el) el.textContent = 'Usage data not loaded';
     });
     if (refs.aiDailyTotalShare) refs.aiDailyTotalShare.textContent = '0%';
+    if (refs.aiDailyCalculatedTotal) refs.aiDailyCalculatedTotal.textContent = '$0.00';
     const m = escapeHtml(message || 'No AI usage recorded yet.');
     [refs.aiTimelineChart, refs.aiSourceChart, refs.aiModelChart].forEach((el) => {
         if (el) el.innerHTML = `<div class="table-empty">${m}</div>`;
     });
-    if (refs.aiDailyTableBody) refs.aiDailyTableBody.innerHTML = `<tr><td colspan="5" class="table-empty">${m}</td></tr>`;
+    if (refs.aiDailyTableBody) refs.aiDailyTableBody.innerHTML = `<tr><td colspan="6" class="table-empty">${m}</td></tr>`;
 }
 
 function setAiRefreshing(on) {
@@ -2806,6 +2814,9 @@ function renderAiUsage(data) {
     setMetric(refs.aiMonthCost, refs.aiMonthSub, totals.this_month);
     setMetric(refs.aiAllCost, refs.aiAllSub, totals.all_time);
     const range = data?.range || {};
+    if (refs.aiCalculatedCost) refs.aiCalculatedCost.textContent = aiRecordedCost(range);
+    if (refs.aiCalculatedCostSub) refs.aiCalculatedCostSub.textContent = aiCalculatedStatus(range);
+    if (refs.aiCalculatedCoverage) refs.aiCalculatedCoverage.innerHTML = aiPricingCoverage(range);
     const label = aiRangeLabel(range);
     if (range.start && range.end) {
         state.aiRange.start = range.start;
@@ -2857,9 +2868,50 @@ function aiRecordedValue(stats, key) {
     return aiExactCount(stats?.[key]);
 }
 
-function aiRecordedCost() {
-    // Google exports identify project charges, not individual application profiles.
-    return formatAiUsd(0);
+function aiRecordedCost(stats) {
+    // Only the audited calculator can supply this value. Legacy estimated and
+    // Google project-wide billed amounts are never used as a profile fallback.
+    const known = stats?.calculated_cost_available === true
+        && ['complete', 'partial'].includes(stats?.calculated_cost_status);
+    return aiBillingMoney(known ? stats.calculated_cost_usd : '0', 'USD');
+}
+
+function aiCalculatedStatus(stats) {
+    if (stats?.calculated_cost_status === 'no_usage' || !Number(stats?.calls)) return 'No recorded usage';
+    if (stats?.calculated_cost_status === 'complete' && stats.calculated_cost_available) return 'Recorded usage × published rates';
+    if (stats?.calculated_cost_status === 'partial' && stats.calculated_cost_available) return 'Partial cost · see pricing coverage';
+    return 'Cost unavailable · missing usage or pricing';
+}
+
+function aiCalculatedCell(stats) {
+    return `<strong>${escapeHtml(aiRecordedCost(stats))}</strong><div class="user-meta">${escapeHtml(aiCalculatedStatus(stats))}</div>`;
+}
+
+function aiPricingCoverage(stats = {}) {
+    const reasonLabels = {
+        input_modality_not_recorded: 'Input type was not recorded, so its price is unavailable.',
+        grounding_fees_and_free_allowance: 'Search grounding fees and shared free allowances are excluded.',
+        tool_or_unclassified_tokens: 'Tool or unclassified tokens could not be priced.',
+        non_token_price_not_verified: 'Voice or other non-token pricing has not been verified.',
+        historical_counters_retained_without_raw_provider_metadata: 'Older records retain token counters without the original provider metadata.',
+        valued_at_standard_list_rates_service_tier_not_retained: 'The original service tier was not recorded; this value uses standard rates.',
+        model_rate_not_verified: 'The model has no verified price in the rate catalog.',
+        usage_not_measured: 'Some requests have no measured usage.',
+        provider_usage_metadata_missing: 'Provider usage metadata is missing.',
+        explicit_cache_storage: 'Cache storage charges are excluded.',
+        explicit_cache_storage_duration_not_metered: 'Cache storage duration and charges are excluded.',
+        region_not_retained_standard_global_rates_used: 'The original region was not recorded; this value uses the verified global rate.',
+        historical_request_date_price_not_verified: 'The price on the original request date is not verified; this value uses the current catalog.',
+        historical_provider_not_retained_shared_standard_rates_used: 'The original API provider was not recorded; only supported rates shared by both providers are used.',
+        service_tier_not_retained_standard_rates_used: 'The original service tier was not recorded; this value uses standard rates.'
+    };
+    const reasons = [...new Set([...(stats.cost_exclusions || []), ...(stats.calculation_assumptions || []), ...(stats.rate_coverage_reasons || [])].map(reason => reasonLabels[reason] || String(reason).replace(/_/g, ' ')))];
+    const verified = Array.isArray(stats.rates_verified_at) ? stats.rates_verified_at.join(', ') : String(stats.rates_verified_at || '');
+    return `<div class="ai-pricing-coverage"><p><strong>${escapeHtml(aiCalculatedStatus(stats))}</strong> · ${escapeHtml(aiExactCount(stats.priced_calls))} fully priced calls · ${escapeHtml(aiExactCount(stats.partially_priced_calls))} partially priced · ${escapeHtml(aiExactCount(Math.max(0, Number(stats.unpriced_calls || 0) - Number(stats.partially_priced_calls || 0))))} unavailable.</p>
+        <p>Calculated USD = (uncached input × input rate + cached input × cache rate + output (including thinking) × output rate) ÷ 1,000,000. Rates are per million tokens and selected for each request’s model and prompt size.</p>
+        <p>Uses Google’s currently published standard rates${verified ? `, verified ${escapeHtml(verified)}` : ''}. Historical prices, discounts, credits, tax and currency conversion are not reconstructed. The imported Google bill is shown separately. Missing amounts display 0; they do not confirm zero cost.</p>
+        ${reasons.length ? `<ul>${reasons.map((reason) => `<li>${escapeHtml(reason)}</li>`).join('')}</ul>` : ''}
+        <p><a href="https://ai.google.dev/gemini-api/docs/pricing" target="_blank" rel="noopener noreferrer">Gemini API rates</a> · <a href="https://cloud.google.com/gemini-enterprise-agent-platform/generative-ai/pricing" target="_blank" rel="noopener noreferrer">Google Cloud rates</a></p></div>`;
 }
 
 function aiCoverageChips(stats) {
@@ -2946,9 +2998,9 @@ function renderAiProfiles(data) {
         const first = lifetime.first_event_at ? `Records from ${formatDateTime(lifetime.first_event_at)} (UTC)` : 'No retained usage records';
         return `<tr><td><button type="button" class="ai-profile-link" data-ai-profile-id="${escapeHtml(String(profile.user_id))}">${escapeHtml(profile.name || profile.email || 'Student')}</button><div class="user-meta">${escapeHtml(profile.email || '')}</div><div class="user-meta">${escapeHtml(first)}</div></td>
             <td><strong>${escapeHtml(aiRecordedValue(selected, 'total_tokens'))}</strong><div class="user-meta">${escapeHtml(aiExactCount(selected.calls))} calls${Number(selected.unknown_calls) > 0 ? ' · partial usage' : ''}</div></td>
-            <td>${escapeHtml(aiRecordedCost(selected))}<div class="user-meta">No profile-level billed cost</div></td>
+            <td>${aiCalculatedCell(selected)}</td>
             <td><strong>${escapeHtml(aiRecordedValue(lifetime, 'total_tokens'))}</strong><div class="user-meta">${escapeHtml(aiExactCount(lifetime.calls))} calls</div></td>
-            <td>${escapeHtml(aiRecordedCost(lifetime))}<div class="user-meta">No profile-level billed cost</div></td><td>${aiCoverageChips(lifetime)}</td></tr>`;
+            <td>${aiCalculatedCell(lifetime)}</td><td>${aiCoverageChips(lifetime)}</td></tr>`;
     }).join('') : '<tr><td colspan="6" class="table-empty">No profiles match this search.</td></tr>';
     if (refs.aiProfilesSummary) {
         const first = state.aiProfiles.total ? (state.aiProfiles.page - 1) * state.aiProfiles.pageSize + 1 : 0;
@@ -3006,7 +3058,12 @@ function aiFeatureTable(features, period, totals) {
     const rows = features.map((feature) => ({ label: feature.label || feature.source || 'Other AI', stats: feature[period] || {} }));
     rows.push({ label: 'All recorded features', stats: totals || {}, total: true });
     return `<p class="ai-detail-help ai-scroll-hint">Scroll horizontally to view all token categories and coverage.</p><div class="table-wrap"><table class="users-table ai-feature-table"><thead><tr>
-        <th scope="col">Feature</th><th scope="col">Total tokens</th><th scope="col">Billed USD</th><th scope="col">Calls</th><th scope="col">Input</th><th scope="col">Output<br><span>Candidate</span></th><th scope="col">Thinking</th><th scope="col">Cached<br><span>Within input</span></th><th scope="col">Tool</th><th scope="col">TTS<br><span>Characters</span></th><th scope="col">Coverage</th></tr></thead><tbody>${rows.map(({ label, stats, total }) => `<tr${total ? ' class="ai-feature-total"' : ''}><td>${escapeHtml(label)}</td><td>${escapeHtml(aiRecordedValue(stats, 'total_tokens'))}</td><td>${escapeHtml(aiRecordedCost(stats))}</td><td>${escapeHtml(aiExactCount(stats.calls))}</td>${['input_tokens', 'output_tokens', 'thinking_tokens', 'cached_tokens', 'tool_tokens', 'tts_characters'].map((key) => `<td>${escapeHtml(aiRecordedValue(stats, key))}</td>`).join('')}<td>${aiCoverageChips(stats)}</td></tr>`).join('')}</tbody></table></div>`;
+        <th scope="col">Feature</th><th scope="col">Total tokens</th><th scope="col">Calculated USD</th><th scope="col">Calls</th><th scope="col">Input</th><th scope="col">Output<br><span>Candidate</span></th><th scope="col">Thinking</th><th scope="col">Cached<br><span>Within input</span></th><th scope="col">Tool</th><th scope="col">TTS<br><span>Characters</span></th><th scope="col">Coverage</th></tr></thead><tbody>${rows.map(({ label, stats, total }) => `<tr${total ? ' class="ai-feature-total"' : ''}><td>${escapeHtml(label)}</td><td>${escapeHtml(aiRecordedValue(stats, 'total_tokens'))}</td><td>${aiCalculatedCell(stats)}</td><td>${escapeHtml(aiExactCount(stats.calls))}</td>${['input_tokens', 'output_tokens', 'thinking_tokens', 'cached_tokens', 'tool_tokens', 'tts_characters'].map((key) => `<td>${escapeHtml(aiRecordedValue(stats, key))}</td>`).join('')}<td>${aiCoverageChips(stats)}</td></tr>`).join('')}</tbody></table></div>`;
+}
+
+function aiProfileDailyTable(days) {
+    const rows = Array.isArray(days) ? days.slice().reverse() : [];
+    return `<div class="table-wrap"><table class="users-table ai-profile-daily-table"><thead><tr><th>Date (UTC)</th><th>Calls</th><th>Total tokens</th><th>TTS characters</th><th>Calculated USD</th></tr></thead><tbody>${rows.length ? rows.map((day) => `<tr><td>${escapeHtml(formatAiDate(day.date))}</td><td>${escapeHtml(aiExactCount(day.calls))}</td><td>${escapeHtml(aiRecordedValue(day, 'total_tokens'))}</td><td>${escapeHtml(aiRecordedValue(day, 'tts_characters'))}</td><td>${aiCalculatedCell(day)}</td></tr>`).join('') : '<tr><td colspan="5" class="table-empty">0 recorded usage and $0.00 calculated cost in this range.</td></tr>'}</tbody></table></div>`;
 }
 
 function renderAiProfileDetail(data) {
@@ -3016,10 +3073,12 @@ function renderAiProfileDetail(data) {
     const features = Array.isArray(data.features) ? data.features : [];
     const first = data.lifetime_totals?.first_event_at ? `First retained record: ${formatDateTime(data.lifetime_totals.first_event_at)} (UTC).` : 'No retained usage records for this profile.';
     if (refs.aiProfileDetailBody) refs.aiProfileDetailBody.innerHTML = `<p class="ai-detail-help">${escapeHtml(data.coverage_note || 'Lifetime includes available records only. It does not establish complete usage since signup.')} ${escapeHtml(first)}</p>
+        <details class="ai-pricing-details"><summary>Pricing coverage and calculation · lifetime</summary>${aiPricingCoverage(data.lifetime_totals)}</details>
         <h5>Selected range · ${escapeHtml(aiRangeLabel(data.range))} (UTC)</h5>${aiFeatureTable(features, 'range', data.range_totals)}
+        <h5>Daily usage and cost · selected range (UTC)</h5>${aiProfileDailyTable(data.daily || [])}
         <h5>Lifetime recorded usage</h5>${aiFeatureTable(features, 'lifetime', data.lifetime_totals)}
         <p class="ai-detail-help">Input includes prompts, system instructions and conversation context. Cached tokens are a subset of input. Output shows candidate tokens; thinking is separate. Total tokens use the recorded provider total, so adding every column would double-count some tokens. Voice-synthesis characters are separate from tokens.</p>
-        <p class="ai-detail-help">Missing usage is excluded from known token totals. Legacy output can include thinking; older records may not retain separate thinking or tool counters. A zero in those legacy columns does not establish zero usage. Billed cost is 0 because no profile-level billed cost is available. Google project charges are not allocated to profiles.</p>`;
+        <p class="ai-detail-help">Missing usage is excluded from known token totals. Legacy output can include thinking; older records may not retain separate thinking or tool counters. A zero in those legacy columns does not establish zero usage. Calculated cost uses supported recorded components only. Google project charges are not allocated to profiles.</p>`;
 }
 
 async function loadAiProfileDetail(userId) {
@@ -3210,22 +3269,24 @@ function csvRows(rows) {
 
 function aiExportSections(kind, data) {
     const sections = [];
+    const costHeader = ['Calculated cost (USD)', 'Calculation status', 'Pricing basis', 'Excluded components'];
+    const costValues = (row) => [row.calculated_cost_available ? row.calculated_cost_usd : '0', row.calculated_cost_status || 'unavailable', (row.rate_basis || []).join('; '), (row.cost_exclusions || []).join('; ')];
     if (kind === 'sources' || kind === 'all') sections.push({
         title: 'Usage by feature',
-        header: ['Feature', 'Source key', 'Calls', 'Tokens', 'TTS characters', 'Searches'],
-        rows: (data.by_source || []).map((row) => [row.label || row.source, row.source, row.calls || 0, row.tokens || 0, row.tts_characters || 0, row.search_queries || 0])
+        header: ['Feature', 'Source key', 'Calls', 'Tokens', 'TTS characters', 'Searches', ...costHeader],
+        rows: (data.by_source || []).map((row) => [row.label || row.source, row.source, row.calls || 0, row.tokens || 0, row.tts_characters || 0, row.search_queries || 0, ...costValues(row)])
     });
     if (kind === 'models' || kind === 'all') sections.push({
         title: 'Usage by model',
-        header: ['Model', 'Calls', 'Tokens', 'TTS characters'],
-        rows: (data.by_model || []).map((row) => [row.model, row.calls || 0, row.tokens || 0, row.tts_characters || 0])
+        header: ['Model', 'Calls', 'Tokens', 'TTS characters', ...costHeader],
+        rows: (data.by_model || []).map((row) => [row.model, row.calls || 0, row.tokens || 0, row.tts_characters || 0, ...costValues(row)])
     });
     if (kind === 'daily' || kind === 'all') {
         const total = Number(data.range?.tokens) || 0;
         const hideEmpty = kind === 'daily' && (!refs.aiHideEmptyDays || refs.aiHideEmptyDays.checked);
         const days = hideEmpty ? (data.daily || []).filter((day) => (day.calls || 0) > 0) : (data.daily || []);
-        sections.push({ title: 'Usage by date', header: ['Date (UTC)', 'Calls', 'Tokens', 'TTS characters', 'Share of recorded tokens (%)'],
-            rows: days.map((day) => [day.date, day.calls || 0, day.tokens || 0, day.tts_characters || 0, total > 0 ? Number(((day.tokens || 0) / total * 100).toFixed(2)) : 0]) });
+        sections.push({ title: 'Usage by date', header: ['Date (UTC)', 'Calls', 'Tokens', 'TTS characters', 'Share of recorded tokens (%)', ...costHeader],
+            rows: days.map((day) => [day.date, day.calls || 0, day.tokens || 0, day.tts_characters || 0, total > 0 ? Number(((day.tokens || 0) / total * 100).toFixed(2)) : 0, ...costValues(day)]) });
     }
     return sections;
 }
@@ -3235,10 +3296,12 @@ function exportAiCsv(kind, btn) {
     if (!data || !data.range) { showFlash('Load the AI usage data before exporting.', 'error'); return; }
     const range = data.range;
     const lines = [
-        ['Rilono — Recorded AI usage'],
+        ['Rilono — Recorded AI usage and calculated costs'],
         ['Range (UTC)', range.start, 'to', range.end],
         ['Days in range', range.days || 0, 'Days with activity', range.active_days || 0],
         ['Recorded calls', range.calls || 0, 'Recorded tokens', range.tokens || 0, 'TTS characters', range.tts_characters || 0],
+        ['Calculated cost (USD)', range.calculated_cost_available ? range.calculated_cost_usd : '0', 'Calculation status', range.calculated_cost_status || 'unavailable'],
+        ['Pricing basis', 'Recorded usage at current published standard rates; excludes unverified components. Google billed charges are separate.'],
         ['Note', 'Only retained usage records are included. Missing counters display 0; this does not establish that no usage occurred.'],
     ];
     aiExportSections(kind, data).forEach((section) => {
@@ -3279,7 +3342,7 @@ function renderAiDailyTable() {
         const message = daily.length && hideEmpty
             ? 'No AI usage on any day in this range.'
             : 'No AI usage in the selected range.';
-        refs.aiDailyTableBody.innerHTML = `<tr><td colspan="5" class="table-empty">${escapeHtml(message)}</td></tr>`;
+        refs.aiDailyTableBody.innerHTML = `<tr><td colspan="6" class="table-empty">${escapeHtml(message)}</td></tr>`;
     } else {
         refs.aiDailyTableBody.innerHTML = rows.map((d) => {
             const share = rangeTotal > 0 ? ((Number(d.tokens) || 0) / rangeTotal) * 100 : 0;
@@ -3290,6 +3353,7 @@ function renderAiDailyTable() {
                     <td>${escapeHtml(formatTokens(d.tokens))}</td>
                     <td>${escapeHtml(formatTokens(d.tts_characters))}</td>
                     <td>${escapeHtml(share.toFixed(1))}%</td>
+                    <td>${aiCalculatedCell(d)}</td>
                 </tr>`;
         }).join('');
     }
@@ -3301,6 +3365,7 @@ function renderAiDailyTable() {
     put(refs.aiDailyTotalTokens, formatTokens(totalTokens));
     put(refs.aiDailyTotalCost, formatTokens(daily.reduce((sum, day) => sum + (Number(day.tts_characters) || 0), 0)));
     put(refs.aiDailyTotalShare, totalTokens > 0 ? '100%' : '0%');
+    put(refs.aiDailyCalculatedTotal, aiRecordedCost(data.range));
 }
 
 // --- Recorded token timeline (SVG column chart) -----------------------------------

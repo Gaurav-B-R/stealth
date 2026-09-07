@@ -154,7 +154,7 @@ stealth/
 
 ## Development
 
-AI cost accounting, an isolated local review of retained records, actual Google billing, and validation: [AI cost accounting guide](docs/ai-cost-accounting.md).
+AI cost accounting, an isolated local review of retained records, calculated per-profile costs, actual Google billing, and validation: [AI cost accounting guide](docs/ai-cost-accounting.md).
 
 To run in development mode with auto-reload:
 ```bash

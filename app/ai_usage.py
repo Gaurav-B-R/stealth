@@ -318,8 +318,27 @@ def _resolve_account(db, *, user_id, organization_id) -> tuple[int | None, int |
     return user_id, organization_id
 
 
+def gemini_pricing_context(contents=None, *, generation_config=None, base_generation_config=None, explicit_cache=False):
+    """Retain dispatch facts for normal generateContent calls, never prompt text.
+
+    Callers supply their actual generation config. Unknown content types are left
+    to Google's modality counters instead of assuming they are text or audio.
+    """
+    config = generation_config or {}
+    tier = _attr(config, "service_tier") or _attr(base_generation_config, "service_tier") or "standard"
+    context = {"service_tier": str(getattr(tier, "value", tier)).lower()}
+    if os.getenv("GEMINI_PROVIDER", "developer").strip().lower() == "vertex":
+        context["location"] = (os.getenv("GOOGLE_CLOUD_LOCATION") or os.getenv("GCP_LOCATION") or "global").strip()
+    if isinstance(contents, str) or (isinstance(contents, (list, tuple)) and contents and all(isinstance(part, str) for part in contents)):
+        context["input_modalities"] = ["TEXT"]
+    if explicit_cache:
+        context["explicit_cache"] = True
+    return context
+
+
 def _event_base(source, model_name, *, user_id=None, organization_id=None,
-                product=None, trigger=None, event_key=None, provider=None, project_id=None):
+                product=None, trigger=None, event_key=None, provider=None, project_id=None,
+                pricing_context=None):
     ctx = _usage_account.get() or {}
     product = product or ctx.get("product")
     if product == "shared":
@@ -357,6 +376,7 @@ def _event_base(source, model_name, *, user_id=None, organization_id=None,
             "metering_version": METERING_VERSION, "unit_type": "tokens", "character_count": 0,
             "usage_state": "pending", "pricing_status": "pending", "pricing_version": f"{provider}:{PRICING_VERSION}",
             "created_at": datetime.utcnow().isoformat(), "status": "pending",
+            "raw_usage_json": json.dumps({"_rilono_pricing": pricing_context}, separators=(",", ":")) if pricing_context else None,
             # Resolved only inside the database transaction; never persisted in spool.
             "_lookup_email": ctx.get("email") if product != "shared" and user_id is None and organization_id is None else None}
 
@@ -531,6 +551,11 @@ def _tag_response(response, event_key):
 def _complete_event(base, response, status="ok") -> dict:
     result = dict(base)
     result.update(_usage_values(response))
+    dispatch = json.loads(base.get("raw_usage_json") or "{}").get("_rilono_pricing")
+    if dispatch:
+        raw = json.loads(result.get("raw_usage_json") or "{}")
+        raw["_rilono_pricing"] = dispatch
+        result["raw_usage_json"] = json.dumps(raw, default=str, separators=(",", ":"))
     result["response_id"] = _attr(response, "response_id")
     actual_model = _attr(response, "model_version")
     if actual_model:
@@ -588,7 +613,7 @@ def _record_cache_saving(event):
 
 
 def tracked_gemini_call(source: str, model_name: str, call, *, user_id=None,
-                        organization_id=None, product=None, trigger=None):
+                        organization_id=None, product=None, trigger=None, pricing_context=None):
     """Record a durable pending attempt, then provider metadata before parsing.
 
     SDK-internal retries must be disabled at the client factory: this wrapper sees
@@ -596,7 +621,7 @@ def tracked_gemini_call(source: str, model_name: str, call, *, user_id=None,
     remotely. The original provider response/exception is returned unchanged.
     """
     base = _event_base(source, model_name, user_id=user_id, organization_id=organization_id,
-                       product=product, trigger=trigger)
+                       product=product, trigger=trigger, pricing_context=pricing_context)
     if not _write_event(base):
         raise RuntimeError("AI usage accounting is unavailable; request was not sent")
     try:

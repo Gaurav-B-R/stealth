@@ -60,6 +60,44 @@ def test_exact_provider_components_and_no_prompt_content(ledger):
     assert json.loads(event.raw_usage_json)["thoughts_token_count"] == 20
 
 
+def test_dispatch_pricing_context_survives_completion_without_prompt_content(ledger, monkeypatch):
+    monkeypatch.setenv("GEMINI_PROVIDER", "vertex")
+    monkeypatch.setenv("GOOGLE_CLOUD_LOCATION", "global")
+    context = ai_usage.gemini_pricing_context("private student prompt")
+
+    def dispatched():
+        pending, = rows(ledger)
+        assert json.loads(pending.raw_usage_json)["_rilono_pricing"] == context
+        return answer(response_id="priced", tool_use_prompt_token_count=0, total_token_count=150)
+
+    ai_usage.tracked_gemini_call("student_ai_chat", "gemini-2.5-flash", dispatched, pricing_context=context)
+    event, = rows(ledger)
+    metadata = json.loads(event.raw_usage_json)
+    assert metadata["_rilono_pricing"] == {"service_tier": "standard", "location": "global", "input_modalities": ["TEXT"]}
+    assert metadata["prompt_token_count"] == 100
+    assert "private" not in event.raw_usage_json
+    from app.ai_cost_calculation import calculate_event
+    # (60 uncached × .30 + 40 cached × .03 + 50 output × 2.50) / 1M.
+    assert calculate_event(event)["calculated_cost_usd"] == "0.0001442"
+
+
+def test_pricing_context_keeps_base_service_tier_when_other_settings_change():
+    context = ai_usage.gemini_pricing_context("text", base_generation_config={"service_tier": "priority"}, generation_config={"max_output_tokens": 10})
+    assert context["service_tier"] == "priority"
+    override = ai_usage.gemini_pricing_context("text", base_generation_config={"service_tier": "priority"}, generation_config={"service_tier": "flex"})
+    assert override["service_tier"] == "flex"
+    assert "input_modalities" not in ai_usage.gemini_pricing_context(["text", {"inline_data": {"mime_type": "audio/wav"}}])
+
+
+def test_dispatch_context_never_turns_missing_provider_usage_into_measured_usage(ledger):
+    ai_usage.tracked_gemini_call("student_ai_chat", "gemini-2.5-flash", lambda: SimpleNamespace(text="private"),
+                                 pricing_context=ai_usage.gemini_pricing_context("private prompt"))
+    event, = rows(ledger)
+    assert event.usage_state == "unknown"
+    from app.ai_cost_calculation import calculate_event
+    assert calculate_event(event)["calculation_status"] == "unavailable"
+
+
 def test_each_callback_attempt_pending_before_dispatch_and_discarded_response_kept(ledger):
     def first():
         assert rows(ledger)[0].usage_state == "pending"

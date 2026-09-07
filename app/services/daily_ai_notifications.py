@@ -319,6 +319,7 @@ def _analyze_user(model: Any, prompt: str, user_id: int, model_name: str) -> Dai
             {} if gemini_utils.USE_VERTEX_AI else {"request_options": {"retry": None}}
         )),
         user_id=user_id, product="b2c", trigger="automation",
+        pricing_context=ai_usage.gemini_pricing_context(prompt),
     )
     response_text = str(getattr(response, "text", "") or "")
 

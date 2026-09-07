@@ -148,6 +148,7 @@ def generate_content_cached(
         from app import ai_usage
         response = ai_usage.tracked_gemini_call(
             source, model_name, lambda: model.generate_content(prompt, request_options={"retry": None}),
+            pricing_context=ai_usage.gemini_pricing_context([context_text, prompt], explicit_cache=True),
         )
 
         # Record optimization metrics (best-effort).

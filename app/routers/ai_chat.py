@@ -916,6 +916,9 @@ Please provide a helpful response to the user's question:"""
                         inline_session_attachment_parts=inline_session_attachment_parts,
                     ),
                     product="b2c", trigger="user",
+                    pricing_context=ai_usage.gemini_pricing_context(
+                        None if inline_session_attachment_parts else full_prompt,
+                        generation_config=interview_generation_config),
                 )
                 text, truncated = _extract_ai_text(candidate_response)
                 if truncated:

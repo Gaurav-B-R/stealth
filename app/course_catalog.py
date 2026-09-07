@@ -396,6 +396,7 @@ def _grounded_generate(prompt: str, model_names: list[str] | str, usage_source: 
                 usage_source, model_name,
                 lambda: client.models.generate_content(model=model_name, contents=prompt, config=config),
                 product="shared", trigger="automation",
+                pricing_context=ai_usage.gemini_pricing_context(prompt, generation_config=config),
             )
             text = (getattr(response, "text", "") or "").strip()
             if not text:

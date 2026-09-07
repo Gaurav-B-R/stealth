@@ -2,12 +2,14 @@
 from __future__ import annotations
 
 import csv
+from collections import defaultdict
 from datetime import date, datetime, time, timedelta, timezone
+from decimal import Decimal, localcontext
 from io import StringIO
 
 from sqlalchemy import and_, case, func, or_
 
-from app import ai_usage, models
+from app import ai_cost_calculation, ai_usage, models
 
 
 COVERAGE_NOTE = (
@@ -15,8 +17,112 @@ COVERAGE_NOTE = (
     "Legacy records can have missing attribution or combined token categories. "
     "A displayed 0 means no recorded value is available; it does not establish that no usage or charge occurred. "
     "Google billing does not identify individual profiles, so profile billed costs remain 0 with an unavailable status. "
+    "Calculated AI costs use each retained request's recorded usage and supported published rates, separately from billed charges. "
+    "A partial calculation includes only supported components; its excluded costs remain unknown. "
     "Shared AI work is shown separately."
 )
+
+
+class CalculatedCosts:
+    """Add request-level prices without rounding cents or re-pricing aggregate tokens."""
+
+    def __init__(self):
+        self.calls = self.priced = self.unpriced = self.partial = 0
+        self.amounts = {key: Decimal(0) for key in ("total", "token", "voice", "other")}
+        self.bases, self.sources, self.versions, self.exclusions = set(), set(), set(), set()
+        self.basis_descriptions, self.assumptions, self.coverage_reasons = set(), set(), set()
+        self.historical_price_checks = 0
+        self.all_historical_prices_verified = True
+        self.verified_at = None
+
+    def add(self, calculation):
+        self.calls += 1
+        status = calculation["calculation_status"]
+        if status in ("calculated", "not_billable"):
+            self.priced += 1
+        else:
+            self.unpriced += 1
+            self.partial += status == "partial"
+        breakdown = calculation.get("breakdown") or {}
+        # Google token counts may exceed JavaScript's integer precision. Keep all
+        # money decimal from the first request through the JSON/CSV boundary.
+        with localcontext() as ctx:
+            ctx.prec = 96
+            self.amounts["total"] += Decimal(calculation["calculated_cost_usd"])
+            for key in ("token", "voice", "other"):
+                self.amounts[key] += Decimal(breakdown.get(f"{key}_cost_usd") or "0")
+        if calculation.get("rate_basis"):
+            self.bases.add(calculation["rate_basis"])
+        if calculation.get("rate_basis_description"):
+            self.basis_descriptions.add(calculation["rate_basis_description"])
+        self.assumptions.update(calculation.get("assumptions") or [])
+        self.coverage_reasons.update(calculation.get("coverage_reasons") or [])
+        if status in ("calculated", "partial"):
+            self.historical_price_checks += 1
+            self.all_historical_prices_verified &= bool(calculation.get("historical_price_verified"))
+        self.sources.update(calculation.get("source_urls") or [])
+        if calculation.get("rate_version"):
+            self.versions.add(calculation["rate_version"])
+        self.exclusions.update(calculation.get("excluded_components") or [])
+        if calculation.get("unavailable_reason"):
+            self.exclusions.add(calculation["unavailable_reason"])
+        verified = calculation.get("verified_at")
+        if verified:
+            self.verified_at = max(self.verified_at or verified, verified)
+
+    def as_dict(self):
+        status = ("no_usage" if not self.calls else "complete" if not self.unpriced else
+                  "partial" if self.priced or self.partial else "unavailable")
+        return {"calculated_cost_usd": format(self.amounts["total"], "f"),
+                "calculated_cost_status": status,
+                "calculated_cost_available": status in ("complete", "partial"),
+                "priced_calls": self.priced, "unpriced_calls": self.unpriced,
+                "partially_priced_calls": self.partial,
+                **{f"calculated_{key}_cost_usd": format(self.amounts[key], "f") for key in ("token", "voice", "other")},
+                "rate_basis": sorted(self.bases), "rate_sources": sorted(self.sources),
+                "rate_versions": sorted(self.versions), "rates_verified_at": self.verified_at,
+                "rate_basis_descriptions": sorted(self.basis_descriptions),
+                "calculation_assumptions": sorted(self.assumptions),
+                "rate_coverage_reasons": sorted(self.coverage_reasons),
+                "historical_prices_verified": bool(self.historical_price_checks) and self.all_historical_prices_verified,
+                "cost_exclusions": sorted(self.exclusions)}
+
+    def merge(self, other):
+        if other is None:
+            return
+        self.calls += other.calls
+        self.priced += other.priced
+        self.unpriced += other.unpriced
+        self.partial += other.partial
+        with localcontext() as ctx:
+            ctx.prec = 96
+            for key in self.amounts:
+                self.amounts[key] += other.amounts[key]
+        self.bases.update(other.bases)
+        self.sources.update(other.sources)
+        self.versions.update(other.versions)
+        self.exclusions.update(other.exclusions)
+        self.basis_descriptions.update(other.basis_descriptions)
+        self.assumptions.update(other.assumptions)
+        self.coverage_reasons.update(other.coverage_reasons)
+        self.historical_price_checks += other.historical_price_checks
+        self.all_historical_prices_verified &= other.all_historical_prices_verified
+        if other.verified_at:
+            self.verified_at = max(self.verified_at or other.verified_at, other.verified_at)
+
+
+def _event_day(event):
+    stamp = event.created_at
+    if isinstance(stamp, datetime):
+        if stamp.tzinfo is not None:
+            stamp = stamp.astimezone(timezone.utc)
+        return stamp.date()
+    return date.fromisoformat(str(stamp)[:10]) if stamp else None
+
+
+def calculated_stats(stats=None, costs=None):
+    return {**(stats if stats is not None else stats_dict()),
+            **(costs or CalculatedCosts()).as_dict()}
 
 
 def resolve_range(start=None, end=None):
@@ -112,8 +218,18 @@ def profile_rows(db, users, start, end):
         return {row[0]: stats_dict(row[1:]) for row in rows}
     lifetime = grouped()
     selected = grouped(range_filter(start, end))
+    lifetime_costs, selected_costs = defaultdict(CalculatedCosts), defaultdict(CalculatedCosts)
+    # One streamed scan for the entire page, not one query per profile. Pricing is
+    # applied before aggregation because model, context tier and date can differ.
+    for event in db.query(E).filter(b2c_filter(), E.user_id.in_(ids)).yield_per(1000):
+        calculation = ai_cost_calculation.calculate_event(event)
+        lifetime_costs[event.user_id].add(calculation)
+        day = _event_day(event)
+        if day is not None and start <= day <= end:
+            selected_costs[event.user_id].add(calculation)
     return [{"user_id": u.id, "name": u.full_name, "email": u.email,
-             "range": selected.get(u.id, stats_dict()), "lifetime": lifetime.get(u.id, stats_dict())} for u in users]
+             "range": calculated_stats(selected.get(u.id), selected_costs.get(u.id)),
+             "lifetime": calculated_stats(lifetime.get(u.id), lifetime_costs.get(u.id))} for u in users]
 
 
 def coverage(db, start, end):
@@ -154,13 +270,30 @@ def build_profile_detail(db, user_id, *, start=None, end=None):
     def grouped(*extra):
         return {r[0]: stats_dict(r[1:]) for r in db.query(E.source, *stat_columns()).filter(*base, *extra).group_by(E.source).all()}
     lifetime, selected = grouped(), grouped(range_filter(start, end))
+    lifetime_cost, range_cost = CalculatedCosts(), CalculatedCosts()
+    lifetime_features, range_features, daily_costs = (defaultdict(CalculatedCosts) for _ in range(3))
+    for event in db.query(E).filter(*base).yield_per(1000):
+        calculation = ai_cost_calculation.calculate_event(event)
+        lifetime_cost.add(calculation)
+        lifetime_features[event.source].add(calculation)
+        day = _event_day(event)
+        if day is not None and start <= day <= end:
+            range_cost.add(calculation)
+            range_features[event.source].add(calculation)
+            daily_costs[day.isoformat()].add(calculation)
+    daily = []
+    for row in db.query(func.date(E.created_at), *stat_columns()).filter(
+            *base, range_filter(start, end)).group_by(func.date(E.created_at)).order_by(func.date(E.created_at)):
+        day = str(row[0])
+        daily.append({"date": day, **calculated_stats(stats_dict(row[1:]), daily_costs.get(day))})
     return {"profile": {"user_id": user.id, "name": user.full_name, "email": user.email},
             "range": {"start": start.isoformat(), "end": end.isoformat()},
-            "range_totals": summarize(db, *base, range_filter(start, end)),
-            "lifetime_totals": summarize(db, *base),
+            "range_totals": calculated_stats(summarize(db, *base, range_filter(start, end)), range_cost),
+            "lifetime_totals": calculated_stats(summarize(db, *base), lifetime_cost),
             "features": [{"source": src, "label": ai_usage.SOURCE_LABELS.get(src, src),
-                          "range": selected.get(src, stats_dict()), "lifetime": lifetime[src]}
-                         for src in sorted(lifetime)], "coverage_note": COVERAGE_NOTE}
+                          "range": calculated_stats(selected.get(src), range_features.get(src)),
+                          "lifetime": calculated_stats(lifetime[src], lifetime_features.get(src))}
+                         for src in sorted(lifetime)], "daily": daily, "coverage_note": COVERAGE_NOTE}
 
 
 def profiles_csv(db, *, start=None, end=None, search=""):
@@ -169,13 +302,19 @@ def profiles_csv(db, *, start=None, end=None, search=""):
     output = StringIO()
     writer = csv.writer(output)
     fields = ["calls", "input_tokens", "output_tokens", "thinking_tokens", "cached_tokens",
-              "tool_tokens", "total_tokens", "tts_characters", "billed_cost_usd",
+              "tool_tokens", "total_tokens", "tts_characters", "calculated_cost_usd",
+              "calculated_cost_status", "priced_calls", "unpriced_calls", "partially_priced_calls",
+              "calculated_token_cost_usd", "calculated_voice_cost_usd", "calculated_other_cost_usd",
+              "rate_basis", "rate_versions", "rates_verified_at", "rate_coverage_reasons",
+              "calculation_assumptions", "historical_prices_verified", "cost_exclusions", "billed_cost_usd",
               "billed_cost_available", "billed_cost_status", "unknown_calls", "legacy_calls"]
     writer.writerow(["Profile ID", "Name", "Email", "From UTC", "To UTC"] +
                     [f"{scope} {key}" for scope in ("Range", "Lifetime recorded") for key in fields])
     def safe(value):
         text = str(value or "")
         return "'" + text if text.lstrip().startswith(("=", "+", "-", "@")) else text
+    def field_value(value):
+        return "; ".join(value) if isinstance(value, list) else value
     last_id = 0
     while True:
         users = profile_query(db, search).filter(models.User.id > last_id).order_by(models.User.id).limit(250).all()
@@ -183,13 +322,13 @@ def profiles_csv(db, *, start=None, end=None, search=""):
             break
         for row in profile_rows(db, users, start, end):
             writer.writerow([row["user_id"], safe(row["name"]), safe(row["email"]), start, end] +
-                            [row[scope][key] for scope in ("range", "lifetime") for key in fields])
+                            [field_value(row[scope][key]) for scope in ("range", "lifetime") for key in fields])
         last_id = users[-1].id
     return "\ufeff" + output.getvalue()
 
 
 def recorded_usage_analytics(db, *, start=None, end=None):
-    """Expose retained usage counters only; legacy list-price calculations stay internal."""
+    """Retained counters and request-level calculations; stored old estimates stay internal."""
     raw = ai_usage.build_ai_usage_analytics(db, start=start, end=end)
     counter_keys = ("tokens", "calls", "cached_tokens", "tts_characters", "cache_hit_pct", "search_queries")
     def counters(value):
@@ -200,9 +339,47 @@ def recorded_usage_analytics(db, *, start=None, end=None):
     top_day = max(daily, key=lambda row: row["tokens"]) if daily else None
     by_source = [{"source": row["source"], "label": row["label"], **counters(row)} for row in raw["by_source"]]
     by_model = [{"model": row["model"], **counters(row)} for row in raw["by_model"]]
+    now = datetime.now(timezone.utc)
+    cutoffs = {"today": now.replace(hour=0, minute=0, second=0, microsecond=0),
+               "last_7_days": now - timedelta(days=7),
+               "this_month": now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)}
+    totals_costs = {key: CalculatedCosts() for key in raw["totals"]}
+    range_costs = CalculatedCosts()
+    source_costs, model_costs, daily_costs = (defaultdict(CalculatedCosts) for _ in range(3))
+    start_date, end_date = date.fromisoformat(window["start"]), date.fromisoformat(window["end"])
+    # This overview intentionally retains its existing all-product scope. Profile
+    # reports above apply the B2C filter; neither assigns a project bill to people.
+    for event in db.query(models.GeminiUsageEvent).yield_per(1000):
+        calculation = ai_cost_calculation.calculate_event(event)
+        totals_costs["all_time"].add(calculation)
+        stamp = event.created_at
+        if stamp and stamp.tzinfo is None:
+            stamp = stamp.replace(tzinfo=timezone.utc)
+        for key, cutoff in cutoffs.items():
+            if stamp and stamp >= cutoff:
+                totals_costs[key].add(calculation)
+        day = _event_day(event)
+        if day is not None and start_date <= day <= end_date:
+            range_costs.add(calculation)
+            source_costs[event.source].add(calculation)
+            model_costs[event.model].add(calculation)
+            daily_costs[day.isoformat()].add(calculation)
+    for row in by_source:
+        row.update(source_costs[row["source"]].as_dict())
+    for row in by_model:
+        row.update(model_costs[row["model"]].as_dict())
+    for row in daily:
+        row.update(daily_costs[row["date"]].as_dict())
+    for row in series:
+        costs = CalculatedCosts()
+        for day in daily:
+            if row["date"] <= day["date"] <= row["end"]:
+                costs.merge(daily_costs[day["date"]])
+        row.update(costs.as_dict())
     return {"data_status": "recorded_usage", "coverage_note": COVERAGE_NOTE,
-            "totals": {key: counters(value) for key, value in raw["totals"].items()},
-            "range": {**counters(window),
+            "calculated_cost_scope": "all_retained_ai_usage",
+            "totals": {key: {**counters(value), **totals_costs[key].as_dict()} for key, value in raw["totals"].items()},
+            "range": {**counters(window), **range_costs.as_dict(),
                       **{key: window[key] for key in ("start", "end", "days", "active_days", "granularity")},
                       "top_day": {"date": top_day["date"], "tokens": top_day["tokens"]} if top_day and top_day["tokens"] else None},
             "earliest_event_date": raw["earliest_event_date"],

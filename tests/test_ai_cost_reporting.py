@@ -94,7 +94,7 @@ def test_legacy_and_unknown_not_claimed_complete_tts_not_tokens(db):
     assert value["total_tokens"] == 150
     assert value["tts_characters"] == 600
     assert (value["legacy_calls"], value["unknown_calls"]) == (1, 1)
-    assert "unpriced_calls" not in value
+    assert value["unpriced_calls"] >= 1
     assert value["billed_cost_usd"] == 0
     assert value["billed_cost_available"] is False
     assert "not guaranteed" in result["coverage"]["note"]
@@ -252,7 +252,8 @@ def test_admin_endpoints_enforce_access_validate_dates_and_do_not_cache(db, monk
         usage = client.get("/api/admin/ai-usage/analytics")
         assert usage.status_code == 200
         assert usage.headers["cache-control"] == "no-store"
-        assert "cost_usd" not in usage.text
+        assert "estimated_cost_usd" not in usage.text
+        assert "calculated_cost_usd" in usage.text
         assert "is_estimate" not in usage.text
         assert client.get("/api/admin/ai-usage/profiles/export").status_code == 200
         assert client.get("/api/admin/ai-usage/profiles/3").status_code == 404
@@ -304,21 +305,24 @@ def test_imported_zero_differs_from_no_records_and_missing_currency_rate(db, mon
     assert missing_rate["totals"][0]["cost"] == "80"
 
 
-def test_legacy_admin_analytics_serve_only_recorded_counters(db):
+def test_legacy_admin_analytics_never_expose_stored_estimates(db):
     event(db, estimated_cost_usd=999999, search_cost_usd=222222, search_queries=3)
     data = reports.recorded_usage_analytics(db, start=START, end=END)
     assert data["range"]["tokens"] == 150
     assert data["range"]["search_queries"] == 3
     assert data["range"]["top_day"] == {"date": "2026-08-03", "tokens": 150}
-    def assert_no_monetary_fields(value):
+    def assert_no_stored_estimates(value):
         if isinstance(value, dict):
             for key, item in value.items():
-                assert not any(word in key for word in ("cost", "saved", "estimate", "pricing", "currency")), key
-                assert_no_monetary_fields(item)
+                assert key not in ("cost_usd", "token_cost_usd", "search_cost_usd", "other_cost_usd", "estimated_cost_usd")
+                assert not any(word in key for word in ("saved", "estimate", "pricing")), key
+                assert_no_stored_estimates(item)
         elif isinstance(value, list):
             for item in value:
-                assert_no_monetary_fields(item)
-    assert_no_monetary_fields(data)
+                assert_no_stored_estimates(item)
+    assert_no_stored_estimates(data)
+    assert data["range"]["calculated_cost_usd"] == "0"
+    assert data["range"]["calculated_cost_status"] == "unavailable"
     assert data["by_source"][0]["tokens"] == 150
 
 
@@ -418,3 +422,117 @@ def test_google_numeric_money_and_usage_precision_survives_json(db, monkeypatch)
     assert data["usage_rows"][0]["cost"] == "12345678901234567890123456789.123456789"
     assert data["totals"] == [{"currency": "USD", "cost": "12345678901234567890123456789.123456790",
                                 "credits": "-0.000000001", "net_cost": "12345678901234567890123456789.123456789"}]
+
+
+def calculation(amount="0", status="calculated", *, reason=None, token=None, voice="0"):
+    return {"calculated_cost_usd": amount, "calculation_status": status,
+            "available": status != "unavailable", "unavailable_reason": reason,
+            "excluded_components": ["grounding"] if status == "partial" else [],
+            "rate_basis": "recorded_request_standard_rates", "source_urls": ["https://cloud.google.com/vertex-ai/generative-ai/pricing"],
+            "rate_version": "test-v1", "verified_at": "2026-09-07",
+            "breakdown": {"token_cost_usd": amount if token is None else token,
+                          "voice_cost_usd": voice, "other_cost_usd": "0"}}
+
+
+def test_calculated_profile_costs_price_requests_before_aggregating_and_keep_day_feature_scope(db, monkeypatch):
+    first = event(db, prompt_tokens=100000, created_at=datetime(2026, 8, 2, 23, 59, 59))
+    second = event(db, prompt_tokens=100000, source="daily_ai_notifier", created_at=datetime(2026, 8, 3))
+    old = event(db, prompt_tokens=200000, source="student_mock_interview", created_at=datetime(2026, 7, 4))
+    event(db, organization_id=7, product="b2b", prompt_tokens=900000)
+    seen = []
+    def price_request(row):
+        seen.append(row.id)
+        rate = Decimal("2") if row.prompt_tokens > 150000 else Decimal("1")
+        return calculation(format(Decimal(row.prompt_tokens) * rate / 1000000, "f"))
+    monkeypatch.setattr(reports.ai_cost_calculation, "calculate_event", price_request)
+    detail = reports.build_profile_detail(db, 1, start=START, end=END)
+    assert seen == [first.id, second.id, old.id]
+    assert Decimal(detail["range_totals"]["calculated_cost_usd"]) == Decimal("0.2")
+    assert Decimal(detail["lifetime_totals"]["calculated_cost_usd"]) == Decimal("0.6")
+    assert detail["range_totals"]["calculated_cost_status"] == "complete"
+    assert detail["range_totals"]["priced_calls"] == 2
+    assert [row["date"] for row in detail["daily"]] == ["2026-08-02", "2026-08-03"]
+    assert [Decimal(row["calculated_cost_usd"]) for row in detail["daily"]] == [Decimal(".1"), Decimal(".1")]
+    assert sum(Decimal(row["range"]["calculated_cost_usd"]) for row in detail["features"]) == Decimal(".2")
+    assert sum(Decimal(row["lifetime"]["calculated_cost_usd"]) for row in detail["features"]) == Decimal(".6")
+    assert all(row["billed_cost_usd"] == 0 and not row["billed_cost_available"] for row in detail["daily"])
+
+
+def test_calculated_costs_do_not_round_or_hide_incomplete_records_and_export_basis(db, monkeypatch):
+    event(db, estimated_cost_usd=999999, created_at=datetime(2026, 8, 3))
+    event(db, source="student_mock_interview", usage_state="unknown", created_at=datetime(2026, 8, 4))
+    event(db, source="daily_ai_notifier", search_queries=1, created_at=datetime(2026, 8, 5))
+    def calculate(row):
+        if row.usage_state == "unknown":
+            return calculation(status="unavailable", reason="missing_usage")
+        if row.search_queries:
+            return calculation("0.000000000001", "partial")
+        return calculation("0.000000000002")
+    monkeypatch.setattr(reports.ai_cost_calculation, "calculate_event", calculate)
+    data = reports.build_profiles(db, start=START, end=END)
+    value = data["profiles"][0]["range"]
+    assert value["calculated_cost_usd"] == "0.000000000003"
+    assert value["calculated_cost_status"] == "partial"
+    assert (value["priced_calls"], value["unpriced_calls"], value["partially_priced_calls"]) == (1, 2, 1)
+    assert value["cost_exclusions"] == ["grounding", "missing_usage"]
+    assert value["rate_versions"] == ["test-v1"]
+    assert data["profiles"][1]["range"]["calculated_cost_status"] == "no_usage"
+    assert data["profiles"][1]["range"]["calculated_cost_usd"] == "0"
+    detail = reports.build_profile_detail(db, 1, start=START, end=END)
+    assert detail["daily"][1]["calculated_cost_status"] == "unavailable"
+    assert detail["daily"][1]["calculated_cost_usd"] == "0"
+    output = reports.profiles_csv(db, start=START, end=END)
+    rows = list(csv.DictReader(StringIO(output.lstrip("\ufeff"))))
+    assert rows[0]["Range calculated_cost_usd"] == "0.000000000003"
+    assert rows[0]["Range calculated_cost_status"] == "partial"
+    assert rows[0]["Range billed_cost_status"] == "not_attributable"
+    assert rows[0]["Range rate_basis"] == "recorded_request_standard_rates"
+    assert "999999" not in output
+
+
+def test_profile_cost_query_count_does_not_grow_per_profile(db, monkeypatch):
+    from sqlalchemy import event as sqlalchemy_event
+    for uid in range(10, 35):
+        db.add(models.User(id=uid, email=f"cost{uid}@example.com", full_name="Cost", hashed_password="test"))
+    db.commit()
+    event(db)
+    users = reports.profile_query(db).all()
+    monkeypatch.setattr(reports.ai_cost_calculation, "calculate_event", lambda row: calculation(".01"))
+    statements = []
+    def record_sql(conn, cursor, statement, parameters, context, executemany):
+        if statement.lstrip().upper().startswith("SELECT"):
+            statements.append(statement)
+    sqlalchemy_event.listen(db.bind, "before_cursor_execute", record_sql)
+    try:
+        rows = reports.profile_rows(db, users, START, END)
+    finally:
+        sqlalchemy_event.remove(db.bind, "before_cursor_execute", record_sql)
+    assert len(rows) == 27
+    assert len(statements) == 3
+
+
+def test_real_rate_engine_matches_profile_daily_feature_and_global_cost_sums(db):
+    event(db, model="gemini-2.5-pro", metering_version=1, usage_state="legacy",
+          prompt_tokens=150000, cached_tokens=10000, output_tokens=50000, total_tokens=200000,
+          created_at=datetime(2026, 8, 2))
+    event(db, model="gemini-2.5-pro", metering_version=1, usage_state="legacy",
+          prompt_tokens=150000, cached_tokens=0, output_tokens=50000, total_tokens=200000,
+          source="student_mock_interview", created_at=datetime(2026, 8, 3))
+    event(db, model="gemini-2.5-pro", metering_version=1, usage_state="legacy",
+          prompt_tokens=250000, cached_tokens=0, output_tokens=50000, total_tokens=300000,
+          created_at=datetime(2026, 7, 1))
+    # Each 150k-token request gets the <=200k rate independently, even though the
+    # combined range exceeds 200k. The old request uses the >200k tier.
+    detail = reports.build_profile_detail(db, 1, start=START, end=END)
+    assert Decimal(detail["range_totals"]["calculated_cost_usd"]) == Decimal("1.36375")
+    assert Decimal(detail["lifetime_totals"]["calculated_cost_usd"]) == Decimal("2.73875")
+    assert detail["range_totals"]["historical_prices_verified"] is False
+    assert detail["range_totals"]["rate_basis_descriptions"]
+    assert sum(Decimal(row["calculated_cost_usd"]) for row in detail["daily"]) == Decimal("1.36375")
+    data = reports.recorded_usage_analytics(db, start=date(2026, 6, 1), end=END)
+    assert data["range"]["granularity"] == "week"
+    assert data["calculated_cost_scope"] == "all_retained_ai_usage"
+    for field in ("by_source", "by_model", "daily", "series"):
+        assert sum(Decimal(row["calculated_cost_usd"]) for row in data[field]) == Decimal("2.73875")
+    assert Decimal(data["range"]["calculated_cost_usd"]) == Decimal("2.73875")
+    assert Decimal(data["totals"]["all_time"]["calculated_cost_usd"]) == Decimal("2.73875")

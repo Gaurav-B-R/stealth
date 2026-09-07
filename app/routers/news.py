@@ -583,6 +583,7 @@ def _generate_content_with_grounding(
             label, model_name,
             lambda: client.models.generate_content(model=model_name, contents=prompt, config=config),
             product="shared", trigger="automation",
+            pricing_context=ai_usage.gemini_pricing_context(prompt, generation_config=config),
         )
 
     # Primary latest SDK path: google_search tool.

@@ -1762,6 +1762,16 @@ body.admin-modal-open {
 .ai-scroll-hint { margin-top: 0; font-weight: 600; }
 .ai-feature-table .ai-feature-total td { background: #f8fafc; font-weight: 750; }
 .ai-detail-help { margin: .65rem 0; color: #64748b; font-size: .77rem; line-height: 1.65; }
+.ai-pricing-coverage { padding: .8rem 1rem; background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 10px; color: #475569; font-size: .78rem; line-height: 1.65; }
+.ai-pricing-coverage p { margin: .35rem 0; }
+.ai-pricing-coverage ul { padding-left: 1.2rem; }
+.ai-pricing-details { margin: .9rem 0; color: #475569; font-size: .78rem; }
+.ai-pricing-details summary { padding: .5rem 0; cursor: pointer; font-weight: 700; }
+.ai-pricing-details summary:focus-visible { outline: 2px solid #6366f1; outline-offset: 2px; }
+.ai-profile-daily-table { min-width: 660px; font-variant-numeric: tabular-nums; }
+.ai-feature-table td:nth-child(3) .user-meta { max-width: 190px; white-space: normal; }
+.ai-profiles-table td:nth-child(3), .ai-profiles-table td:nth-child(5) { min-width: 160px; }
+.ai-range-metric strong { overflow-wrap: anywhere; }
 .ai-reconciliation-content { margin-top: .85rem; }
 .ai-billing-metrics { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: .7rem; }
 .ai-billing-metric { padding: .8rem; border-radius: 10px; border: 1px solid #e2e8f0; background: #f8fafc; }

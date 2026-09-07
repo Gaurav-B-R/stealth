@@ -1,9 +1,11 @@
 """Read-only review imports keep real counters and exclude authentication data/cost guesses."""
+import json
+from decimal import Decimal
 from pathlib import Path
 
 import pytest
 from sqlalchemy import create_engine, text
-from scripts.import_ai_cost_review import import_retained_records
+from scripts.import_ai_cost_review import import_retained_records, sanitize_usage_metadata
 
 
 def source_database(path):
@@ -53,3 +55,71 @@ def test_failed_refresh_retains_existing_local_database(tmp_path, monkeypatch):
     with pytest.raises(Exception):
         import_retained_records(f"sqlite:///{source}", target)
     assert target.read_bytes() == before
+
+
+def test_import_keeps_safe_provider_usage_for_calculation_without_prompts_or_arbitrary_metadata(tmp_path, monkeypatch):
+    from app.ai_cost_calculation import calculate_event
+    for key in ["PYTHON_DOTENV_DISABLED", "DATABASE_URL", "GEMINI_API_KEY", "RESEND_API_KEY", "FIELD_ENCRYPTION_KEY"]:
+        monkeypatch.setenv(key, "")
+    source, target = tmp_path / "source.sqlite3", tmp_path / "review.sqlite3"
+    source_database(source)
+    raw = {"promptTokenCount": 100, "candidatesTokenCount": 20, "thoughtsTokenCount": 3,
+           "cachedContentTokenCount": 40, "totalTokenCount": 123, "toolUsePromptTokenCount": 0,
+           "promptTokensDetails": [{"modality": "TEXT", "tokenCount": 100, "prompt": "private-detail"}],
+           "cacheTokensDetails": [{"modality": "TEXT", "tokenCount": 40}],
+           "trafficType": "PROVISIONED_THROUGHPUT", "prompt": "private-prompt",
+           "response": "private-response", "api_key": "private-key",
+           "_rilono_pricing": {"service_tier": "standard", "location": "global",
+                               "input_modalities": ["TEXT"], "explicit_cache": True,
+                               "prompt": "private-context", "credentials": {"secret": "private-nested-key"}}}
+    engine = create_engine(f"sqlite:///{source}")
+    with engine.begin() as db:
+        for declaration in ("raw_usage_json TEXT", "metering_version INTEGER", "usage_state TEXT",
+                            "provider TEXT", "candidate_tokens INTEGER", "thought_tokens INTEGER", "cached_tokens INTEGER"):
+            db.execute(text(f"ALTER TABLE gemini_usage_events ADD COLUMN {declaration}"))
+        db.execute(text("UPDATE gemini_usage_events SET model='gemini-2.5-flash', metering_version=2, usage_state='measured', provider='vertex', candidate_tokens=20, thought_tokens=3, cached_tokens=40, raw_usage_json=:raw"), {"raw": json.dumps(raw)})
+    engine.dispose()
+    before = source.read_bytes()
+    import_retained_records(f"sqlite:///{source}", target)
+    assert source.read_bytes() == before
+    local = create_engine(f"sqlite:///{target}")
+    with local.connect() as db:
+        event = db.execute(text("SELECT * FROM gemini_usage_events")).mappings().one()
+        metadata = json.loads(event["raw_usage_json"])
+        assert "private" not in event["raw_usage_json"]
+        assert metadata["prompt_token_count"] == 100
+        assert metadata["prompt_tokens_details"] == [{"modality": "TEXT", "token_count": 100}]
+        assert metadata["_rilono_pricing"] == {"service_tier": "standard", "location": "global",
+                                               "input_modalities": ["TEXT"], "explicit_cache": True}
+        assert metadata["traffic_type"] == "PROVISIONED_THROUGHPUT"
+        result = calculate_event(event)
+        assert Decimal(result["calculated_cost_usd"]) == Decimal(".0000767")
+        assert result["calculation_status"] == "partial"
+        assert "explicit_cache_storage" in result["excluded_components"]
+        assert "provisioned_throughput_standard_list_value_only" in result["coverage_reasons"]
+        assert event["estimated_cost_usd"] == event["search_cost_usd"] == 0
+    local.dispose()
+
+
+@pytest.mark.parametrize("raw", [None, "invalid-json", "[]", [], {"prompt": "secret"},
+    {"prompt_token_count": True, "total_token_count": -1, "candidates_token_count": 1.5},
+    {"prompt_tokens_details": [{"modality": {"prompt": "secret"}, "token_count": 1}]},
+    {"_rilono_pricing": {"service_tier": "secret", "location": "private-location",
+                         "input_modalities": ["private-prompt"], "explicit_cache": "private-key"}}])
+def test_usage_metadata_sanitizer_rejects_arbitrary_or_invalid_values(raw):
+    assert sanitize_usage_metadata(raw) is None
+
+
+def test_usage_metadata_sanitizer_keeps_exact_counts_but_not_incomplete_modality_lists():
+    data = {"prompt_token_count": "9007199254740993", "total_token_count": 9007199254740993,
+            "cached_content_token_count": 0,
+            "prompt_tokens_details": [{"modality": "TEXT", "token_count": 1},
+                                      {"modality": "private-prompt", "token_count": 9}],
+            "tool_use_prompt_tokens_details": [{"modality": "TEXT", "token_count": 0}],
+            "_rilono_pricing": {"service_tier": "flex", "location": "us-central1", "explicit_cache": False}}
+    clean = json.loads(sanitize_usage_metadata(data))
+    assert clean["prompt_token_count"] == clean["total_token_count"] == 9007199254740993
+    assert clean["cached_content_token_count"] == 0
+    assert "prompt_tokens_details" not in clean
+    assert clean["tool_use_prompt_tokens_details"] == [{"modality": "TEXT", "token_count": 0}]
+    assert clean["_rilono_pricing"] == {"service_tier": "flex", "location": "us-central1", "explicit_cache": False}

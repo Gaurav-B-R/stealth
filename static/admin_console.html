@@ -7,7 +7,7 @@
     <title>Rilono Admin Console</title>
     <meta name="robots" content="noindex,nofollow">
     <link rel="icon" type="image/png" href="/static/logo.png">
-    <link rel="stylesheet" href="/static/admin_console.css?v=20260906a">
+    <link rel="stylesheet" href="/static/admin_console.css?v=20260907a">
     <script src="https://challenges.cloudflare.com/turnstile/v0/api.js?render=explicit" async defer></script>
 </head>
 
@@ -417,7 +417,7 @@
                         <div>
                             <span class="finance-eyebrow">Rilono AI Runtime</span>
                             <h2>AI Usage &amp; Cost</h2>
-                            <p>Recorded AI usage by profile and feature, including background automation. Money comes only from imported Google billing. A zero with an unavailable status means no verified amount is recorded.</p>
+                            <p>Recorded AI usage and calculated costs by profile and feature, including background automation. Calculations use Google’s published rates. Imported Google charges are shown separately. Missing values display 0 with their availability status.</p>
                         </div>
                         <div class="finance-hero-stat">
                             <span id="adminAiHeroLabel">No imported billing amount</span>
@@ -472,11 +472,12 @@
                         <div class="ai-accounting-head">
                             <div>
                                 <span class="ai-section-eyebrow">B2C profiles</span>
-                                <h3 id="adminAiProfilesTitle">AI usage by profile</h3>
+                                <h3 id="adminAiProfilesTitle">AI usage and cost by profile</h3>
                                 <p>Includes direct actions and AI run for that profile in the background. Token totals exclude voice-synthesis characters.</p>
                             </div>
                             <button type="button" id="adminAiProfilesExportBtn" class="table-btn" disabled>Export all matching profiles</button>
                         </div>
+                        <p class="ai-detail-help">Calculated cost uses recorded tokens × Google’s published standard rates. Older records use the current rate catalog; missing pricing details are flagged. Select a profile to see feature and daily costs. Google billed charges remain separate.</p>
                         <div id="adminAiCoverage" class="ai-coverage-note" aria-live="polite">Historical coverage has not been checked.</div>
                         <form id="adminAiProfilesForm" class="ai-profile-search">
                             <label class="finance-field" for="adminAiProfilesSearch"><span>Find a profile</span>
@@ -487,9 +488,9 @@
                         </form>
                         <div class="table-wrap ai-profiles-table-wrap">
                             <table class="users-table ai-profiles-table">
-                                <caption class="ai-table-caption">Selected dates and lifetime recorded usage are separate. Profile billed cost stays 0 until an actual profile-level charge is available; Google project totals are not allocated to profiles.</caption>
+                                <caption class="ai-table-caption">Selected dates and lifetime totals are separate. Calculated USD includes supported recorded components; partial costs have coverage details in the profile breakdown.</caption>
                                 <thead>
-                                    <tr><th scope="col">Profile</th><th scope="col">Selected range<br><span>Recorded tokens</span></th><th scope="col">Selected range<br><span>Billed USD</span></th><th scope="col">Lifetime recorded<br><span>Tokens</span></th><th scope="col">Lifetime recorded<br><span>Billed USD</span></th><th scope="col">Coverage</th></tr>
+                                    <tr><th scope="col">Profile</th><th scope="col">Selected range<br><span>Recorded tokens</span></th><th scope="col">Selected range<br><span>Calculated USD</span></th><th scope="col">Lifetime recorded<br><span>Tokens</span></th><th scope="col">Lifetime recorded<br><span>Calculated USD</span></th><th scope="col">Coverage</th></tr>
                                 </thead>
                                 <tbody id="adminAiProfilesTableBody"><tr><td colspan="6" class="table-empty">Profile usage has not been loaded.</td></tr></tbody>
                             </table>
@@ -504,14 +505,16 @@
                         </section>
                     </section>
 
-                    <p class="ai-fixed-caption">All recorded AI activity · Selected range · Missing counters display 0; coverage warnings identify gaps.</p>
+                    <p class="ai-fixed-caption">All recorded AI activity · B2C, B2B and shared work · Selected range · Missing values display 0 with coverage notes.</p>
                     <div class="metrics-grid finance-metrics-grid ai-range-metrics">
+                        <article class="metric-card ai-range-metric"><span>Calculated AI cost · USD</span><strong id="adminAiCalculatedCost">$0.00</strong><div id="adminAiCalculatedCostSub" class="metric-subtext">Cost data not loaded</div></article>
                         <article class="metric-card ai-range-metric"><span>Recorded tokens</span><strong id="adminAiRangeCost">0</strong><div id="adminAiRangeSub" class="metric-subtext">0 calls · 0 tokens</div></article>
                         <article class="metric-card ai-range-metric"><span>Recorded calls</span><strong id="adminAiRangeAvg">0</strong><div id="adminAiRangeAvgSub" class="metric-subtext">0 days with recorded activity</div></article>
                         <article class="metric-card ai-range-metric"><span>Most tokens in a day</span><strong id="adminAiRangeTopDay">0</strong><div id="adminAiRangeTopDaySub" class="metric-subtext">No recorded tokens</div></article>
                         <article class="metric-card ai-range-metric"><span>Recorded cached tokens</span><strong id="adminAiRangeSaved">0</strong><div id="adminAiRangeSavedSub" class="metric-subtext">Subset of input tokens</div></article>
                         <article class="metric-card ai-range-metric"><span>Recorded search requests</span><strong id="adminAiRangeSearch">0</strong><div id="adminAiRangeSearchSub" class="metric-subtext">Provider search counter</div></article>
                     </div>
+                    <details class="ai-pricing-details"><summary>Pricing coverage and calculation · all activity in selected range</summary><div id="adminAiCalculatedCoverage">Cost data not loaded.</div></details>
                     <p class="ai-fixed-caption">Recorded tokens in fixed windows · These windows do not follow the date filter.</p>
                     <div class="metrics-grid finance-metrics-grid">
                         <article class="metric-card"><span>Today · Tokens</span><strong id="adminAiTodayCost">0</strong><div id="adminAiTodaySub" class="metric-subtext">0 calls · 0 tokens</div></article>
@@ -585,11 +588,12 @@
                                     <th>Tokens</th>
                                     <th>TTS characters</th>
                                     <th>Share of recorded tokens</th>
+                                    <th>Calculated USD</th>
                                 </tr>
                             </thead>
                             <tbody id="adminAiDailyTableBody">
                                 <tr>
-                                    <td colspan="5" class="table-empty">No AI usage recorded yet.</td>
+                                    <td colspan="6" class="table-empty">No AI usage recorded yet.</td>
                                 </tr>
                             </tbody>
                             <tfoot>
@@ -599,6 +603,7 @@
                                     <th id="adminAiDailyTotalTokens">0</th>
                                     <th id="adminAiDailyTotalCost">0</th>
                                     <th id="adminAiDailyTotalShare">0%</th>
+                                    <th id="adminAiDailyCalculatedTotal">$0.00</th>
                                 </tr>
                             </tfoot>
                         </table>
@@ -724,7 +729,7 @@
         </div>
     </div>
 
-    <script src="/static/admin_console.js?v=20260906a"></script>
+    <script src="/static/admin_console.js?v=20260907a"></script>
 </body>
 
 </html>

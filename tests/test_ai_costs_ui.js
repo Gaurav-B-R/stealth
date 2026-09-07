@@ -91,7 +91,7 @@ test('quoted dynamic data cannot break out of profile attributes', () => {
     assert.doesNotMatch(app.refs.aiProfilesTableBody.innerHTML, /" onclick="/);
 });
 
-test('missing records display numeric zero with explicit coverage and billed availability', () => {
+test('missing records display numeric zero with explicit coverage and calculation availability', () => {
     const app = setup();
     const data = profilePayload();
     data.profiles[0].range = stats({ calls: 0, total_tokens: 0 });
@@ -100,7 +100,7 @@ test('missing records display numeric zero with explicit coverage and billed ava
     const html = app.refs.aiProfilesTableBody.innerHTML;
     assert.match(html, /<strong>0<\/strong>/);
     assert.match(html, /\$0\.00/);
-    assert.match(html, /No profile-level billed cost/);
+    assert.match(html, /Cost unavailable/);
     assert.match(html, /1 missing usage/);
     assert.doesNotMatch(html, /<strong>—<\/strong>|Unpriced|Partial estimate/);
     assert.equal(app.aiRecordedValue(null, 'total_tokens'), '0');
@@ -114,7 +114,7 @@ test('profile estimated prices are ignored even if an older server includes them
     app.renderAiProfiles(data);
     const html = app.refs.aiProfilesTableBody.innerHTML;
     assert.doesNotMatch(html, /913|0\.125|estimate|unpriced/i);
-    assert.match(html, /No profile-level billed cost/);
+    assert.match(html, /Cost unavailable/);
     assert.equal(app.aiRecordedCost(stats({ estimated_cost_usd: 100 })), '$0.00');
 });
 
@@ -133,7 +133,7 @@ test('feature detail displays separate token categories and TTS characters for b
     assert.match(html, /Mock interview &lt;x&gt;/);
     assert.match(html, /Older usage can be missing/);
     assert.match(html, /double-count/);
-    assert.match(html, /Feature<\/th><th scope="col">Total tokens<\/th><th scope="col">Billed USD/);
+    assert.match(html, /Feature<\/th><th scope="col">Total tokens<\/th><th scope="col">Calculated USD/);
     assert.match(html, /Scroll horizontally/);
 });
 
@@ -338,11 +338,11 @@ test('usage cards, daily rows, feature bars and CSV ignore all legacy estimated 
     assert.equal(app.refs.aiRangeSaved.textContent, '111');
     assert.equal(app.refs.aiRangeSearch.textContent, '2');
     assert.equal(app.refs.aiDailyTotalCost.textContent, '45');
-    assert.doesNotMatch(app.refs.aiDailyTableBody.innerHTML + app.refs.aiSourceChart.innerHTML, /987|\$|estimate/i);
+    assert.doesNotMatch(app.refs.aiDailyTableBody.innerHTML + app.refs.aiSourceChart.innerHTML, /987|estimate/i);
     app.exportAiCsv('all');
     const csv = await app.urls[0].blob.text();
     assert.match(csv, /3456789/);
-    assert.doesNotMatch(csv, /987\.65|500|cost|estimate|USD/i);
+    assert.doesNotMatch(csv, /987\.65|500|estimate/i);
     app.renderAiUsage({ totals: {}, range: {}, daily: [] });
     assert.equal(app.refs.aiRangeCost.textContent, '0');
     assert.equal(app.refs.aiDailyTotalShare.textContent, '0%');
@@ -362,7 +362,7 @@ test('AI Costs markup contains no illustrative metrics, estimated prices, margin
     assert.doesNotMatch(panel, /Estimated|Est\.|Cost Saved|Tokens Saved|Gross Margin|Enterprise Revenue|Sample Student|demo/i);
     assert.match(panel, /Actual Google billing/);
     assert.match(panel, /No imported billing amount/);
-    assert.match(panel, /Billed USD/);
+    assert.match(panel, /Calculated USD/);
 });
 
 
@@ -427,4 +427,61 @@ test('billing string formatting preserves all significant digits without floatin
     assert.equal(app.aiBillingMoney('1.23456789E-10', 'USD'), '$0.000000000123456789');
     assert.equal(app.aiBillingMoney('-1234.5600', 'USD'), '$-1,234.56');
     assert.equal(app.aiBillingMoney('-0E-9', 'USD'), '$0.00');
+});
+
+
+test('profile calculated costs preserve precise positive amounts and label incomplete coverage', () => {
+    const app = setup();
+    const data = profilePayload();
+    data.profiles[0].range = stats({ calculated_cost_usd: '0.00000012345', calculated_cost_available: true, calculated_cost_status: 'complete', priced_calls: 3 });
+    data.profiles[0].lifetime = stats({ calculated_cost_usd: '12.123456789', calculated_cost_available: true, calculated_cost_status: 'partial', partially_priced_calls: 2, unpriced_calls: 2 });
+    app.renderAiProfiles(data);
+    const html = app.refs.aiProfilesTableBody.innerHTML;
+    assert.match(html, /\$0\.00000012345/);
+    assert.match(html, /\$12\.123456789/);
+    assert.match(html, /Recorded usage × published rates/);
+    assert.match(html, /Partial cost/);
+    assert.doesNotMatch(html, /0\.125|No profile-level billed/);
+    assert.equal(app.aiRecordedCost(stats({ calculated_cost_usd: '999', calculated_cost_available: false, calculated_cost_status: 'unavailable' })), '$0.00');
+});
+
+test('profile daily costs and pricing coverage explain exactly which values are available', () => {
+    const app = setup();
+    const calculated = stats({ calculated_cost_usd: '0.002025', calculated_cost_available: true, calculated_cost_status: 'partial',
+        priced_calls: 1, partially_priced_calls: 1, unpriced_calls: 2, rates_verified_at: '2026-09-07',
+        cost_exclusions: ['input_modality_not_recorded', '<script>unsafe</script>'], rate_coverage_reasons: ['historical_request_date_price_not_verified'] });
+    app.renderAiProfileDetail({ profile: { name: 'Student' }, features: [], daily: [{ date: '2026-09-02', ...calculated }], lifetime_totals: calculated });
+    const html = app.refs.aiProfileDetailBody.innerHTML;
+    assert.match(html, /Daily usage and cost/);
+    assert.match(html, /Sep 2, 2026/);
+    assert.match(html, /\$0\.002025/);
+    assert.match(html, /1 fully priced calls · 1 partially priced · 1 unavailable/);
+    assert.match(html, /verified 2026-09-07/);
+    assert.match(html, /currently published standard rates/);
+    assert.match(html, /Input type was not recorded/);
+    assert.match(html, /original request date is not verified/);
+    assert.match(html, /&lt;script&gt;/);
+    assert.doesNotMatch(html, /<script>/);
+});
+
+test('global cards daily rows and CSV show calculated money while Google billing remains separate', async () => {
+    const app = setup();
+    const row = { date: '2026-09-02', calls: 1, tokens: 1000, tts_characters: 0,
+        calculated_cost_usd: '0.00123456789', calculated_cost_available: true, calculated_cost_status: 'partial', rate_basis: ['current_standard_list_rates'], cost_usd: 98765 };
+    app.renderAiUsage({ totals: {}, range: { ...row, start: row.date, end: row.date, days: 1 }, daily: [row], by_model: [{ ...row, model: 'gemini-2.5-pro' }] });
+    assert.equal(app.refs.aiCalculatedCost.textContent, '$0.00123456789');
+    assert.equal(app.refs.aiDailyCalculatedTotal.textContent, '$0.00123456789');
+    assert.match(app.refs.aiDailyTableBody.innerHTML, /\$0\.00123456789/);
+    app.exportAiCsv('all');
+    const csv = await app.urls[0].blob.text();
+    assert.match(csv, /Calculated cost \(USD\)/);
+    assert.match(csv, /0\.00123456789/);
+    assert.match(csv, /current_standard_list_rates/);
+    assert.doesNotMatch(csv, /98765/);
+    app.renderAiReconciliation({ configured: true, status: 'available', totals: [{ currency: 'INR', cost: '12', credits: '-2', net_cost: '10' }] });
+    assert.equal(app.refs.aiMonthHero.textContent, 'INR 10.00');
+    assert.equal(app.refs.aiCalculatedCost.textContent, '$0.00123456789');
+    app.aiUsageEmptyState('Offline');
+    assert.equal(app.refs.aiCalculatedCost.textContent, '$0.00');
+    assert.equal(app.refs.aiDailyCalculatedTotal.textContent, '$0.00');
 });

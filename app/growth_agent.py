@@ -328,6 +328,7 @@ def run_conversion_analysis(db: Session, limit: int = GROWTH_AGENT_MAX_CANDIDATE
                         {} if gemini_utils.USE_VERTEX_AI else {"request_options": {"retry": None}}
                     )),
                     product="shared", trigger="automation",
+                    pricing_context=ai_usage.gemini_pricing_context(prompt),
                 )
                 parsed = _parse_json_array(getattr(response, "text", None))
                 if parsed:
@@ -411,6 +412,7 @@ def analyze_account(db: Session, user_id: int) -> dict:
                         {} if gemini_utils.USE_VERTEX_AI else {"request_options": {"retry": None}}
                     )),
                     user_id=user.id, product="b2c", trigger="automation",
+                    pricing_context=ai_usage.gemini_pricing_context(prompt),
                 )
                 parsed = _parse_json_array(getattr(response, "text", None))
                 if parsed:

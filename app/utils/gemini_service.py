@@ -192,6 +192,10 @@ def _instrument_usage(model, model_name: str, usage_source: str = "document_ai",
             usage_source, model_name, lambda: original(*args, **kwargs),
             user_id=user_id, organization_id=organization_id,
             product=product, trigger=trigger,
+            pricing_context=ai_usage.gemini_pricing_context(
+                args[0] if args else kwargs.get("contents"),
+                generation_config=kwargs.get("generation_config"),
+                base_generation_config=getattr(model, "_generation_config", None)),
         )
 
     _wrapped._rilono_usage_instrumented = True
