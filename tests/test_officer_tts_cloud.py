@@ -8,7 +8,13 @@ from unittest.mock import Mock
 import pytest
 from google.oauth2.credentials import Credentials
 
-from app import officer_tts
+from app import ai_usage, officer_tts
+
+
+@pytest.fixture(autouse=True)
+def isolate_usage_writes(monkeypatch):
+    # Provider configuration tests must never write a real usage ledger/spool.
+    monkeypatch.setattr(ai_usage, "_write_event", Mock(return_value=True))
 
 
 @pytest.fixture

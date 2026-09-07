@@ -44,6 +44,14 @@ def get_genai_client(http_options=None):
     if http_options is None and _GENAI_CLIENT is not None:
         return _GENAI_CLIENT
     from google import genai as modern_genai
+    from google.genai import types as modern_types
+    cache_client = http_options is None
+    # One SDK request per ledger attempt. Application fallback loops remain
+    # responsible for retries so another provider call never disappears inside
+    # a single accounting event. Preserve caller timeout/transport settings.
+    http_options = modern_types.HttpOptions.model_validate(http_options or {}).model_copy(
+        update={"retry_options": modern_types.HttpRetryOptions(attempts=1)},
+    )
     if USE_VERTEX_AI:
         client = modern_genai.Client(
             enterprise=True, project=CLOUD_PROJECT, location=CLOUD_LOCATION,
@@ -53,7 +61,7 @@ def get_genai_client(http_options=None):
         client = modern_genai.Client(
             enterprise=False, api_key=GEMINI_API_KEY, http_options=http_options,
         )
-    if http_options is None:
+    if cache_client:
         _GENAI_CLIENT = client
     return client
 
@@ -159,7 +167,8 @@ def get_model_candidates(
 
 
 def _instrument_usage(model, model_name: str, usage_source: str = "document_ai",
-                      user_id: Optional[int] = None, organization_id: Optional[int] = None):
+                      user_id: Optional[int] = None, organization_id: Optional[int] = None,
+                      product: Optional[str] = None, trigger: Optional[str] = None):
     """Wrap generate_content so every call through this model logs its usage/cost.
 
     This is the metering choke point: callers that build their model here cannot forget
@@ -172,18 +181,20 @@ def _instrument_usage(model, model_name: str, usage_source: str = "document_ai",
         original = model.generate_content
     except Exception:
         return
+    if getattr(original, "_rilono_usage_instrumented", False) is True:
+        return
 
     def _wrapped(*args, **kwargs):
-        resp = original(*args, **kwargs)
-        try:
-            from app import ai_usage
-            ai_usage.record_gemini_usage(
-                usage_source, model_name, resp,
-                user_id=user_id, organization_id=organization_id,
-            )
-        except Exception:
-            pass
-        return resp
+        from app import ai_usage
+        if not USE_VERTEX_AI:
+            kwargs["request_options"] = {**(kwargs.get("request_options") or {}), "retry": None}
+        return ai_usage.tracked_gemini_call(
+            usage_source, model_name, lambda: original(*args, **kwargs),
+            user_id=user_id, organization_id=organization_id,
+            product=product, trigger=trigger,
+        )
+
+    _wrapped._rilono_usage_instrumented = True
 
     try:
         model.generate_content = _wrapped
@@ -192,14 +203,15 @@ def _instrument_usage(model, model_name: str, usage_source: str = "document_ai",
 
 
 def build_generative_model(model_name: str, usage_source: str = "document_ai",
-                           user_id: Optional[int] = None, organization_id: Optional[int] = None):
+                           user_id: Optional[int] = None, organization_id: Optional[int] = None,
+                           product: Optional[str] = None, trigger: Optional[str] = None):
     model = None
     if USE_VERTEX_AI and VERTEX_AI_AVAILABLE:
         model = GenerativeModel(model_name)
     elif GENAI_AVAILABLE:
         model = genai.GenerativeModel(model_name)
     if model is not None:
-        _instrument_usage(model, model_name, usage_source, user_id, organization_id)
+        _instrument_usage(model, model_name, usage_source, user_id, organization_id, product, trigger)
     return model
 
 
@@ -207,12 +219,17 @@ def _generate_content_with_fallback(
     model_names: list[str],
     content,
     usage_source: str = "document_ai",
+    *,
+    product: Optional[str] = None,
+    trigger: Optional[str] = None,
 ):
     """Generate with each configured model until one succeeds."""
     last_error = None
     for model_name in _dedupe_model_names(model_names):
         try:
-            model = build_generative_model(model_name, usage_source=usage_source)
+            model = build_generative_model(
+                model_name, usage_source=usage_source, product=product, trigger=trigger,
+            )
             if model is None:
                 continue
             return model.generate_content(content)

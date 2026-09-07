@@ -496,7 +496,7 @@ async def red_flag_scan(
         raise HTTPException(status_code=400, detail=f"File too large (max {SCAN_MAX_BYTES // (1024*1024)} MB).")
 
     # Attribute this scan's Gemini cost to the account that ran it.
-    ai_usage.set_usage_account(user_id=current_user.id)
+    ai_usage.set_usage_account(user_id=current_user.id, product="b2c", trigger="user")
     result = gemini_service.scan_document_red_flags(
         data,
         file.filename or "document",

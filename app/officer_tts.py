@@ -18,6 +18,7 @@ the interview NEVER breaks because of voice infrastructure.
 import base64
 import os
 import re
+import uuid
 from threading import Lock
 from typing import Optional
 
@@ -129,7 +130,7 @@ def _cloud_tts_headers() -> Optional[dict]:
         return None
 
 
-def _synthesize_call(payload: dict) -> Optional[dict]:
+def _synthesize_call(payload: dict, *, user_id: Optional[int] = None) -> Optional[dict]:
     """Use Cloud exclusively when selected; retain the Developer credential chain."""
     if gemini_utils.USE_VERTEX_AI:
         headers = _cloud_tts_headers()
@@ -148,7 +149,19 @@ def _synthesize_call(payload: dict) -> Optional[dict]:
         if gemini_key.startswith("AIza"):
             attempts.append({"params": {"key": gemini_key}, "headers": {}})
 
+    from app import ai_usage
+    characters = len(str(payload.get("input", {}).get("text", "")))
+    voice_name = str(payload.get("voice", {}).get("name", "unknown"))
     for attempt in attempts:
+        event_key = str(uuid.uuid4())
+        persisted = ai_usage.record_tts_usage(
+            "mock_interview_tts", voice_name, None, cost_usd=None,
+            user_id=user_id, product="b2c", trigger="user",
+            status="pending", usage_state="pending", event_key=event_key,
+        )
+        if persisted is False:
+            raise TtsUnavailable("TTS usage accounting is unavailable; request was not sent")
+        provider_succeeded = False
         try:
             r = requests.post(
                 TTS_ENDPOINT,
@@ -158,15 +171,31 @@ def _synthesize_call(payload: dict) -> Optional[dict]:
                 timeout=TTS_TIMEOUT_SECONDS,
             )
             if r.ok:
+                # Meter at the provider boundary. A later JSON/audio validation
+                # failure must not erase an already successful synthesis.
+                provider_succeeded = True
+                ai_usage.record_tts_usage(
+                    "mock_interview_tts", voice_name, characters,
+                    cost_usd=estimate_tts_cost_usd(characters),
+                    user_id=user_id, product="b2c", trigger="user",
+                    usage_state="measured", event_key=event_key,
+                )
                 data = r.json()
                 if data.get("audioContent"):
                     return data
         except Exception:
-            continue
+            pass
+        if not provider_succeeded:
+            ai_usage.record_tts_usage(
+                "mock_interview_tts", voice_name, None, cost_usd=None,
+                user_id=user_id, product="b2c", trigger="user",
+                status="error", usage_state="unknown", event_key=event_key,
+            )
     return None
 
 
-def synthesize_officer_line(text: str, country_code: Optional[str] = "US") -> dict:
+def synthesize_officer_line(text: str, country_code: Optional[str] = "US", *,
+                            user_id: Optional[int] = None) -> dict:
     """Synthesize one officer line. Returns {audio_b64, voice, characters}.
 
     Raises TtsUnavailable when no credential path works — callers translate that into
@@ -189,7 +218,7 @@ def synthesize_officer_line(text: str, country_code: Optional[str] = "US") -> di
             "pitch": cfg["pitch"],
         },
     }
-    data = _synthesize_call(payload)
+    data = _synthesize_call(payload, user_id=user_id)
     if not data:
         raise TtsUnavailable("All TTS credential paths failed")
 

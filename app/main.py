@@ -27,6 +27,7 @@ from app.services.course_catalog_refresh import (
     start_course_catalog_refresh_scheduler,
     stop_course_catalog_refresh_scheduler,
 )
+from app.services.ai_billing_sync import start_ai_accounting_maintenance, stop_ai_accounting_maintenance
 from app.schema_patch import (
     ensure_ai_optimization_events_table,
     ensure_company_finance_entries_table,
@@ -383,6 +384,7 @@ def startup_backfill_subscriptions():
     start_enterprise_calendar_reminder_scheduler()
     start_document_retention_scheduler()
     start_course_catalog_refresh_scheduler()
+    start_ai_accounting_maintenance()
     from app import fx
     fx.prime()  # warm the live USD→INR rate in the background
     from app import uk_maintenance
@@ -391,6 +393,7 @@ def startup_backfill_subscriptions():
 
 @app.on_event("shutdown")
 def shutdown_background_services():
+    stop_ai_accounting_maintenance()
     stop_daily_ai_notification_scheduler()
     stop_f1_news_ingestion_scheduler()
     stop_enterprise_calendar_reminder_scheduler()

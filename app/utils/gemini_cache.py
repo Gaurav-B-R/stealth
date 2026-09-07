@@ -21,6 +21,7 @@ import os
 import time
 import hashlib
 import logging
+import uuid
 from datetime import timedelta
 
 from app.utils import gemini_service as gemini_utils
@@ -73,6 +74,19 @@ def _get_or_create_cache(genai, model_name: str, context_text: str, source: str)
             return live, True
         _REGISTRY.pop(key, None)  # expired/evicted on Google's side
 
+    from app import ai_usage
+    event_key = str(uuid.uuid4())
+    storage_source = f"{source}.cache_storage"
+    # A cached resource is shared across matching prompts. Requested TTL is not
+    # proof of its billed lifetime; record the resource separately and leave its
+    # storage cost unpriced until Google billing can be reconciled.
+    persisted = ai_usage.record_cache_storage_usage(
+        storage_source, model_name, ttl_seconds=TTL_SECONDS,
+        event_key=event_key, product="shared",
+    )
+    if persisted is False:
+        # The inline generation fallback has its own durable accounting guard.
+        return None, False
     try:
         cache = genai.caching.CachedContent.create(
             model=_model_path(model_name),
@@ -81,9 +95,21 @@ def _get_or_create_cache(genai, model_name: str, context_text: str, source: str)
             ttl=timedelta(seconds=TTL_SECONDS),
         )
     except Exception as exc:
+        ai_usage.record_cache_storage_usage(
+            storage_source, model_name, ttl_seconds=TTL_SECONDS,
+            event_key=event_key, product="shared", status="error", usage_state="unknown",
+        )
         # Most common reason: content below the model's minimum cacheable token count.
         logger.info("Context cache create skipped (source=%s): %s", source, exc)
         return None, False
+
+    metadata = getattr(cache, "usage_metadata", None)
+    provider_tokens = getattr(metadata, "total_token_count", None)
+    ai_usage.record_cache_storage_usage(
+        storage_source, model_name, cache_name=cache.name, total_token_count=provider_tokens,
+        ttl_seconds=TTL_SECONDS, event_key=event_key, product="shared",
+        status="ok", usage_state="unknown",
+    )
 
     _REGISTRY[key] = {"name": cache.name, "expires_at": now + TTL_SECONDS, "tokens": _est_tokens(context_text)}
     return cache, False
@@ -101,8 +127,8 @@ def generate_content_cached(
     Generate content with `context_text` served from a GCP context cache and only
     `prompt` sent fresh. Returns the Gemini response, or None if caching is disabled,
     unavailable, or the content is too small to cache (caller should fall back to an
-    inline prompt). Usage of the actual call is still logged by the caller via
-    ai_usage; this module logs the cache hit/miss savings.
+    inline prompt). This boundary records actual provider usage; callers must not
+    add the cached token count to the prompt count again.
     """
     if not is_enabled():
         return None
@@ -119,7 +145,10 @@ def generate_content_cached(
             return None
 
         model = genai.GenerativeModel.from_cached_content(cached_content=cache)
-        response = model.generate_content(prompt)
+        from app import ai_usage
+        response = ai_usage.tracked_gemini_call(
+            source, model_name, lambda: model.generate_content(prompt, request_options={"retry": None}),
+        )
 
         # Record optimization metrics (best-effort).
         try:
@@ -129,12 +158,6 @@ def generate_content_cached(
                 "cache_hit" if was_hit else "cache_miss",
                 source, tokens_saved=(tokens if was_hit else 0), model=model_name,
             )
-        except Exception:
-            pass
-
-        try:
-            from app import ai_usage
-            ai_usage.record_gemini_usage(source, model_name, response)
         except Exception:
             pass
 

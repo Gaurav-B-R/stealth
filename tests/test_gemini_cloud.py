@@ -99,9 +99,28 @@ def test_developer_mode_keeps_existing_api_key_path(monkeypatch):
     assert not service.USE_VERTEX_AI
     assert service.is_ai_configured()
     loader.assert_not_called()
-    client_factory.assert_called_once_with(
-        enterprise=False, api_key="AIzaOldPaidKeyForOfflineTest", http_options={"timeout": 12345},
+    client_factory.assert_called_once()
+    kwargs = client_factory.call_args.kwargs
+    assert kwargs["enterprise"] is False
+    assert kwargs["api_key"] == "AIzaOldPaidKeyForOfflineTest"
+    assert kwargs["http_options"].timeout == 12345
+    assert kwargs["http_options"].retry_options.attempts == 1
+
+
+def test_client_preserves_http_options_without_mutating_callers_retry_settings(monkeypatch):
+    service, _, _ = load_service(monkeypatch)
+    from google import genai
+    factory = Mock()
+    monkeypatch.setattr(genai, "Client", factory)
+    original = types.HttpOptions(
+        timeout=3210, headers={"x-test": "offline"},
+        retry_options=types.HttpRetryOptions(attempts=5),
     )
+    service.get_genai_client(http_options=original)
+    options = factory.call_args.kwargs["http_options"]
+    assert options.timeout == 3210 and options.headers == {"x-test": "offline"}
+    assert options.retry_options.attempts == 1
+    assert original.retry_options.attempts == 5
 
 
 def test_generation_preserves_model_config_system_and_usage():

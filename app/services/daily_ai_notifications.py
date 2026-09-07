@@ -40,6 +40,13 @@ DAILY_AI_NOTIFIER_HOUR_UTC = max(0, min(23, int(os.getenv("DAILY_AI_NOTIFIER_HOU
 DAILY_AI_NOTIFIER_MINUTE_UTC = max(0, min(59, int(os.getenv("DAILY_AI_NOTIFIER_MINUTE_UTC", "0") or "0")))
 DAILY_AI_NOTIFIER_POLL_SECONDS = max(60, int(os.getenv("DAILY_AI_NOTIFIER_POLL_SECONDS", "300") or "300"))
 DAILY_AI_NOTIFIER_USER_LIMIT = max(0, int(os.getenv("DAILY_AI_NOTIFIER_USER_LIMIT", "0") or "0"))
+# Dormant accounts: once a user has gone DORMANT_AFTER_DAYS without logging in, their scan
+# (the Gemini call, the R2 reads AND any email) drops from daily to once every
+# DORMANT_CADENCE_DAYS. Two-thirds of this job's Gemini spend was going to accounts that
+# had not logged in for 30+ days or ever (2026-09-05 audit), each of them emailed ~daily.
+# A login puts the account straight back on the daily schedule.
+DAILY_AI_NOTIFIER_DORMANT_AFTER_DAYS = max(0, int(os.getenv("DAILY_AI_NOTIFIER_DORMANT_AFTER_DAYS", "30") or "30"))
+DAILY_AI_NOTIFIER_DORMANT_CADENCE_DAYS = max(1, int(os.getenv("DAILY_AI_NOTIFIER_DORMANT_CADENCE_DAYS", "14") or "14"))
 
 
 class DailyAssistantDecision(BaseModel):
@@ -125,6 +132,48 @@ def _build_gemini_model(model_name: str = MODEL_NAME):
     if gemini_utils.USE_VERTEX_AI:
         return gemini_utils.GenerativeModel(model_name), "vertex"
     return gemini_utils.genai.GenerativeModel(model_name), "genai"
+
+
+def _as_naive_utc(value: Optional[datetime]) -> Optional[datetime]:
+    """users.first_login_at / last_login_at are naive UTC in prod (ALTER-added TIMESTAMP,
+    written with datetime.utcnow()) but the model declares timezone=True — normalise
+    both shapes so a comparison never raises (the 2026-08-23 naive/aware incident)."""
+    if value is None:
+        return None
+    if value.tzinfo is not None:
+        return value.astimezone(timezone.utc).replace(tzinfo=None)
+    return value
+
+
+def _last_activity_at(user) -> Optional[datetime]:
+    """Best evidence of the account being used: last login, else first login, else signup.
+    A fresh signup that never logs in therefore gets the daily onboarding nudges for
+    DORMANT_AFTER_DAYS and then goes to the dormant cadence like everyone else."""
+    for attr in ("last_login_at", "first_login_at", "created_at"):
+        stamp = _as_naive_utc(getattr(user, attr, None))
+        if stamp is not None:
+            return stamp
+    return None
+
+
+def _is_dormant(user, now_utc: datetime) -> bool:
+    if DAILY_AI_NOTIFIER_DORMANT_AFTER_DAYS <= 0:
+        return False
+    last = _last_activity_at(user)
+    if last is None:
+        return True
+    return (_as_naive_utc(now_utc) - last) >= timedelta(days=DAILY_AI_NOTIFIER_DORMANT_AFTER_DAYS)
+
+
+def _is_user_due(user, run_date, now_utc: datetime) -> bool:
+    """Active accounts are scanned every run. Dormant accounts are scanned on exactly one
+    day per DORMANT_CADENCE_DAYS, chosen from the user id — stateless (no last-scanned
+    column to drift), idempotent per run_date, and it spreads the dormant scans evenly
+    across the fortnight instead of piling them onto one morning."""
+    if not _is_dormant(user, now_utc):
+        return True
+    cadence = DAILY_AI_NOTIFIER_DORMANT_CADENCE_DAYS
+    return run_date.toordinal() % cadence == int(user.id) % cadence
 
 
 def _is_due_for_today(now_utc: datetime) -> bool:
@@ -263,12 +312,14 @@ def _analyze_user(model: Any, prompt: str, user_id: int, model_name: str) -> Dai
     print(_clip_for_log(prompt))
     print("=" * 90)
 
-    response = model.generate_content(prompt)
-    try:
-        from app import ai_usage
-        ai_usage.record_gemini_usage("daily_ai_notifier", model_name, response, user_id=user_id)
-    except Exception:
-        pass
+    from app import ai_usage
+    response = ai_usage.tracked_gemini_call(
+        "daily_ai_notifier", model_name,
+        lambda: model.generate_content(prompt, **(
+            {} if gemini_utils.USE_VERTEX_AI else {"request_options": {"retry": None}}
+        )),
+        user_id=user_id, product="b2c", trigger="automation",
+    )
     response_text = str(getattr(response, "text", "") or "")
 
     print("\n" + "-" * 90)
@@ -463,15 +514,23 @@ def run_daily_ai_notification_job(force: bool = False) -> dict:
         model, provider = _build_gemini_model(MODEL_NAME)
         r2_client = _build_r2_client()
 
-        user_id_rows = (
-            db.query(models.User.id)
+        user_rows = (
+            db.query(models.User.id, models.User.created_at, models.User.first_login_at, models.User.last_login_at)
             .filter(models.User.is_active.is_(True))
             .order_by(models.User.id.asc())
             .all()
         )
-        user_ids = [int(row[0]) for row in user_id_rows]
+        # Dormant accounts are only scanned on their fortnightly day — see _is_user_due.
+        # Applied to forced (admin "run now") runs too: re-running today must not turn
+        # into a full re-scan of every dead account.
+        user_ids = [int(row.id) for row in user_rows if _is_user_due(row, run_date, now_utc)]
+        users_skipped_dormant = len(user_rows) - len(user_ids)
         if DAILY_AI_NOTIFIER_USER_LIMIT > 0:
             user_ids = user_ids[:DAILY_AI_NOTIFIER_USER_LIMIT]
+        print(
+            f"Daily AI notifier: {len(user_ids)} account(s) due today, "
+            f"{users_skipped_dormant} dormant account(s) deferred to their fortnightly scan"
+        )
 
         users_scanned = 0
         notifications_sent = 0
@@ -494,6 +553,7 @@ def run_daily_ai_notification_job(force: bool = False) -> dict:
             "provider": provider,
             "model": MODEL_NAME,
             "users_scanned": users_scanned,
+            "users_skipped_dormant": users_skipped_dormant,
             "notifications_sent": notifications_sent,
         }
     except Exception as exc:  # noqa: BLE001

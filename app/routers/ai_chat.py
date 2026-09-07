@@ -132,9 +132,10 @@ def _generate_with_ai_chat_model(
                         "data": file_part["data"],
                     }
                 )
-            return model.generate_content(prompt_parts)
+            return model.generate_content(prompt_parts, request_options={"retry": None})
 
-    return model.generate_content(full_prompt)
+    options = {"request_options": {"retry": None}} if provider == "genai" else {}
+    return model.generate_content(full_prompt, **options)
 
 
 def _extract_ai_text(response) -> tuple[str, bool]:
@@ -200,6 +201,15 @@ ALLOWED_CHAT_SOURCES = {
     # `mock_interview` so it does NOT inherit the in-character visa-officer persona (which
     # is instructed to give no scores/feedback) — the report needs to score and advise.
     "mock_interview_report",
+}
+
+# Keep features distinct even though they share the chat generation endpoint.
+CHAT_USAGE_SOURCES = {
+    "rilono_ai_chat": "student_ai_chat",
+    "rilono_ai_copilot": "student_ai_chat_copilot",
+    "visa_prep": "student_visa_prep",
+    "mock_interview": "student_mock_interview",
+    "mock_interview_report": "student_interview_report",
 }
 
 QUOTA_TRACKED_CHAT_SOURCES = {
@@ -796,6 +806,7 @@ def generate_ai_response(
         # deep analysis stays on the smart default model, with latency hidden behind the report
         # progress bar.
         normalized_chat_source = (source or "").strip().lower()
+        usage_source = CHAT_USAGE_SOURCES.get(normalized_chat_source, "student_ai_chat")
         is_interview_turn = normalized_chat_source in ("mock_interview", "visa_prep")
         interview_generation_config = None
         if is_interview_turn:
@@ -894,11 +905,17 @@ Please provide a helpful response to the user's question:"""
         for model_name in model_candidates:
             try:
                 model = _build_ai_chat_model(provider, model_name, generation_config=interview_generation_config)
-                candidate_response = _generate_with_ai_chat_model(
-                    model=model,
-                    provider=provider,
-                    full_prompt=full_prompt,
-                    inline_session_attachment_parts=inline_session_attachment_parts,
+                # Record each provider attempt before inspecting text: an empty or
+                # truncated answer can still contain billable thinking/output.
+                candidate_response = ai_usage.tracked_gemini_call(
+                    usage_source, model_name,
+                    lambda: _generate_with_ai_chat_model(
+                        model=model,
+                        provider=provider,
+                        full_prompt=full_prompt,
+                        inline_session_attachment_parts=inline_session_attachment_parts,
+                    ),
+                    product="b2c", trigger="user",
                 )
                 text, truncated = _extract_ai_text(candidate_response)
                 if truncated:
@@ -917,19 +934,6 @@ Please provide a helpful response to the user's question:"""
 
         if response is None:
             raise RuntimeError(f"All configured Rilono AI chat models failed: {str(last_model_error)}")
-
-        model_name = used_model_name
-        try:
-            # Attribute Copilot (Chrome extension) chats to their own usage source so the
-            # admin AI-cost analytics can break out extension spend from website chat.
-            usage_source = (
-                "student_ai_chat_copilot"
-                if (source or "").strip().lower() == "rilono_ai_copilot"
-                else "student_ai_chat"
-            )
-            ai_usage.record_gemini_usage(usage_source, model_name, response)
-        except Exception:
-            pass
 
         # Privacy: do not log the AI response content.
         return sanitize_ai_response_for_public_display(response_text)
@@ -1031,7 +1035,7 @@ def chat_with_ai(
             )
 
         # Attribute every Gemini call in this request to the signed-in account.
-        ai_usage.set_usage_account(user_id=current_user.id)
+        ai_usage.set_usage_account(user_id=current_user.id, product="b2c", trigger="user")
 
         # Cost guardrail: reject obviously off-topic ("free ChatGPT") prompts before
         # spending any Gemini tokens. Borderline prompts pass through to the model,
@@ -1208,17 +1212,10 @@ def synthesize_officer_voice(
         return JSONResponse(status_code=200, content={"fallback": True})
 
     try:
-        result = officer_tts.synthesize_officer_line(text, country)
+        result = officer_tts.synthesize_officer_line(text, country, user_id=current_user.id)
     except officer_tts.TtsUnavailable:
         return JSONResponse(status_code=503, content={"fallback": True})
 
-    ai_usage.record_tts_usage(
-        "mock_interview_tts",
-        result["voice"],
-        result["characters"],
-        cost_usd=officer_tts.estimate_tts_cost_usd(result["characters"]),
-        user_id=current_user.id,
-    )
     return {
         "fallback": False,
         "audio": result["audio_b64"],

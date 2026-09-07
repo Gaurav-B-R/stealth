@@ -7,7 +7,7 @@
     <title>Rilono Admin Console</title>
     <meta name="robots" content="noindex,nofollow">
     <link rel="icon" type="image/png" href="/static/logo.png">
-    <link rel="stylesheet" href="/static/admin_console.css?v=20260801d">
+    <link rel="stylesheet" href="/static/admin_console.css?v=20260906a">
     <script src="https://challenges.cloudflare.com/turnstile/v0/api.js?render=explicit" async defer></script>
 </head>
 
@@ -111,7 +111,14 @@
                         <button id="adminResetBtn" type="button" class="ghost-btn small-btn">Reset</button>
                     </form>
 
-                    <div id="adminUsersSummary" class="users-summary">Showing 0 users</div>
+                    <div class="users-table-toolbar">
+                        <div id="adminUsersSummary" class="users-summary">Showing 0 users</div>
+                        <div id="adminUsersExportActions" class="users-export-actions" role="group" aria-label="Export student accounts" aria-describedby="adminUsersExportHint" aria-busy="false">
+                            <span id="adminUsersExportHint" class="users-export-hint">Exports all matching users</span>
+                            <button id="adminUsersExportCsvBtn" type="button" class="ghost-btn small-btn" disabled>Export CSV</button>
+                            <button id="adminUsersExportExcelBtn" type="button" class="ghost-btn small-btn" disabled>Export Excel</button>
+                        </div>
+                    </div>
 
                     <div class="table-wrap">
                         <table class="users-table">
@@ -129,7 +136,7 @@
                             </thead>
                             <tbody id="adminUsersTableBody">
                                 <tr>
-                                    <td colspan="7" class="table-empty">No users loaded yet.</td>
+                                    <td colspan="8" class="table-empty">No users loaded yet.</td>
                                 </tr>
                             </tbody>
                         </table>
@@ -410,10 +417,10 @@
                         <div>
                             <span class="finance-eyebrow">Rilono AI Runtime</span>
                             <h2>AI Usage &amp; Cost</h2>
-                            <p>Estimated model-processing spend across every AI feature. Token usage is logged per call; costs are estimates and should be reconciled against the provider invoice.</p>
+                            <p>Recorded AI usage by profile and feature, including background automation. Money comes only from imported Google billing. A zero with an unavailable status means no verified amount is recorded.</p>
                         </div>
                         <div class="finance-hero-stat">
-                            <span id="adminAiHeroLabel">Selected range (est.)</span>
+                            <span id="adminAiHeroLabel">No imported billing amount</span>
                             <strong id="adminAiMonthHero">$0.00</strong>
                         </div>
                     </div>
@@ -422,7 +429,7 @@
                         <div class="ai-range-head">
                             <div>
                                 <h3>Filter by date</h3>
-                                <p id="adminAiRangeCaption">Showing the last 30 days. Everything below — totals, charts and the daily table — follows this range.</p>
+                                <p id="adminAiRangeCaption">Showing the last 30 days. Selected-range totals follow these dates; lifetime totals include all available records.</p>
                             </div>
                             <div class="ai-range-presets" id="adminAiRangePresets">
                                 <button type="button" class="ai-preset-btn" data-preset="today">Today</button>
@@ -447,69 +454,82 @@
                         </form>
                     </section>
 
+                    <section class="ai-accounting-card" aria-labelledby="adminAiReconciliationTitle">
+                        <div class="ai-accounting-head">
+                            <div>
+                                <span class="ai-section-eyebrow">Google billing</span>
+                                <h3 id="adminAiReconciliationTitle">Actual Google billing</h3>
+                                <p>Imported charges, credits and net cost for the selected projects, services and dates. Billing can arrive later than usage.</p>
+                            </div>
+                            <button type="button" id="adminAiBillingSyncBtn" class="table-btn" disabled>Sync billing</button>
+                        </div>
+                        <div id="adminAiReconciliation" class="ai-reconciliation-content" aria-live="polite">
+                            <p class="ai-accounting-note">Billing connection status has not been loaded.</p>
+                        </div>
+                    </section>
+
+                    <section class="ai-accounting-card" aria-labelledby="adminAiProfilesTitle">
+                        <div class="ai-accounting-head">
+                            <div>
+                                <span class="ai-section-eyebrow">B2C profiles</span>
+                                <h3 id="adminAiProfilesTitle">AI usage by profile</h3>
+                                <p>Includes direct actions and AI run for that profile in the background. Token totals exclude voice-synthesis characters.</p>
+                            </div>
+                            <button type="button" id="adminAiProfilesExportBtn" class="table-btn" disabled>Export all matching profiles</button>
+                        </div>
+                        <div id="adminAiCoverage" class="ai-coverage-note" aria-live="polite">Historical coverage has not been checked.</div>
+                        <form id="adminAiProfilesForm" class="ai-profile-search">
+                            <label class="finance-field" for="adminAiProfilesSearch"><span>Find a profile</span>
+                                <input id="adminAiProfilesSearch" type="search" placeholder="Name or email" autocomplete="off">
+                            </label>
+                            <button type="submit" id="adminAiProfilesApplyBtn" class="table-btn primary">Search</button>
+                            <button type="button" id="adminAiProfilesResetBtn" class="table-btn">Clear</button>
+                        </form>
+                        <div class="table-wrap ai-profiles-table-wrap">
+                            <table class="users-table ai-profiles-table">
+                                <caption class="ai-table-caption">Selected dates and lifetime recorded usage are separate. Profile billed cost stays 0 until an actual profile-level charge is available; Google project totals are not allocated to profiles.</caption>
+                                <thead>
+                                    <tr><th scope="col">Profile</th><th scope="col">Selected range<br><span>Recorded tokens</span></th><th scope="col">Selected range<br><span>Billed USD</span></th><th scope="col">Lifetime recorded<br><span>Tokens</span></th><th scope="col">Lifetime recorded<br><span>Billed USD</span></th><th scope="col">Coverage</th></tr>
+                                </thead>
+                                <tbody id="adminAiProfilesTableBody"><tr><td colspan="6" class="table-empty">Profile usage has not been loaded.</td></tr></tbody>
+                            </table>
+                        </div>
+                        <div class="ai-profiles-pagination">
+                            <p id="adminAiProfilesSummary" aria-live="polite">No profile data loaded.</p>
+                            <div><button type="button" id="adminAiProfilesPrevBtn" class="table-btn" disabled>Previous</button><span id="adminAiProfilesPageInfo">Page 1</span><button type="button" id="adminAiProfilesNextBtn" class="table-btn" disabled>Next</button></div>
+                        </div>
+                        <section id="adminAiProfileDetail" class="ai-profile-detail" aria-labelledby="adminAiProfileDetailTitle" hidden>
+                            <div class="ai-accounting-head"><div><h4 id="adminAiProfileDetailTitle" tabindex="-1">Profile usage</h4><p id="adminAiProfileDetailSubtitle"></p></div><button type="button" id="adminAiProfileCloseBtn" class="table-btn">Close breakdown</button></div>
+                            <div id="adminAiProfileDetailBody" aria-live="polite"></div>
+                        </section>
+                    </section>
+
+                    <p class="ai-fixed-caption">All recorded AI activity · Selected range · Missing counters display 0; coverage warnings identify gaps.</p>
                     <div class="metrics-grid finance-metrics-grid ai-range-metrics">
-                        <article class="metric-card ai-range-metric">
-                            <span>Spent in range (est.)</span>
-                            <strong id="adminAiRangeCost">$0.00</strong>
-                            <div id="adminAiRangeSub" class="metric-subtext">0 calls · 0 tokens</div>
-                        </article>
-                        <article class="metric-card ai-range-metric">
-                            <span>Average per day</span>
-                            <strong id="adminAiRangeAvg">$0.00</strong>
-                            <div id="adminAiRangeAvgSub" class="metric-subtext">0 of 0 days had activity</div>
-                        </article>
-                        <article class="metric-card ai-range-metric">
-                            <span>Busiest day</span>
-                            <strong id="adminAiRangeTopDay">—</strong>
-                            <div id="adminAiRangeTopDaySub" class="metric-subtext">No usage in this range</div>
-                        </article>
-                        <article class="metric-card ai-range-metric">
-                            <span>Cache savings (est.)</span>
-                            <strong id="adminAiRangeSaved">$0.00</strong>
-                            <div id="adminAiRangeSavedSub" class="metric-subtext">0% of input tokens cached</div>
-                        </article>
-                        <article class="metric-card ai-range-metric">
-                            <span>Search grounding (est.)</span>
-                            <strong id="adminAiRangeSearch">$0.00</strong>
-                            <div id="adminAiRangeSearchSub" class="metric-subtext">0 search requests</div>
-                        </article>
+                        <article class="metric-card ai-range-metric"><span>Recorded tokens</span><strong id="adminAiRangeCost">0</strong><div id="adminAiRangeSub" class="metric-subtext">0 calls · 0 tokens</div></article>
+                        <article class="metric-card ai-range-metric"><span>Recorded calls</span><strong id="adminAiRangeAvg">0</strong><div id="adminAiRangeAvgSub" class="metric-subtext">0 days with recorded activity</div></article>
+                        <article class="metric-card ai-range-metric"><span>Most tokens in a day</span><strong id="adminAiRangeTopDay">0</strong><div id="adminAiRangeTopDaySub" class="metric-subtext">No recorded tokens</div></article>
+                        <article class="metric-card ai-range-metric"><span>Recorded cached tokens</span><strong id="adminAiRangeSaved">0</strong><div id="adminAiRangeSavedSub" class="metric-subtext">Subset of input tokens</div></article>
+                        <article class="metric-card ai-range-metric"><span>Recorded search requests</span><strong id="adminAiRangeSearch">0</strong><div id="adminAiRangeSearchSub" class="metric-subtext">Provider search counter</div></article>
                     </div>
-
-                    <p class="ai-fixed-caption">Fixed windows below are not affected by the filter.</p>
-
+                    <p class="ai-fixed-caption">Recorded tokens in fixed windows · These windows do not follow the date filter.</p>
                     <div class="metrics-grid finance-metrics-grid">
-                        <article class="metric-card">
-                            <span>Today (est.)</span>
-                            <strong id="adminAiTodayCost">$0.00</strong>
-                            <div id="adminAiTodaySub" class="metric-subtext">0 calls · 0 tokens</div>
-                        </article>
-                        <article class="metric-card">
-                            <span>Last 7 Days (est.)</span>
-                            <strong id="adminAi7Cost">$0.00</strong>
-                            <div id="adminAi7Sub" class="metric-subtext">0 calls · 0 tokens</div>
-                        </article>
-                        <article class="metric-card">
-                            <span>This Month (est.)</span>
-                            <strong id="adminAiMonthCost">$0.00</strong>
-                            <div id="adminAiMonthSub" class="metric-subtext">0 calls · 0 tokens</div>
-                        </article>
-                        <article class="metric-card">
-                            <span>All Time (est.)</span>
-                            <strong id="adminAiAllCost">$0.00</strong>
-                            <div id="adminAiAllSub" class="metric-subtext">0 calls · 0 tokens</div>
-                        </article>
+                        <article class="metric-card"><span>Today · Tokens</span><strong id="adminAiTodayCost">0</strong><div id="adminAiTodaySub" class="metric-subtext">0 calls · 0 tokens</div></article>
+                        <article class="metric-card"><span>Last 7 days · Tokens</span><strong id="adminAi7Cost">0</strong><div id="adminAi7Sub" class="metric-subtext">0 calls · 0 tokens</div></article>
+                        <article class="metric-card"><span>This month · Tokens</span><strong id="adminAiMonthCost">0</strong><div id="adminAiMonthSub" class="metric-subtext">0 calls · 0 tokens</div></article>
+                        <article class="metric-card"><span>Lifetime recorded · Tokens</span><strong id="adminAiAllCost">0</strong><div id="adminAiAllSub" class="metric-subtext">0 calls · 0 tokens</div></article>
                     </div>
 
                     <div class="finance-grid">
                         <section class="finance-chart-card">
                             <div class="finance-card-header">
                                 <div>
-                                    <h3 id="adminAiTimelineTitle">Daily AI Cost</h3>
-                                    <p id="adminAiTimelineSub">Estimated USD spent per day.</p>
+                                    <h3 id="adminAiTimelineTitle">Daily recorded tokens</h3>
+                                    <p id="adminAiTimelineSub">Recorded provider tokens per day.</p>
                                 </div>
                             </div>
                             <div id="adminAiTimelineChart" class="finance-timeline-chart ai-chart"
-                                 role="img" aria-label="Estimated AI cost per period">
+                                 role="img" aria-label="Recorded tokens per period">
                                 <div class="table-empty">No AI usage recorded yet.</div>
                             </div>
                         </section>
@@ -517,8 +537,8 @@
                         <section class="finance-chart-card">
                             <div class="finance-card-header">
                                 <div>
-                                    <h3>Cost by Feature</h3>
-                                    <p id="adminAiSourceSub">Which features drive AI processing spend.</p>
+                                    <h3>Usage by Feature</h3>
+                                    <p id="adminAiSourceSub">Recorded calls, tokens and voice characters by feature.</p>
                                 </div>
                                 <button type="button" class="table-btn ai-export-btn" data-ai-export="sources">⬇ CSV</button>
                             </div>
@@ -530,8 +550,8 @@
                         <section class="finance-chart-card finance-contributor-card">
                             <div class="finance-card-header">
                                 <div>
-                                    <h3>Cost by Model</h3>
-                                    <p id="adminAiModelSub">Spend across configured AI model tiers.</p>
+                                    <h3>Usage by Model</h3>
+                                    <p id="adminAiModelSub">Recorded usage by provider model identifier.</p>
                                 </div>
                                 <button type="button" class="table-btn ai-export-btn" data-ai-export="models">⬇ CSV</button>
                             </div>
@@ -543,7 +563,7 @@
 
                     <div class="finance-ledger-head">
                         <div>
-                            <h3>Spend by date</h3>
+                            <h3>Usage by date</h3>
                             <p id="adminAiDailyCaption">Every day in the selected range, newest first.</p>
                         </div>
                         <div class="finance-ledger-actions">
@@ -563,8 +583,8 @@
                                     <th>Date (UTC)</th>
                                     <th>Calls</th>
                                     <th>Tokens</th>
-                                    <th>Est. cost (USD)</th>
-                                    <th>Share of range</th>
+                                    <th>TTS characters</th>
+                                    <th>Share of recorded tokens</th>
                                 </tr>
                             </thead>
                             <tbody id="adminAiDailyTableBody">
@@ -577,118 +597,21 @@
                                     <th>Total</th>
                                     <th id="adminAiDailyTotalCalls">0</th>
                                     <th id="adminAiDailyTotalTokens">0</th>
-                                    <th id="adminAiDailyTotalCost">$0.00</th>
-                                    <th>100%</th>
+                                    <th id="adminAiDailyTotalCost">0</th>
+                                    <th id="adminAiDailyTotalShare">0%</th>
                                 </tr>
                             </tfoot>
                         </table>
                     </div>
 
-                    <div class="finance-hero" style="margin-top:28px;">
-                        <div>
-                            <span class="finance-eyebrow">Plans · Rilono Credits</span>
-                            <h2>Enterprise Revenue Model</h2>
-                            <p>Monthly plan subscriptions (net of GST) + credit top-ups, measured against the
-                               real AI processing cost from the tracker above. Margins are estimated — cross-check the
-                               provider invoice and FX rate. The infrastructure fee was retired on 2 Aug 2026 and
-                               only appears here for accounts that paid it historically.</p>
-                        </div>
-                        <div class="finance-hero-stat">
-                            <span>Gross Margin</span>
-                            <strong id="adminRevMarginHero">₹0</strong>
-                        </div>
-                    </div>
-
-                    <div class="metrics-grid finance-metrics-grid">
-                        <article class="metric-card">
-                            <span>Total Revenue</span>
-                            <strong id="adminRevTotal">₹0</strong>
-                            <div id="adminRevTotalSub" class="metric-subtext">Plans + credits</div>
-                        </article>
-                        <article class="metric-card">
-                            <span>Plan Subscriptions</span>
-                            <strong id="adminRevPlans">₹0</strong>
-                            <div id="adminRevPlansSub" class="metric-subtext">0 payments</div>
-                        </article>
-                        <article class="metric-card">
-                            <span>Credit Top-ups</span>
-                            <strong id="adminRevCredits">₹0</strong>
-                            <div id="adminRevCreditsSub" class="metric-subtext">0 payments</div>
-                        </article>
-                        <article class="metric-card">
-                            <span>Infrastructure Fees <em>(retired)</em></span>
-                            <strong id="adminRevInfra">₹0</strong>
-                            <div id="adminRevInfraSub" class="metric-subtext">0 payments</div>
-                        </article>
-                        <article class="metric-card">
-                            <span>AI Cost (est.)</span>
-                            <strong id="adminRevCost">₹0</strong>
-                            <div id="adminRevCostSub" class="metric-subtext">Real model cost</div>
-                        </article>
-                    </div>
-
-                    <div class="metrics-grid finance-metrics-grid">
-                        <article class="metric-card">
-                            <span>Gross Margin</span>
-                            <strong id="adminRevMargin">₹0</strong>
-                            <div id="adminRevMarginSub" class="metric-subtext">Revenue − AI cost</div>
-                        </article>
-                        <article class="metric-card">
-                            <span>Credits Sold</span>
-                            <strong id="adminRevCreditsSold">0</strong>
-                            <div id="adminRevCreditsSoldSub" class="metric-subtext">0 spent</div>
-                        </article>
-                        <article class="metric-card">
-                            <span>Outstanding Credits</span>
-                            <strong id="adminRevOutstanding">0</strong>
-                            <div id="adminRevOutstandingSub" class="metric-subtext">Deferred liability</div>
-                        </article>
-                        <article class="metric-card">
-                            <span>FX Rate</span>
-                            <strong id="adminRevFx">$1 = ₹0</strong>
-                            <div class="metric-subtext" id="adminRevFxNote">USD → INR</div>
-                        </article>
-                    </div>
-
-                    <div class="finance-grid">
-                        <section class="finance-chart-card" style="grid-column:1 / -1;">
-                            <div class="finance-card-header">
-                                <div>
-                                    <h3>Per-Action Economics</h3>
-                                    <p>What each premium AI action earns versus its processing cost.</p>
-                                </div>
-                            </div>
-                            <div class="table-wrap">
-                                <table class="admin-table">
-                                    <thead>
-                                        <tr>
-                                            <th>Action</th>
-                                            <th>Price</th>
-                                            <th>Units</th>
-                                            <th>Revenue</th>
-                                            <th>Real cost / unit</th>
-                                            <th>Margin</th>
-                                        </tr>
-                                    </thead>
-                                    <tbody id="adminRevActionsBody">
-                                        <tr><td colspan="6" class="table-empty">No premium AI actions billed yet.</td></tr>
-                                    </tbody>
-                                </table>
-                            </div>
-                        </section>
-                    </div>
-
+                    <section id="adminB2cRevenuePanel">
                     <div class="finance-hero" style="margin-top:28px;">
                         <div>
                             <span class="finance-eyebrow">Visa Success Pass · B2C</span>
                             <h2>B2C Revenue Model</h2>
-                            <p>One-time ₹999 / 30-day pass revenue versus the real AI cost to serve a student.
-                               Free-funnel adoption is shown below.</p>
+                            <p>Recorded pass revenue and conversion. B2C billed AI cost remains 0 until Google charges can be attributed to this product. Margins are not calculated without that cost.</p>
                         </div>
-                        <div class="finance-hero-stat">
-                            <span>Gross Margin</span>
-                            <strong id="adminB2cMarginHero">₹0</strong>
-                        </div>
+
                     </div>
                     <div class="metrics-grid finance-metrics-grid">
                         <article class="metric-card">
@@ -702,51 +625,18 @@
                             <div id="adminB2cActiveSub" class="metric-subtext">currently valid</div>
                         </article>
                         <article class="metric-card">
-                            <span>AI Cost (est.)</span>
+                            <span>Attributed billed AI cost</span>
                             <strong id="adminB2cCost">₹0</strong>
-                            <div id="adminB2cCostSub" class="metric-subtext">₹0 / pass</div>
+                            <div id="adminB2cCostSub" class="metric-subtext">No B2C-level billed cost</div>
                         </article>
                         <article class="metric-card">
                             <span>Free → Pass Conversion</span>
-                            <strong id="adminB2cConversion">—</strong>
+                            <strong id="adminB2cConversion">0%</strong>
                             <div id="adminB2cConversionSub" class="metric-subtext">0 free users</div>
                         </article>
                     </div>
+                    </section>
 
-                    <div class="finance-hero" style="margin-top:28px;">
-                        <div>
-                            <span class="finance-eyebrow">AI Cost Optimization · Part 3</span>
-                            <h2>Tokens Saved</h2>
-                            <p>Off-topic free-tool prompts blocked before hitting the model, plus context-cache
-                               reuse on large documents. Estimated savings are highest on advanced model tiers.</p>
-                        </div>
-                        <div class="finance-hero-stat">
-                            <span>Est. Cost Saved</span>
-                            <strong id="adminOptSavedHero">$0.00</strong>
-                        </div>
-                    </div>
-                    <div class="metrics-grid finance-metrics-grid">
-                        <article class="metric-card">
-                            <span>Off-topic Blocked</span>
-                            <strong id="adminOptBlocks">0</strong>
-                            <div id="adminOptBlocksSub" class="metric-subtext">0 tokens saved</div>
-                        </article>
-                        <article class="metric-card">
-                            <span>Context-cache Hits</span>
-                            <strong id="adminOptCacheHits">0</strong>
-                            <div id="adminOptCacheHitsSub" class="metric-subtext">0% hit rate</div>
-                        </article>
-                        <article class="metric-card">
-                            <span>Tokens Saved</span>
-                            <strong id="adminOptTokens">0</strong>
-                            <div class="metric-subtext">guardrail + cache</div>
-                        </article>
-                        <article class="metric-card">
-                            <span>Est. Cost Saved</span>
-                            <strong id="adminOptSaved">$0.00</strong>
-                            <div class="metric-subtext">vs serving every prompt</div>
-                        </article>
-                    </div>
                 </section>
             </section>
         </main>
@@ -834,7 +724,7 @@
         </div>
     </div>
 
-    <script src="/static/admin_console.js?v=20260801d"></script>
+    <script src="/static/admin_console.js?v=20260906a"></script>
 </body>
 
 </html>

@@ -61,14 +61,14 @@ class GeminiCloudConsumerTests(unittest.TestCase):
         response = SimpleNamespace(text='{"courses": []}')
         generate = Mock(return_value=response)
         factory = Mock(return_value=SimpleNamespace(models=SimpleNamespace(generate_content=generate)))
-        meter = Mock()
+        meter = Mock(side_effect=lambda source, model, call, **kwargs: call())
         self.patch(gemini_service, "is_ai_configured", lambda: True)
         self.patch(gemini_service, "GEMINI_API_KEY", "")
         self.patch(gemini_service, "get_genai_client", factory, raising=False)
         self.patch(course_catalog, "GROUNDING_ENABLED", True)
         self.patch(course_catalog, "_extract_grounding_urls", lambda response: ["https://example.edu"])
         self.patch(course_catalog, "_extract_grounding_domains", lambda response: ["example.edu"])
-        self.patch(ai_usage, "record_gemini_usage", meter)
+        self.patch(ai_usage, "tracked_gemini_call", meter)
 
         result = course_catalog._grounded_generate("original prompt", ["original-model"], "catalog-test")
 
@@ -79,7 +79,10 @@ class GeminiCloudConsumerTests(unittest.TestCase):
         assert kwargs["contents"] == "original prompt"
         assert kwargs["config"].temperature == 0.3
         assert kwargs["config"].tools[0].google_search is not None
-        meter.assert_called_once_with("catalog-test", "original-model", response, status="ok")
+        meter.assert_called_once()
+        assert meter.call_args.args[:2] == ("catalog-test", "original-model")
+        assert meter.call_args.kwargs == {"product": "shared", "trigger": "automation"}
+        assert kwargs["config"].automatic_function_calling.disable is True
 
 
     def test_daily_notifier_uses_shared_cloud_model(self):

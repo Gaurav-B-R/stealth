@@ -123,14 +123,13 @@ FEATURES = {
     },
 }
 
-# Gemini cost-tracker sources that are EXCLUSIVELY B2C-student features (used for the
-# aggregate cost estimate). `document_ai` is shared with enterprise, so it's excluded
-# here and instead attributed precisely per-account via user_id (see account report).
-# (Dropped phantom sources `ds160_autofill` [no Gemini] and `student_voice_interview`
-#  [never recorded — voice runs through the chat endpoint as student_ai_chat].)
-# `student_ai_chat_copilot` is the Chrome-extension Copilot chat (split out of
-# student_ai_chat so the admin AI-cost view can show extension spend separately).
-B2C_COST_SOURCES = ["student_ai_chat", "student_ai_chat_copilot", "red_flag_scan", "university_shortlist", "course_finder"]
+# Unambiguous B2C sources for legacy classification. New events use explicit
+# product attribution, including documents. Ambiguous historical shared sources
+# stay unclassified until supported attribution evidence is available.
+B2C_COST_SOURCES = ["student_ai_chat", "student_ai_chat_copilot", "student_mock_interview",
+                    "student_interview_report", "student_visa_prep", "red_flag_scan",
+                    "university_shortlist", "course_finder", "sop_generator",
+                    "daily_ai_notifier", "growth_agent_single", "mock_interview_tts"]
 
 
 # ---------------------------------------------------------------------------
@@ -420,10 +419,11 @@ def grant_pass(db: Session, user_id: int, *, commit: bool = True) -> models.Subs
 # ---------------------------------------------------------------------------
 
 def _b2c_gemini_cost_usd(db: Session) -> tuple[float, dict]:
+    from app.ai_cost_reporting import b2c_filter
     E = models.GeminiUsageEvent
     rows = (
         db.query(E.source, func.coalesce(func.sum(E.estimated_cost_usd), 0), func.count(E.id))
-        .filter(E.source.in_(B2C_COST_SOURCES))
+        .filter(b2c_filter())
         .group_by(E.source)
         .all()
     )
@@ -544,8 +544,9 @@ def build_revenue_analytics(db: Session) -> dict:
         "free_feature_usage": free_feature_usage,
         "cost_by_source": by_source_payload,
         "pricing_note": (
-            "Revenue is verified one-time Visa Pass payments. Gemini cost is estimated from per-token "
-            "pricing (app.ai_usage), B2C sources only, converted at USD_TO_INR — cross-check the GCP invoice."
+            "Revenue is verified one-time Visa Pass payments. AI cost contains available B2C estimates "
+            "converted to INR. Shared, unclassified and unavailable costs are not allocated to passes; "
+            "review AI Costs coverage and Google billing before treating this as a final margin."
         ),
     }
 
@@ -558,9 +559,10 @@ def build_account_cost_profit(db: Session, *, limit: int = 100) -> dict:
     P = models.SubscriptionPayment
     U = models.User
 
+    from app.ai_cost_reporting import b2c_filter
     cost_rows = (
         db.query(E.user_id, func.coalesce(func.sum(E.estimated_cost_usd), 0), func.count(E.id))
-        .filter(E.user_id.isnot(None))
+        .filter(E.user_id.isnot(None), b2c_filter())
         .group_by(E.user_id)
         .all()
     )
@@ -638,10 +640,11 @@ def build_account_cost_profit(db: Session, *, limit: int = 100) -> dict:
 
 
 def _b2c_unattributed_cost_paise(db: Session) -> int:
+    from app.ai_cost_reporting import b2c_filter
     E = models.GeminiUsageEvent
     usd = float(
         db.query(func.coalesce(func.sum(E.estimated_cost_usd), 0))
-        .filter(E.user_id.is_(None), E.organization_id.is_(None))
+        .filter(E.user_id.is_(None), b2c_filter())
         .scalar() or 0
     )
     return usd_to_inr_paise(usd)

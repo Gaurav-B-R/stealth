@@ -18,6 +18,7 @@ const state = {
     page: 1,
     pageSize: ADMIN_PAGE_SIZE,
     loading: false,
+    usersExportFormat: null,
     filters: {
         search: '',
         plan: 'all',
@@ -42,6 +43,11 @@ const state = {
     // AI Costs date filter. start/end are inclusive YYYY-MM-DD (UTC); null = server default.
     aiRange: { preset: '30d', start: null, end: null },
     aiUsageData: null,
+    aiUsageRequestId: 0,
+    aiProfiles: { page: 1, pageSize: 25, total: 0, search: '', loading: false, exporting: false, requestId: 0, data: null },
+    aiProfileId: null,
+    aiProfileRequestId: 0,
+    aiBilling: { data: null, loading: false, syncing: false, requestId: 0 },
     aiSeries: [],
     aiGranularity: 'day',
     aiChartResizeBound: false,
@@ -83,6 +89,9 @@ const refs = {
     applyBtn: document.getElementById('adminApplyBtn'),
     tableBody: document.getElementById('adminUsersTableBody'),
     usersSummary: document.getElementById('adminUsersSummary'),
+    usersExportActions: document.getElementById('adminUsersExportActions'),
+    usersExportCsvBtn: document.getElementById('adminUsersExportCsvBtn'),
+    usersExportExcelBtn: document.getElementById('adminUsersExportExcelBtn'),
     prevBtn: document.getElementById('adminUsersPrevBtn'),
     nextBtn: document.getElementById('adminUsersNextBtn'),
     pageInfo: document.getElementById('adminUsersPageInfo'),
@@ -182,26 +191,26 @@ const refs = {
     aiDailyTotalCalls: document.getElementById('adminAiDailyTotalCalls'),
     aiDailyTotalTokens: document.getElementById('adminAiDailyTotalTokens'),
     aiDailyTotalCost: document.getElementById('adminAiDailyTotalCost'),
-    revMarginHero: document.getElementById('adminRevMarginHero'),
-    revTotal: document.getElementById('adminRevTotal'),
-    revTotalSub: document.getElementById('adminRevTotalSub'),
-    revPlans: document.getElementById('adminRevPlans'),
-    revPlansSub: document.getElementById('adminRevPlansSub'),
-    revCredits: document.getElementById('adminRevCredits'),
-    revCreditsSub: document.getElementById('adminRevCreditsSub'),
-    revInfra: document.getElementById('adminRevInfra'),
-    revInfraSub: document.getElementById('adminRevInfraSub'),
-    revCost: document.getElementById('adminRevCost'),
-    revMargin: document.getElementById('adminRevMargin'),
-    revMarginSub: document.getElementById('adminRevMarginSub'),
-    revCreditsSold: document.getElementById('adminRevCreditsSold'),
-    revCreditsSoldSub: document.getElementById('adminRevCreditsSoldSub'),
-    revOutstanding: document.getElementById('adminRevOutstanding'),
-    revOutstandingSub: document.getElementById('adminRevOutstandingSub'),
-    revFx: document.getElementById('adminRevFx'),
-    revFxNote: document.getElementById('adminRevFxNote'),
-    revActionsBody: document.getElementById('adminRevActionsBody'),
-    b2cMarginHero: document.getElementById('adminB2cMarginHero'),
+    aiDailyTotalShare: document.getElementById('adminAiDailyTotalShare'),
+    aiProfilesForm: document.getElementById('adminAiProfilesForm'),
+    aiProfilesSearch: document.getElementById('adminAiProfilesSearch'),
+    aiProfilesApplyBtn: document.getElementById('adminAiProfilesApplyBtn'),
+    aiProfilesResetBtn: document.getElementById('adminAiProfilesResetBtn'),
+    aiProfilesExportBtn: document.getElementById('adminAiProfilesExportBtn'),
+    aiProfilesTableBody: document.getElementById('adminAiProfilesTableBody'),
+    aiProfilesSummary: document.getElementById('adminAiProfilesSummary'),
+    aiProfilesPrevBtn: document.getElementById('adminAiProfilesPrevBtn'),
+    aiProfilesNextBtn: document.getElementById('adminAiProfilesNextBtn'),
+    aiProfilesPageInfo: document.getElementById('adminAiProfilesPageInfo'),
+    aiCoverage: document.getElementById('adminAiCoverage'),
+    aiProfileDetail: document.getElementById('adminAiProfileDetail'),
+    aiProfileDetailTitle: document.getElementById('adminAiProfileDetailTitle'),
+    aiProfileDetailSubtitle: document.getElementById('adminAiProfileDetailSubtitle'),
+    aiProfileDetailBody: document.getElementById('adminAiProfileDetailBody'),
+    aiProfileCloseBtn: document.getElementById('adminAiProfileCloseBtn'),
+    aiReconciliation: document.getElementById('adminAiReconciliation'),
+    aiBillingSyncBtn: document.getElementById('adminAiBillingSyncBtn'),
+    b2cRevenuePanel: document.getElementById('adminB2cRevenuePanel'),
     b2cRevenue: document.getElementById('adminB2cRevenue'),
     b2cRevenueSub: document.getElementById('adminB2cRevenueSub'),
     b2cActive: document.getElementById('adminB2cActive'),
@@ -209,13 +218,7 @@ const refs = {
     b2cCostSub: document.getElementById('adminB2cCostSub'),
     b2cConversion: document.getElementById('adminB2cConversion'),
     b2cConversionSub: document.getElementById('adminB2cConversionSub'),
-    optSavedHero: document.getElementById('adminOptSavedHero'),
-    optBlocks: document.getElementById('adminOptBlocks'),
-    optBlocksSub: document.getElementById('adminOptBlocksSub'),
-    optCacheHits: document.getElementById('adminOptCacheHits'),
-    optCacheHitsSub: document.getElementById('adminOptCacheHitsSub'),
-    optTokens: document.getElementById('adminOptTokens'),
-    optSaved: document.getElementById('adminOptSaved')
+
 };
 
 document.addEventListener('DOMContentLoaded', () => {
@@ -244,6 +247,8 @@ function bindEvents() {
     refs.aiTabBtn?.addEventListener('click', () => handleTabSwitch('ai'));
     refs.usersForm?.addEventListener('submit', handleUserFiltersSubmit);
     refs.usersResetBtn?.addEventListener('click', resetUserFilters);
+    refs.usersExportCsvBtn?.addEventListener('click', () => exportUsers('csv'));
+    refs.usersExportExcelBtn?.addEventListener('click', () => exportUsers('xlsx'));
     refs.prevBtn?.addEventListener('click', () => changePage(-1));
     refs.nextBtn?.addEventListener('click', () => changePage(1));
     refs.tableBody?.addEventListener('click', handleTableActionClick);
@@ -273,6 +278,25 @@ function bindEvents() {
     refs.aiRangeReset?.addEventListener('click', resetAiRange);
     refs.aiHideEmptyDays?.addEventListener('change', renderAiDailyTable);
     refs.aiTabPanel?.addEventListener('click', handleAiExportClick);
+    refs.aiProfilesForm?.addEventListener('submit', (event) => {
+        event.preventDefault();
+        state.aiProfiles.search = (refs.aiProfilesSearch?.value || '').trim();
+        void loadAiProfiles({ resetPage: true });
+    });
+    refs.aiProfilesResetBtn?.addEventListener('click', () => {
+        if (refs.aiProfilesSearch) refs.aiProfilesSearch.value = '';
+        state.aiProfiles.search = '';
+        void loadAiProfiles({ resetPage: true });
+    });
+    refs.aiProfilesPrevBtn?.addEventListener('click', () => changeAiProfilesPage(-1));
+    refs.aiProfilesNextBtn?.addEventListener('click', () => changeAiProfilesPage(1));
+    refs.aiProfilesExportBtn?.addEventListener('click', exportAiProfiles);
+    refs.aiProfilesTableBody?.addEventListener('click', (event) => {
+        const button = event.target.closest('[data-ai-profile-id]');
+        if (button) void loadAiProfileDetail(button.dataset.aiProfileId);
+    });
+    refs.aiProfileCloseBtn?.addEventListener('click', closeAiProfileDetail);
+    refs.aiBillingSyncBtn?.addEventListener('click', syncAiBilling);
     initAiRangeInputs();
     document.addEventListener('keydown', (event) => {
         if (event.key === 'Escape' && refs.couponModal && !refs.couponModal.hidden) closeCouponModal();
@@ -520,7 +544,8 @@ function updateSessionBadge() {
 function escapeHtml(value) {
     const div = document.createElement('div');
     div.textContent = String(value || '');
-    return div.innerHTML;
+    // These strings are used in both text nodes and quoted data attributes.
+    return div.innerHTML.replace(/"/g, '&quot;').replace(/'/g, '&#39;');
 }
 
 function normalizeErrorMessage(payload, fallbackMessage) {
@@ -1548,6 +1573,70 @@ function renderPagination() {
     if (refs.prevBtn) refs.prevBtn.disabled = state.loading || state.page <= 1;
     if (refs.nextBtn) refs.nextBtn.disabled = state.loading || state.page >= totalPages;
     if (refs.applyBtn) refs.applyBtn.disabled = state.loading;
+    renderUsersExportControls();
+}
+
+function renderUsersExportControls() {
+    const exporting = Boolean(state.usersExportFormat);
+    const disabled = state.loading || exporting || state.total <= 0;
+    if (refs.usersExportActions) refs.usersExportActions.setAttribute('aria-busy', String(exporting));
+    if (refs.usersExportCsvBtn) {
+        refs.usersExportCsvBtn.disabled = disabled;
+        refs.usersExportCsvBtn.textContent = state.usersExportFormat === 'csv' ? 'Preparing CSV…' : 'Export CSV';
+    }
+    if (refs.usersExportExcelBtn) {
+        refs.usersExportExcelBtn.disabled = disabled;
+        refs.usersExportExcelBtn.textContent = state.usersExportFormat === 'xlsx' ? 'Preparing Excel…' : 'Export Excel';
+    }
+}
+
+async function exportUsers(format) {
+    if (!['csv', 'xlsx'].includes(format) || state.loading || state.usersExportFormat || state.total <= 0) return;
+
+    // Export the filters used to load the table, including every matching page.
+    const filters = { ...state.filters };
+    state.usersExportFormat = format;
+    renderUsersExportControls();
+
+    try {
+        if (!await ensureAdminProtection({ silent: false })) return;
+
+        const params = new URLSearchParams({ format, plan: filters.plan, role: filters.role });
+        if (filters.search) params.set('search', filters.search);
+        const response = await fetch(`${API_BASE}/api/admin/users/export?${params.toString()}`, {
+            headers: buildAuthHeaders(),
+            credentials: 'same-origin'
+        });
+
+        if (!response.ok) {
+            const payload = await response.json().catch(() => ({}));
+            const message = normalizeErrorMessage(payload, 'Failed to export student accounts.');
+            await handleAdminAuthOrProtectionError(response.status, payload);
+            showFlash(message, 'error');
+            return;
+        }
+
+        const blob = await response.blob();
+        const filename = filenameFromDisposition(
+            response.headers.get('Content-Disposition'),
+            `rilono-student-accounts.${format}`
+        );
+        const url = URL.createObjectURL(blob);
+        const link = document.createElement('a');
+        link.href = url;
+        link.download = filename;
+        document.body.appendChild(link);
+        link.click();
+        link.remove();
+        setTimeout(() => URL.revokeObjectURL(url), 2000);
+        showFlash(`Downloaded ${filename}`, 'success');
+    } catch (error) {
+        console.error('Failed to export student accounts:', error);
+        showFlash('Could not export student accounts. Please retry.', 'error');
+    } finally {
+        state.usersExportFormat = null;
+        renderUsersExportControls();
+    }
 }
 
 function renderMetrics() {
@@ -1961,13 +2050,22 @@ function formatAiUsd(value) {
 }
 
 function formatTokens(value) {
-    const v = Number(value) || 0;
-    if (v >= 1e6) return (v / 1e6).toFixed(2) + 'M';
-    if (v >= 1e3) return (v / 1e3).toFixed(1) + 'k';
-    return String(v);
+    return aiExactCount(value);
 }
 
 function aiUsageEmptyState(message) {
+    state.aiUsageData = null;
+    state.aiSeries = [];
+    [refs.aiTodayCost, refs.ai7Cost, refs.aiMonthCost, refs.aiAllCost, refs.aiRangeCost,
+        refs.aiRangeAvg, refs.aiRangeTopDay, refs.aiRangeSaved, refs.aiRangeSearch,
+        refs.aiDailyTotalCalls, refs.aiDailyTotalTokens, refs.aiDailyTotalCost].forEach((el) => {
+        if (el) el.textContent = '0';
+    });
+    [refs.aiTodaySub, refs.ai7Sub, refs.aiMonthSub, refs.aiAllSub, refs.aiRangeSub,
+        refs.aiRangeAvgSub, refs.aiRangeTopDaySub, refs.aiRangeSavedSub, refs.aiRangeSearchSub].forEach((el) => {
+        if (el) el.textContent = 'Usage data not loaded';
+    });
+    if (refs.aiDailyTotalShare) refs.aiDailyTotalShare.textContent = '0%';
     const m = escapeHtml(message || 'No AI usage recorded yet.');
     [refs.aiTimelineChart, refs.aiSourceChart, refs.aiModelChart].forEach((el) => {
         if (el) el.innerHTML = `<div class="table-empty">${m}</div>`;
@@ -2077,6 +2175,8 @@ function resetAiRange() {
 }
 
 async function loadAiUsage(options = {}) {
+    const requestId = ++state.aiUsageRequestId;
+    invalidateAiAccounting();
     const chartsOnly = !!options.chartsOnly;   // a filter change shouldn't refetch revenue panels
     if (!state.currentUser) {
         const canAccess = await refreshCurrentAdminUser({ silent: true });
@@ -2096,29 +2196,34 @@ async function loadAiUsage(options = {}) {
             credentials: 'same-origin'
         });
         const payload = await response.json().catch(() => ({}));
+        if (requestId !== state.aiUsageRequestId) return;
         if (!response.ok) {
             const message = normalizeErrorMessage(payload, 'Failed to load AI usage.');
             aiUsageEmptyState(message);
+            aiAccountingUnavailable(message);
             await handleAdminAuthOrProtectionError(response.status, payload);
             showFlash(message, 'error');
             return;
         }
         renderAiUsage(payload);
         clearFlash();
+        await Promise.all([loadAiProfiles({ resetPage: true }), loadAiReconciliation()]);
     } catch (error) {
+        if (requestId !== state.aiUsageRequestId) return;
         console.error('Failed to load AI usage:', error);
         aiUsageEmptyState('Could not load AI usage. Please retry.');
+        aiAccountingUnavailable('Could not load AI usage. Apply the date range to retry.');
         showFlash('Could not load AI usage. Please retry.', 'error');
     } finally {
-        setAiRefreshing(false);
+        if (requestId === state.aiUsageRequestId) setAiRefreshing(false);
     }
+    if (requestId !== state.aiUsageRequestId) return;
     if (chartsOnly) return;
-    await loadEnterpriseRevenue();
     await loadB2cRevenue();
-    await loadOptimization();
 }
 
 async function loadB2cRevenue() {
+    if (refs.b2cRevenuePanel?.hidden) return;
     try {
         const response = await fetch(`${API_BASE}/api/admin/b2c/revenue`, { headers: buildAuthHeaders(), credentials: 'same-origin' });
         const payload = await response.json().catch(() => ({}));
@@ -2658,11 +2763,10 @@ async function runAccountReco(userId) {
 function renderB2cRevenue(data) {
     const s = (data && data.summary) || {};
     // This book is denominated in the currency the server reports (payments are booked at
-    // their INR settlement, then compared against Gemini cost in the same currency). The
+    // their INR settlement). The
     // zero fallbacks follow that currency instead of hardcoding a rupee sign.
     const bookCurrency = (data && data.currency) || 'INR';
     const setText = (el, v) => { if (el) el.textContent = v; };
-    setText(refs.b2cMarginHero, moneyOr(s.gross_margin_display, bookCurrency));
     setText(refs.b2cRevenue, moneyOr(s.revenue_display, bookCurrency));
     // build_revenue_analytics EXCLUDES foreign passes with no INR settlement figure rather
     // than adding their cents as paise, so revenue is a known understatement while any
@@ -2671,114 +2775,10 @@ function renderB2cRevenue(data) {
     setText(refs.b2cRevenueSub, `${(s.passes_sold || 0).toLocaleString()} passes sold`
         + (b2cUnsettled > 0 ? ` · ${b2cUnsettled} not counted (awaiting INR settlement)` : ''));
     setText(refs.b2cActive, (s.active_passes || 0).toLocaleString());
-    setText(refs.b2cCost, moneyOr(s.gemini_cost_display, bookCurrency));
-    setText(refs.b2cCostSub, `${moneyOr(s.avg_cost_per_pass_display, bookCurrency)} / pass`);
-    setText(refs.b2cConversion, s.conversion_pct != null ? `${s.conversion_pct}%` : '—');
+    setText(refs.b2cCost, moneyOr(null, bookCurrency));
+    setText(refs.b2cCostSub, 'No B2C-level billed cost');
+    setText(refs.b2cConversion, s.conversion_pct != null ? `${s.conversion_pct}%` : '0%');
     setText(refs.b2cConversionSub, `${(s.free_users || 0).toLocaleString()} free users`);
-}
-
-async function loadOptimization() {
-    try {
-        const response = await fetch(`${API_BASE}/api/admin/ai-optimization`, { headers: buildAuthHeaders(), credentials: 'same-origin' });
-        const payload = await response.json().catch(() => ({}));
-        if (!response.ok) { await handleAdminAuthOrProtectionError(response.status, payload); return; }
-        renderOptimization(payload);
-    } catch (error) { console.error('Failed to load AI optimization:', error); }
-}
-
-function renderOptimization(data) {
-    const g = (data && data.guardrail) || {};
-    const ch = (data && data.cache_hits) || {};
-    const t = (data && data.totals) || {};
-    const setText = (el, v) => { if (el) el.textContent = v; };
-    setText(refs.optSavedHero, formatAiUsd(t.cost_saved_usd));
-    setText(refs.optBlocks, (g.count || 0).toLocaleString());
-    setText(refs.optBlocksSub, `${formatTokens(g.tokens_saved)} tokens saved`);
-    setText(refs.optCacheHits, (ch.count || 0).toLocaleString());
-    setText(refs.optCacheHitsSub, data && data.cache_hit_rate_pct != null ? `${data.cache_hit_rate_pct}% hit rate` : '0% hit rate');
-    setText(refs.optTokens, formatTokens(t.tokens_saved));
-    setText(refs.optSaved, formatAiUsd(t.cost_saved_usd));
-}
-
-async function loadEnterpriseRevenue() {
-    try {
-        const response = await fetch(`${API_BASE}/api/admin/enterprise/revenue`, {
-            headers: buildAuthHeaders(),
-            credentials: 'same-origin'
-        });
-        const payload = await response.json().catch(() => ({}));
-        if (!response.ok) {
-            await handleAdminAuthOrProtectionError(response.status, payload);
-            return;
-        }
-        renderEnterpriseRevenue(payload);
-    } catch (error) {
-        console.error('Failed to load enterprise revenue:', error);
-    }
-}
-
-function fxNoteText(data) {
-    if (!data || data.fx_source !== 'live') return 'USD → INR · estimated (env fallback)';
-    var note = 'USD → INR · 🟢 live';
-    var ts = Number(data.fx_updated_at || 0);
-    if (ts > 0) {
-        var mins = Math.max(0, Math.round((Date.now() / 1000 - ts) / 60));
-        note += ' · updated ' + (mins < 60 ? mins + 'm' : Math.round(mins / 60) + 'h') + ' ago';
-    }
-    return note;
-}
-
-function renderEnterpriseRevenue(data) {
-    const s = (data && data.summary) || {};
-    // Credits are an INR-denominated unit of account and foreign payments are summed at
-    // their INR settlement, so this book is single-currency by construction — but read the
-    // currency off the payload rather than assuming it in fourteen separate string literals.
-    const bookCurrency = (data && data.currency) || 'INR';
-    const setText = (el, val) => { if (el) el.textContent = val; };
-    setText(refs.revMarginHero, moneyOr(s.gross_margin_display, bookCurrency));
-    setText(refs.revTotal, moneyOr(s.total_revenue_display, bookCurrency));
-    // _kind_money EXCLUDES foreign payments with no INR settlement figure rather than
-    // adding their cents as paise, so any non-zero count means this total is short.
-    const revUnsettled = Number(s.unsettled_payments || 0);
-    setText(refs.revTotalSub, ((s.refunds_paise || 0) > 0
-        ? `Net · ${moneyOr(s.gross_revenue_display, bookCurrency)} gross − ${moneyOr(s.refunds_display, bookCurrency)} refunds`
-        : 'Net of refunds · plans + credits, ex-GST')
-        + (revUnsettled > 0 ? ` · ${revUnsettled} not counted (awaiting INR settlement)` : ''));
-    // Plan revenue is reported NET of GST — the tax is collected for the government and
-    // is never ours. `plan_tax_display` is shown separately so the two are never conflated.
-    setText(refs.revPlans, moneyOr(s.plan_revenue_display, bookCurrency));
-    setText(refs.revPlansSub, `${(s.plan_payment_count || 0).toLocaleString()} payments`
-        + ((s.plan_tax_paise || 0) > 0 ? ` · ${moneyOr(s.plan_tax_display, bookCurrency)} GST collected` : ''));
-    setText(refs.revCredits, moneyOr(s.credit_revenue_display, bookCurrency));
-    setText(refs.revCreditsSub, `${(s.credit_payment_count || 0).toLocaleString()} payments`);
-    setText(refs.revInfra, moneyOr(s.infra_revenue_display, bookCurrency));
-    setText(refs.revInfraSub, `${(s.infra_payment_count || 0).toLocaleString()} payments`);
-    setText(refs.revCost, moneyOr(s.gemini_cost_display, bookCurrency));
-    setText(refs.revMargin, moneyOr(s.gross_margin_display, bookCurrency));
-    setText(refs.revMarginSub, s.margin_pct != null ? `${s.margin_pct}% margin` : 'Revenue − AI cost');
-    setText(refs.revCreditsSold, (s.credits_sold || 0).toLocaleString());
-    setText(refs.revCreditsSoldSub, `${(s.credits_spent || 0).toLocaleString()} spent`);
-    setText(refs.revOutstanding, (s.credits_outstanding || 0).toLocaleString());
-    setText(refs.revOutstandingSub, `Liability ${moneyOr(s.credits_outstanding_display, bookCurrency)}`);
-    if (refs.revFx) refs.revFx.textContent = `$1 = ₹${data && data.usd_to_inr != null ? data.usd_to_inr : 0}`;
-    if (refs.revFxNote) refs.revFxNote.textContent = fxNoteText(data);
-
-    if (refs.revActionsBody) {
-        const rows = Array.isArray(data && data.per_action) ? data.per_action : [];
-        if (!rows.length) {
-            refs.revActionsBody.innerHTML = '<tr><td colspan="6" class="table-empty">No premium AI actions billed yet.</td></tr>';
-        } else {
-            refs.revActionsBody.innerHTML = rows.map((r) => `
-                <tr>
-                    <td>${escapeHtml(r.label || r.key || '—')}</td>
-                    <td>${escapeHtml(r.price_display || '—')} <span class="metric-subtext">(${escapeHtml(String(r.price_credits || 0))} cr)</span></td>
-                    <td>${escapeHtml((r.units_sold || 0).toLocaleString())}</td>
-                    <td>${escapeHtml(moneyOr(r.revenue_display, bookCurrency))}</td>
-                    <td>${escapeHtml(moneyOr(r.avg_cost_per_unit_display, bookCurrency))}</td>
-                    <td><strong>${r.margin_pct != null ? escapeHtml(String(r.margin_pct)) + '%' : '—'}</strong></td>
-                </tr>`).join('');
-        }
-    }
 }
 
 function formatAiDate(iso) {
@@ -2796,89 +2796,404 @@ function aiRangeLabel(range) {
 
 function renderAiUsage(data) {
     state.aiUsageData = data || null;
-    const totals = (data && data.totals) || {};
-    const setMetric = (costEl, subEl, t) => {
-        const s = t || { cost_usd: 0, tokens: 0, calls: 0 };
-        if (costEl) costEl.textContent = formatAiUsd(s.cost_usd);
-        if (subEl) {
-            let sub = `${(s.calls || 0).toLocaleString()} calls · ${formatTokens(s.tokens)} tokens`;
-            if (s.cache_hit_pct) sub += ` · ${s.cache_hit_pct}% cached 🟢`;
-            subEl.textContent = sub;
-        }
+    const totals = data?.totals || {};
+    const setMetric = (numberEl, subEl, stats = {}) => {
+        if (numberEl) numberEl.textContent = formatTokens(stats.tokens);
+        if (subEl) subEl.textContent = aiActivitySummary(stats);
     };
     setMetric(refs.aiTodayCost, refs.aiTodaySub, totals.today);
     setMetric(refs.ai7Cost, refs.ai7Sub, totals.last_7_days);
     setMetric(refs.aiMonthCost, refs.aiMonthSub, totals.this_month);
     setMetric(refs.aiAllCost, refs.aiAllSub, totals.all_time);
-
-    // --- selected range -----------------------------------------------------
-    const range = (data && data.range) || null;
+    const range = data?.range || {};
     const label = aiRangeLabel(range);
-    if (range) {
-        // Keep the inputs and state in step with what the server actually applied
-        // (it clamps a future end date and swaps a reversed pair).
+    if (range.start && range.end) {
         state.aiRange.start = range.start;
         state.aiRange.end = range.end;
-        if (refs.aiRangeStart && refs.aiRangeStart.value !== range.start) refs.aiRangeStart.value = range.start;
-        if (refs.aiRangeEnd && refs.aiRangeEnd.value !== range.end) refs.aiRangeEnd.value = range.end;
+        if (refs.aiRangeStart) refs.aiRangeStart.value = range.start;
+        if (refs.aiRangeEnd) refs.aiRangeEnd.value = range.end;
     }
-    if (refs.aiRangeStart && data && data.earliest_event_date) refs.aiRangeStart.min = data.earliest_event_date;
-
+    if (refs.aiRangeStart && data?.earliest_event_date) refs.aiRangeStart.min = data.earliest_event_date;
     setMetric(refs.aiRangeCost, refs.aiRangeSub, range);
-    if (refs.aiMonthHero) refs.aiMonthHero.textContent = formatAiUsd((range || {}).cost_usd);
-    if (refs.aiHeroLabel) refs.aiHeroLabel.textContent = label ? `${label} (est.)` : 'Selected range (est.)';
-    if (refs.aiRangeCaption && range) {
-        refs.aiRangeCaption.textContent =
-            `Showing ${label} · ${range.days} day${range.days === 1 ? '' : 's'}. Everything below — totals, charts and the daily table — follows this range.`;
-    }
-    if (refs.aiRangeAvg) refs.aiRangeAvg.textContent = formatAiUsd((range || {}).avg_per_day_usd);
-    if (refs.aiRangeAvgSub && range) {
-        refs.aiRangeAvgSub.textContent = `${range.active_days} of ${range.days} day${range.days === 1 ? '' : 's'} had activity`;
-    }
-    if (refs.aiRangeTopDay) {
-        const top = range && range.top_day;
-        refs.aiRangeTopDay.textContent = top ? formatAiUsd(top.cost_usd) : '—';
-        if (refs.aiRangeTopDaySub) {
-            refs.aiRangeTopDaySub.textContent = top ? formatAiDate(top.date) : 'No usage in this range';
-        }
-    }
-    if (refs.aiRangeSaved) refs.aiRangeSaved.textContent = formatAiUsd((range || {}).cache_saved_usd);
-    if (refs.aiRangeSavedSub && range) {
-        refs.aiRangeSavedSub.textContent = `${range.cache_hit_pct || 0}% of input tokens served from cache`;
-    }
-    // Google Search grounding is a PER-REQUEST fee with its own free tier, so it moves
-    // independently of token spend — shown separately or it looks like a token spike.
-    if (refs.aiRangeSearch) refs.aiRangeSearch.textContent = formatAiUsd((range || {}).search_cost_usd);
-    if (refs.aiRangeSearchSub && range) {
-        const queries = Number(range.search_queries) || 0;
-        const total = Number(range.cost_usd) || 0;
-        const share = total > 0 ? Math.round((Number(range.search_cost_usd) || 0) / total * 100) : 0;
-        refs.aiRangeSearchSub.textContent = queries
-            ? `${queries.toLocaleString()} search request${queries === 1 ? '' : 's'} · ${share}% of spend`
-            : 'No grounded searches in this range';
-    }
-
-    const rangeSuffix = label ? ` · ${label}` : '';
-    const granularity = (range && range.granularity) || 'day';
-    const granularityWord = granularity === 'month' ? 'month' : (granularity === 'week' ? 'week' : 'day');
-    if (refs.aiTimelineTitle) {
-        refs.aiTimelineTitle.textContent = `AI Cost by ${granularityWord === 'day' ? 'Day' : (granularityWord === 'week' ? 'Week' : 'Month')}`;
-    }
-    if (refs.aiTimelineSub) refs.aiTimelineSub.textContent = `Estimated USD spent per ${granularityWord}${rangeSuffix}.`;
-    if (refs.aiSourceSub) refs.aiSourceSub.textContent = `Which features drive AI processing spend${rangeSuffix}.`;
-    if (refs.aiModelSub) refs.aiModelSub.textContent = `Spend across configured AI model tiers${rangeSuffix}.`;
-    if (refs.aiDailyCaption) refs.aiDailyCaption.textContent = `Every day in ${label || 'the selected range'}, newest first.`;
-
-    const series = Array.isArray(data && data.series) && data.series.length
-        ? data.series
-        : (Array.isArray(data && data.daily) ? data.daily : []);
-    state.aiSeries = series;
+    if (refs.aiRangeCaption) refs.aiRangeCaption.textContent = `Showing ${label || 'the selected range'} · ${aiExactCount(range.days)} days (UTC). Lifetime totals include all available records.`;
+    if (refs.aiRangeAvg) refs.aiRangeAvg.textContent = aiExactCount(range.calls);
+    if (refs.aiRangeAvgSub) refs.aiRangeAvgSub.textContent = `${aiExactCount(range.active_days)} of ${aiExactCount(range.days)} days with recorded activity`;
+    const top = (Array.isArray(data?.daily) ? data.daily : []).reduce((best, day) => Number(day.tokens) > Number(best?.tokens || 0) ? day : best, null);
+    if (refs.aiRangeTopDay) refs.aiRangeTopDay.textContent = formatTokens(top?.tokens);
+    if (refs.aiRangeTopDaySub) refs.aiRangeTopDaySub.textContent = top ? formatAiDate(top.date) : 'No recorded tokens';
+    if (refs.aiRangeSaved) refs.aiRangeSaved.textContent = formatTokens(range.cached_tokens);
+    if (refs.aiRangeSavedSub) refs.aiRangeSavedSub.textContent = 'Subset of recorded input tokens';
+    if (refs.aiRangeSearch) refs.aiRangeSearch.textContent = aiExactCount(range.search_queries);
+    if (refs.aiRangeSearchSub) refs.aiRangeSearchSub.textContent = 'Recorded provider search counter';
+    const granularity = range.granularity || 'day';
+    const word = granularity === 'month' ? 'month' : (granularity === 'week' ? 'week' : 'day');
+    if (refs.aiTimelineTitle) refs.aiTimelineTitle.textContent = `Recorded tokens by ${word}`;
+    if (refs.aiTimelineSub) refs.aiTimelineSub.textContent = `Recorded provider tokens per ${word} · ${label}. Voice characters are separate.`;
+    if (refs.aiSourceSub) refs.aiSourceSub.textContent = `Recorded usage by feature · ${label}.`;
+    if (refs.aiModelSub) refs.aiModelSub.textContent = `Recorded usage by provider model identifier · ${label}.`;
+    if (refs.aiDailyCaption) refs.aiDailyCaption.textContent = `Recorded usage in ${label || 'the selected range'}, newest first.`;
+    state.aiSeries = Array.isArray(data?.series) && data.series.length ? data.series : (Array.isArray(data?.daily) ? data.daily : []);
     state.aiGranularity = granularity;
     renderAiTimelineChart();
-
-    renderAiBreakdown(refs.aiSourceChart, (data && data.by_source) || [], (r) => r.label);
-    renderAiBreakdown(refs.aiModelChart, (data && data.by_model) || [], (_r, index) => `AI Model ${index + 1}`);
+    renderAiBreakdown(refs.aiSourceChart, data?.by_source || [], (row) => row.label);
+    renderAiBreakdown(refs.aiModelChart, data?.by_model || [], (row) => row.model || 'Unknown model');
     renderAiDailyTable();
+}
+
+// --- Profile accounting and Google billing ---------------------------------
+function aiAccountingParams(range = state.aiRange) {
+    const params = new URLSearchParams();
+    if (range.start) params.set('start', range.start);
+    if (range.end) params.set('end', range.end);
+    return params;
+}
+
+function aiExactCount(value) {
+    if (value === null || value === undefined || !Number.isFinite(Number(value))) return '0';
+    return Number(value).toLocaleString('en-US', { maximumFractionDigits: 0 });
+}
+
+function aiRecordedValue(stats, key) {
+    return aiExactCount(stats?.[key]);
+}
+
+function aiRecordedCost() {
+    // Google exports identify project charges, not individual application profiles.
+    return formatAiUsd(0);
+}
+
+function aiCoverageChips(stats) {
+    if (!stats || !Number(stats.calls)) return '<span class="ai-coverage-chip">No records</span>';
+    const chips = [];
+    [['unknown_calls', 'missing usage'], ['legacy_calls', 'legacy']].forEach(([key, label]) => {
+        if (Number(stats[key]) > 0) chips.push(`<span class="ai-coverage-chip warning">${escapeHtml(aiExactCount(stats[key]))} ${label}</span>`);
+    });
+    return chips.length ? chips.join('') : '<span class="ai-coverage-chip">Recorded usage</span>';
+}
+
+function closeAiProfileDetail() {
+    state.aiProfileId = null;
+    state.aiProfileRequestId += 1;
+    if (refs.aiProfileDetail) refs.aiProfileDetail.hidden = true;
+}
+
+function invalidateAiAccounting() {
+    state.aiProfiles.requestId += 1;
+    state.aiProfiles.loading = true;
+    state.aiProfiles.data = null;
+    state.aiProfiles.total = 0;
+    state.aiBilling.requestId += 1;
+    state.aiBilling.loading = true;
+    state.aiBilling.data = null;
+    closeAiProfileDetail();
+    if (refs.aiMonthHero) refs.aiMonthHero.textContent = '$0.00';
+    if (refs.aiHeroLabel) refs.aiHeroLabel.textContent = 'Billing not loaded for these dates';
+    if (refs.aiProfilesTableBody) refs.aiProfilesTableBody.innerHTML = '<tr><td colspan="6" class="table-empty">Loading profile usage…</td></tr>';
+    if (refs.aiCoverage) refs.aiCoverage.textContent = 'Checking available records and coverage…';
+    if (refs.aiReconciliation) refs.aiReconciliation.innerHTML = `${aiBillingMetrics()}<p class="ai-accounting-note">Loading imported billing…</p>`;
+    renderAiProfilesControls();
+    renderAiBillingControls();
+}
+
+function aiAccountingUnavailable(message) {
+    state.aiProfiles.loading = false;
+    state.aiBilling.loading = false;
+    if (refs.aiProfilesTableBody) refs.aiProfilesTableBody.innerHTML = `<tr><td colspan="6" class="table-empty">${escapeHtml(message)}</td></tr>`;
+    if (refs.aiCoverage) refs.aiCoverage.textContent = 'Coverage could not be checked.';
+    if (refs.aiReconciliation) refs.aiReconciliation.innerHTML = `${aiBillingMetrics()}<p class="ai-accounting-note">${escapeHtml(message)} No imported amount is available for this view.</p>`;
+    renderAiProfilesControls();
+    renderAiBillingControls();
+}
+
+function renderAiProfilesControls() {
+    const profiles = state.aiProfiles;
+    const pages = Math.max(1, Math.ceil(profiles.total / profiles.pageSize));
+    if (refs.aiProfilesPrevBtn) refs.aiProfilesPrevBtn.disabled = profiles.loading || profiles.page <= 1;
+    if (refs.aiProfilesNextBtn) refs.aiProfilesNextBtn.disabled = profiles.loading || profiles.page >= pages;
+    if (refs.aiProfilesApplyBtn) refs.aiProfilesApplyBtn.disabled = profiles.loading;
+    if (refs.aiProfilesResetBtn) refs.aiProfilesResetBtn.disabled = profiles.loading;
+    if (refs.aiProfilesPageInfo) refs.aiProfilesPageInfo.textContent = `Page ${profiles.page} of ${pages}`;
+    if (refs.aiProfilesExportBtn) {
+        refs.aiProfilesExportBtn.disabled = profiles.loading || profiles.exporting || !profiles.total;
+        refs.aiProfilesExportBtn.textContent = profiles.exporting ? 'Preparing CSV…' : 'Export all matching profiles';
+    }
+}
+
+function renderAiCoverage(coverage = {}, health = {}) {
+    if (!refs.aiCoverage) return;
+    const first = coverage.first_recorded_at ? `First available record: ${formatDateTime(coverage.first_recorded_at)} (UTC).` : 'No first record is available.';
+    const counts = `${aiExactCount(coverage.measured_calls)} measured calls · ${aiExactCount(coverage.legacy_calls)} legacy calls · ${aiExactCount(coverage.unknown_calls)} calls missing usage in the selected range.`;
+    const sharedLine = (name, stats) => `${name}: ${aiExactCount(stats?.calls)} calls, ${aiRecordedValue(stats, 'total_tokens')} recorded tokens.`;
+    const healthNotes = [];
+    if (Number(health.spooled_events) > 0) healthNotes.push(`${aiExactCount(health.spooled_events)} usage records are waiting to be saved to the database. Totals may be incomplete until they are replayed.`);
+    if (Number(health.unrecoverable_writes) > 0) healthNotes.push(`${aiExactCount(health.unrecoverable_writes)} usage records could not be saved or recovered. Investigate before relying on complete totals.`);
+    refs.aiCoverage.innerHTML = `<p><strong>Coverage and attribution</strong> · ${escapeHtml(first)}</p>
+        <p>${escapeHtml(coverage.note || 'Lifetime means all available records. Usage before tracking began or without retained records cannot be reconstructed exactly.')}</p>
+        <p>${escapeHtml(counts)}</p>
+        <p>${escapeHtml(sharedLine('Shared AI operations', coverage.shared))} ${escapeHtml(sharedLine('Unclassified / unattributed AI operations', coverage.unattributed))} These records are separate from confirmed B2C profile totals. Missing counters show 0 and do not establish zero usage.</p>
+        ${healthNotes.map((message) => `<p><strong>Tracking needs attention.</strong> ${escapeHtml(message)}</p>`).join('')}`;
+}
+
+function renderAiProfiles(data) {
+    const profiles = Array.isArray(data.profiles) ? data.profiles : [];
+    state.aiProfiles.data = data;
+    state.aiProfiles.total = Number(data.total) || 0;
+    state.aiProfiles.page = Number(data.page) || 1;
+    state.aiProfiles.pageSize = Number(data.page_size) || 25;
+    if (refs.aiProfilesTableBody) refs.aiProfilesTableBody.innerHTML = profiles.length ? profiles.map((profile) => {
+        const selected = profile.range || {};
+        const lifetime = profile.lifetime || {};
+        const first = lifetime.first_event_at ? `Records from ${formatDateTime(lifetime.first_event_at)} (UTC)` : 'No retained usage records';
+        return `<tr><td><button type="button" class="ai-profile-link" data-ai-profile-id="${escapeHtml(String(profile.user_id))}">${escapeHtml(profile.name || profile.email || 'Student')}</button><div class="user-meta">${escapeHtml(profile.email || '')}</div><div class="user-meta">${escapeHtml(first)}</div></td>
+            <td><strong>${escapeHtml(aiRecordedValue(selected, 'total_tokens'))}</strong><div class="user-meta">${escapeHtml(aiExactCount(selected.calls))} calls${Number(selected.unknown_calls) > 0 ? ' · partial usage' : ''}</div></td>
+            <td>${escapeHtml(aiRecordedCost(selected))}<div class="user-meta">No profile-level billed cost</div></td>
+            <td><strong>${escapeHtml(aiRecordedValue(lifetime, 'total_tokens'))}</strong><div class="user-meta">${escapeHtml(aiExactCount(lifetime.calls))} calls</div></td>
+            <td>${escapeHtml(aiRecordedCost(lifetime))}<div class="user-meta">No profile-level billed cost</div></td><td>${aiCoverageChips(lifetime)}</td></tr>`;
+    }).join('') : '<tr><td colspan="6" class="table-empty">No profiles match this search.</td></tr>';
+    if (refs.aiProfilesSummary) {
+        const first = state.aiProfiles.total ? (state.aiProfiles.page - 1) * state.aiProfiles.pageSize + 1 : 0;
+        refs.aiProfilesSummary.textContent = state.aiProfiles.total
+            ? `Showing ${first}–${first + profiles.length - 1} of ${aiExactCount(state.aiProfiles.total)} profiles · ${aiRangeLabel(data.range)} (UTC)`
+            : 'No matching profiles. Try another name or email.';
+    }
+    renderAiCoverage(data.coverage, data.metering_health);
+    renderAiProfilesControls();
+}
+
+async function loadAiProfiles({ resetPage = false } = {}) {
+    const profiles = state.aiProfiles;
+    const requestId = ++profiles.requestId;
+    if (resetPage) profiles.page = 1;
+    const params = aiAccountingParams();
+    params.set('page', String(profiles.page));
+    params.set('page_size', String(profiles.pageSize));
+    if (profiles.search) params.set('search', profiles.search);
+    profiles.loading = true;
+    closeAiProfileDetail();
+    renderAiProfilesControls();
+    if (refs.aiProfilesTableBody) refs.aiProfilesTableBody.innerHTML = '<tr><td colspan="6" class="table-empty">Loading profile usage…</td></tr>';
+    try {
+        if (!await ensureAdminProtection({ silent: false })) return;
+        const response = await fetch(`${API_BASE}/api/admin/ai-usage/profiles?${params}`, { headers: buildAuthHeaders(), credentials: 'same-origin' });
+        const payload = await response.json().catch(() => ({}));
+        if (requestId !== profiles.requestId) return;
+        if (!response.ok) {
+            await handleAdminAuthOrProtectionError(response.status, payload);
+            throw new Error(normalizeErrorMessage(payload, 'Could not load profile usage.'));
+        }
+        renderAiProfiles(payload);
+    } catch (error) {
+        if (requestId !== profiles.requestId) return;
+        profiles.data = null;
+        profiles.total = 0;
+        if (refs.aiProfilesTableBody) refs.aiProfilesTableBody.innerHTML = `<tr><td colspan="6" class="table-empty">${escapeHtml(error.message || 'Could not load profile usage. Please retry.')}</td></tr>`;
+        if (refs.aiProfilesSummary) refs.aiProfilesSummary.textContent = 'Profile usage could not be loaded.';
+        if (refs.aiCoverage) refs.aiCoverage.textContent = 'Coverage could not be checked. Search again to retry.';
+    } finally {
+        if (requestId === profiles.requestId) { profiles.loading = false; renderAiProfilesControls(); }
+    }
+}
+
+function changeAiProfilesPage(delta) {
+    const profiles = state.aiProfiles;
+    const pages = Math.max(1, Math.ceil(profiles.total / profiles.pageSize));
+    if (profiles.loading || profiles.page + delta < 1 || profiles.page + delta > pages) return;
+    profiles.page += delta;
+    void loadAiProfiles();
+}
+
+function aiFeatureTable(features, period, totals) {
+    const rows = features.map((feature) => ({ label: feature.label || feature.source || 'Other AI', stats: feature[period] || {} }));
+    rows.push({ label: 'All recorded features', stats: totals || {}, total: true });
+    return `<p class="ai-detail-help ai-scroll-hint">Scroll horizontally to view all token categories and coverage.</p><div class="table-wrap"><table class="users-table ai-feature-table"><thead><tr>
+        <th scope="col">Feature</th><th scope="col">Total tokens</th><th scope="col">Billed USD</th><th scope="col">Calls</th><th scope="col">Input</th><th scope="col">Output<br><span>Candidate</span></th><th scope="col">Thinking</th><th scope="col">Cached<br><span>Within input</span></th><th scope="col">Tool</th><th scope="col">TTS<br><span>Characters</span></th><th scope="col">Coverage</th></tr></thead><tbody>${rows.map(({ label, stats, total }) => `<tr${total ? ' class="ai-feature-total"' : ''}><td>${escapeHtml(label)}</td><td>${escapeHtml(aiRecordedValue(stats, 'total_tokens'))}</td><td>${escapeHtml(aiRecordedCost(stats))}</td><td>${escapeHtml(aiExactCount(stats.calls))}</td>${['input_tokens', 'output_tokens', 'thinking_tokens', 'cached_tokens', 'tool_tokens', 'tts_characters'].map((key) => `<td>${escapeHtml(aiRecordedValue(stats, key))}</td>`).join('')}<td>${aiCoverageChips(stats)}</td></tr>`).join('')}</tbody></table></div>`;
+}
+
+function renderAiProfileDetail(data) {
+    const profile = data.profile || {};
+    if (refs.aiProfileDetailTitle) refs.aiProfileDetailTitle.textContent = profile.name || profile.email || 'Student profile';
+    if (refs.aiProfileDetailSubtitle) refs.aiProfileDetailSubtitle.textContent = profile.email || '';
+    const features = Array.isArray(data.features) ? data.features : [];
+    const first = data.lifetime_totals?.first_event_at ? `First retained record: ${formatDateTime(data.lifetime_totals.first_event_at)} (UTC).` : 'No retained usage records for this profile.';
+    if (refs.aiProfileDetailBody) refs.aiProfileDetailBody.innerHTML = `<p class="ai-detail-help">${escapeHtml(data.coverage_note || 'Lifetime includes available records only. It does not establish complete usage since signup.')} ${escapeHtml(first)}</p>
+        <h5>Selected range · ${escapeHtml(aiRangeLabel(data.range))} (UTC)</h5>${aiFeatureTable(features, 'range', data.range_totals)}
+        <h5>Lifetime recorded usage</h5>${aiFeatureTable(features, 'lifetime', data.lifetime_totals)}
+        <p class="ai-detail-help">Input includes prompts, system instructions and conversation context. Cached tokens are a subset of input. Output shows candidate tokens; thinking is separate. Total tokens use the recorded provider total, so adding every column would double-count some tokens. Voice-synthesis characters are separate from tokens.</p>
+        <p class="ai-detail-help">Missing usage is excluded from known token totals. Legacy output can include thinking; older records may not retain separate thinking or tool counters. A zero in those legacy columns does not establish zero usage. Billed cost is 0 because no profile-level billed cost is available. Google project charges are not allocated to profiles.</p>`;
+}
+
+async function loadAiProfileDetail(userId) {
+    const requestId = ++state.aiProfileRequestId;
+    state.aiProfileId = String(userId);
+    const params = aiAccountingParams();
+    if (refs.aiProfileDetail) { refs.aiProfileDetail.hidden = false; refs.aiProfileDetail.scrollIntoView?.({ behavior: 'smooth', block: 'start' }); }
+    if (refs.aiProfileDetailTitle) refs.aiProfileDetailTitle.textContent = 'Loading profile…';
+    if (refs.aiProfileDetailSubtitle) refs.aiProfileDetailSubtitle.textContent = '';
+    if (refs.aiProfileDetailBody) refs.aiProfileDetailBody.innerHTML = '<p class="ai-accounting-note">Loading feature breakdown…</p>';
+    try {
+        if (!await ensureAdminProtection({ silent: false })) return;
+        const response = await fetch(`${API_BASE}/api/admin/ai-usage/profiles/${encodeURIComponent(userId)}?${params}`, { headers: buildAuthHeaders(), credentials: 'same-origin' });
+        const payload = await response.json().catch(() => ({}));
+        if (requestId !== state.aiProfileRequestId) return;
+        if (!response.ok) {
+            await handleAdminAuthOrProtectionError(response.status, payload);
+            throw new Error(normalizeErrorMessage(payload, 'Could not load this profile.'));
+        }
+        renderAiProfileDetail(payload);
+        refs.aiProfileDetailTitle?.focus({ preventScroll: true });
+    } catch (error) {
+        if (requestId !== state.aiProfileRequestId) return;
+        if (refs.aiProfileDetailTitle) refs.aiProfileDetailTitle.textContent = 'Profile usage unavailable';
+        if (refs.aiProfileDetailBody) refs.aiProfileDetailBody.innerHTML = `<p class="ai-accounting-note">${escapeHtml(error.message || 'Could not load this profile. Please retry.')}</p>`;
+    }
+}
+
+async function exportAiProfiles() {
+    const profiles = state.aiProfiles;
+    if (profiles.loading || profiles.exporting || !profiles.total) return;
+    const params = aiAccountingParams();
+    if (profiles.search) params.set('search', profiles.search);
+    profiles.exporting = true;
+    renderAiProfilesControls();
+    try {
+        if (!await ensureAdminProtection({ silent: false })) return;
+        const response = await fetch(`${API_BASE}/api/admin/ai-usage/profiles/export?${params}`, { headers: buildAuthHeaders(), credentials: 'same-origin' });
+        if (!response.ok) {
+            const payload = await response.json().catch(() => ({}));
+            await handleAdminAuthOrProtectionError(response.status, payload);
+            throw new Error(normalizeErrorMessage(payload, 'Could not export profile usage.'));
+        }
+        const blob = await response.blob();
+        const filename = (response.headers.get('Content-Disposition') || '').match(/filename="([^"]+)"/i)?.[1] || 'rilono-ai-profile-usage.csv';
+        const url = URL.createObjectURL(blob);
+        const link = document.createElement('a');
+        link.href = url;
+        link.download = filename;
+        document.body.appendChild(link);
+        link.click();
+        link.remove();
+        setTimeout(() => URL.revokeObjectURL(url), 2000);
+        showFlash(`Downloaded ${filename}`, 'success');
+    } catch (error) {
+        showFlash(error.message || 'Could not export profile usage. Please retry.', 'error');
+    } finally {
+        profiles.exporting = false;
+        renderAiProfilesControls();
+    }
+}
+
+function renderAiBillingControls() {
+    if (!refs.aiBillingSyncBtn) return;
+    refs.aiBillingSyncBtn.disabled = state.aiBilling.loading || state.aiBilling.syncing || !state.aiBilling.data?.configured;
+    refs.aiBillingSyncBtn.textContent = state.aiBilling.syncing ? 'Syncing billing…' : 'Sync billing';
+}
+
+function aiBillingMoney(value, currency) {
+    // Billing decimals arrive as strings. Never round them through a JS Number.
+    const match = String(value ?? '0').trim().match(/^([+-]?)(\d+)(?:\.(\d*))?(?:[eE]([+-]?\d+))?$/);
+    let integer = '0', fraction = '', negative = false;
+    if (match) {
+        const exponent = Number(match[4] || 0);
+        if (Number.isInteger(exponent) && Math.abs(exponent) <= 1000) {
+            const digits = match[2] + (match[3] || '');
+            const point = match[2].length + exponent;
+            integer = point <= 0 ? '0' : digits.slice(0, point).padEnd(point, '0');
+            fraction = point <= 0 ? '0'.repeat(-point) + digits : digits.slice(point);
+            integer = integer.replace(/^0+(?=\d)/, '');
+            fraction = fraction.replace(/0+$/, '');
+            negative = match[1] === '-' && /[1-9]/.test(integer + fraction);
+        }
+    }
+    const grouped = integer.replace(/\B(?=(\d{3})+(?!\d))/g, ',');
+    const number = `${negative ? '-' : ''}${grouped}.${fraction.padEnd(2, '0')}`;
+    return currency === 'USD' ? `$${number}` : `${currency || 'Unknown currency'} ${number}`;
+}
+
+function aiBillingMetrics(totals = []) {
+    const rows = totals.length ? totals : [{ currency: 'USD', cost: 0, credits: 0, net_cost: 0 }];
+    const value = (field) => rows.map((row) => `<strong>${escapeHtml(aiBillingMoney(row[field], row.currency))}</strong>`).join('');
+    return `<div class="ai-billing-metrics"><div class="ai-billing-metric"><span>Imported Google cost before credits</span>${value('cost')}</div><div class="ai-billing-metric"><span>Imported Google credits</span>${value('credits')}</div><div class="ai-billing-metric"><span>Imported Google net cost</span>${value('net_cost')}</div></div>`;
+}
+
+function renderAiReconciliation(data = {}) {
+    state.aiBilling.data = data;
+    renderAiBillingControls();
+    if (!refs.aiReconciliation) return;
+    const available = data.status === 'available' && Array.isArray(data.totals) && data.totals.length > 0;
+    const totals = available ? data.totals : [];
+    const note = data.scope_note || 'Billing covers the configured Google AI project, including B2B, shared and unattributed activity. Project charges cannot establish a profile-level billed cost.';
+    const lastSync = data.last_synced_at ? formatDateTime(data.last_synced_at) + ' (UTC)' : 'Not synced yet';
+    const meta = `<div class="ai-billing-meta"><span>Project: ${escapeHtml(data.project_id || 'Not configured')}</span><span>Last sync: ${escapeHtml(lastSync)}</span><span>${escapeHtml(aiRangeLabel(data.range))} (UTC)</span></div>`;
+    const awaitingExport = data.sync_status === 'awaiting_export' || data.billing_status === 'awaiting_export' || data.status === 'awaiting_export';
+    const status = awaitingExport ? (available ? 'Awaiting Google export · Previous import retained' : 'Awaiting Google billing export')
+        : available ? 'Imported Google billing records'
+        : !data.configured ? 'Google billing is not connected.' : 'No imported billing records for this range.';
+    const zeroNote = available ? 'Amounts below are copied from Google billing records in their original currencies.'
+        : 'Displayed amounts are 0 because no billed amount has been imported. This does not confirm that Google charged 0.';
+    if (refs.aiMonthHero) refs.aiMonthHero.textContent = totals.length ? totals.map((row) => aiBillingMoney(row.net_cost, row.currency)).join(' / ') : '$0.00';
+    if (refs.aiHeroLabel) refs.aiHeroLabel.textContent = available ? 'Imported Google net cost' : 'No imported billing amount';
+    refs.aiReconciliation.innerHTML = `${aiBillingMetrics(totals)}${meta}
+        <p class="ai-accounting-note"><strong>${status}</strong> ${escapeHtml(zeroNote)} ${escapeHtml(data.message || '')}</p>
+        <p class="ai-detail-help">${escapeHtml(note)} Billing quantities can use different units and services; they are not combined into a single token total.</p>
+        ${available && Array.isArray(data.usage_rows) && data.usage_rows.length ? `<details><summary class="ai-detail-help">Provider usage by service and billing item</summary><div class="table-wrap"><table class="users-table"><thead><tr><th>Service</th><th>Billing item</th><th>Usage</th><th>Unit</th><th>Cost</th></tr></thead><tbody>${data.usage_rows.map((row) => `<tr><td>${escapeHtml(row.service || 'Unknown')}</td><td>${escapeHtml(row.sku || 'Unknown')}</td><td>${escapeHtml(String(row.usage_amount ?? 0))}</td><td>${escapeHtml(row.unit || 'Unknown')}</td><td>${escapeHtml(aiBillingMoney(row.cost, row.currency))}</td></tr>`).join('')}</tbody></table></div></details>` : ''}`;
+}
+
+async function loadAiReconciliation() {
+    const billing = state.aiBilling;
+    const requestId = ++billing.requestId;
+    const params = aiAccountingParams();
+    billing.loading = true;
+    renderAiBillingControls();
+    try {
+        if (!await ensureAdminProtection({ silent: false })) return;
+        const response = await fetch(`${API_BASE}/api/admin/ai-usage/reconciliation?${params}`, { headers: buildAuthHeaders(), credentials: 'same-origin' });
+        const payload = await response.json().catch(() => ({}));
+        if (requestId !== billing.requestId) return;
+        if (!response.ok) {
+            await handleAdminAuthOrProtectionError(response.status, payload);
+            throw new Error(normalizeErrorMessage(payload, 'Could not load imported billing.'));
+        }
+        renderAiReconciliation(payload);
+    } catch (error) {
+        if (requestId !== billing.requestId) return;
+        billing.data = null;
+        if (refs.aiMonthHero) refs.aiMonthHero.textContent = '$0.00';
+        if (refs.aiHeroLabel) refs.aiHeroLabel.textContent = 'Billing could not be loaded';
+        if (refs.aiReconciliation) refs.aiReconciliation.innerHTML = `${aiBillingMetrics()}<p class="ai-accounting-note">${escapeHtml(error.message || 'Could not load imported billing. Please retry.')} No imported amount is available for this view.</p>`;
+    } finally {
+        if (requestId === billing.requestId) { billing.loading = false; renderAiBillingControls(); }
+    }
+}
+
+async function syncAiBilling() {
+    const billing = state.aiBilling;
+    if (billing.loading || billing.syncing || !billing.data?.configured) return;
+    const range = { start: state.aiRange.start, end: state.aiRange.end };
+    const requestId = ++billing.requestId;
+    billing.syncing = true;
+    renderAiBillingControls();
+    try {
+        if (!await ensureAdminProtection({ silent: false })) return;
+        const response = await fetch(`${API_BASE}/api/admin/ai-usage/reconciliation/sync`, { method: 'POST', headers: buildAuthHeaders({ 'Content-Type': 'application/json' }), credentials: 'same-origin', body: JSON.stringify(range) });
+        const payload = await response.json().catch(() => ({}));
+        if (requestId !== billing.requestId) return;
+        if (!response.ok) {
+            await handleAdminAuthOrProtectionError(response.status, payload);
+            throw new Error(normalizeErrorMessage(payload, 'Could not sync billing.'));
+        }
+        const awaitingExport = response.status === 202 || payload.sync_status === 'awaiting_export' || payload.status === 'awaiting_export';
+        renderAiReconciliation(awaitingExport ? { ...payload, sync_status: 'awaiting_export' } : payload);
+        if (awaitingExport) {
+            showFlash(payload.message || 'Awaiting Google billing export. No new billing records have been imported.', 'info');
+        } else {
+            showFlash('Google billing import refreshed for the selected dates.', 'success');
+        }
+    } catch (error) {
+        if (requestId === billing.requestId) showFlash(error.message || 'Could not sync billing. Please retry.', 'error');
+    } finally {
+        billing.syncing = false;
+        renderAiBillingControls();
+    }
 }
 
 // --- AI Costs CSV export ---------------------------------------------------
@@ -2894,41 +3209,25 @@ function csvRows(rows) {
 }
 
 function aiExportSections(kind, data) {
-    const range = data.range || {};
     const sections = [];
-    if (kind === 'sources' || kind === 'all') {
-        sections.push({
-            title: 'Cost by feature',
-            header: ['Feature', 'Source key', 'Calls', 'Tokens', 'Searches', 'Search cost (USD)', 'Est. cost (USD)'],
-            rows: (data.by_source || []).map((r) => [
-                r.label || r.source, r.source, r.calls || 0, r.tokens || 0,
-                r.search_queries || 0, r.search_cost_usd || 0, r.cost_usd || 0,
-            ]),
-        });
-    }
-    if (kind === 'models' || kind === 'all') {
-        sections.push({
-            title: 'Cost by model',
-            header: ['Model', 'Calls', 'Tokens', 'Est. cost (USD)'],
-            rows: (data.by_model || []).map((r) => [r.model, r.calls || 0, r.tokens || 0, r.cost_usd || 0]),
-        });
-    }
+    if (kind === 'sources' || kind === 'all') sections.push({
+        title: 'Usage by feature',
+        header: ['Feature', 'Source key', 'Calls', 'Tokens', 'TTS characters', 'Searches'],
+        rows: (data.by_source || []).map((row) => [row.label || row.source, row.source, row.calls || 0, row.tokens || 0, row.tts_characters || 0, row.search_queries || 0])
+    });
+    if (kind === 'models' || kind === 'all') sections.push({
+        title: 'Usage by model',
+        header: ['Model', 'Calls', 'Tokens', 'TTS characters'],
+        rows: (data.by_model || []).map((row) => [row.model, row.calls || 0, row.tokens || 0, row.tts_characters || 0])
+    });
     if (kind === 'daily' || kind === 'all') {
-        const total = Number(range.cost_usd) || 0;
-        // The per-card export mirrors the table (so the hide-empty toggle beside the
-        // button applies); "export everything" always carries every day in the range.
+        const total = Number(data.range?.tokens) || 0;
         const hideEmpty = kind === 'daily' && (!refs.aiHideEmptyDays || refs.aiHideEmptyDays.checked);
-        const days = hideEmpty ? (data.daily || []).filter((d) => (d.calls || 0) > 0) : (data.daily || []);
-        sections.push({
-            title: 'Spend by date',
-            header: ['Date (UTC)', 'Calls', 'Tokens', 'Est. cost (USD)', 'Share of range (%)'],
-            rows: days.map((d) => [
-                d.date, d.calls || 0, d.tokens || 0, d.cost_usd || 0,
-                total > 0 ? Number(((d.cost_usd || 0) / total * 100).toFixed(2)) : 0,
-            ]),
-        });
+        const days = hideEmpty ? (data.daily || []).filter((day) => (day.calls || 0) > 0) : (data.daily || []);
+        sections.push({ title: 'Usage by date', header: ['Date (UTC)', 'Calls', 'Tokens', 'TTS characters', 'Share of recorded tokens (%)'],
+            rows: days.map((day) => [day.date, day.calls || 0, day.tokens || 0, day.tts_characters || 0, total > 0 ? Number(((day.tokens || 0) / total * 100).toFixed(2)) : 0]) });
     }
-    return sections.filter(Boolean);
+    return sections;
 }
 
 function exportAiCsv(kind, btn) {
@@ -2936,12 +3235,11 @@ function exportAiCsv(kind, btn) {
     if (!data || !data.range) { showFlash('Load the AI usage data before exporting.', 'error'); return; }
     const range = data.range;
     const lines = [
-        ['Rilono — AI usage & cost (estimated)'],
+        ['Rilono — Recorded AI usage'],
         ['Range (UTC)', range.start, 'to', range.end],
-        ['Days in range', range.days, 'Days with activity', range.active_days],
-        ['Total est. cost (USD)', range.cost_usd, 'Calls', range.calls, 'Tokens', range.tokens],
-        ['Average per day (USD)', range.avg_per_day_usd, 'Cache hit (%)', range.cache_hit_pct],
-        ['Note', 'Estimated from per-token pricing; cross-check the provider invoice.'],
+        ['Days in range', range.days || 0, 'Days with activity', range.active_days || 0],
+        ['Recorded calls', range.calls || 0, 'Recorded tokens', range.tokens || 0, 'TTS characters', range.tts_characters || 0],
+        ['Note', 'Only retained usage records are included. Missing counters display 0; this does not establish that no usage occurred.'],
     ];
     aiExportSections(kind, data).forEach((section) => {
         lines.push([], [section.title], section.header, ...section.rows);
@@ -2973,7 +3271,7 @@ function renderAiDailyTable() {
     if (!refs.aiDailyTableBody) return;
     const data = state.aiUsageData || {};
     const daily = Array.isArray(data.daily) ? data.daily : [];
-    const rangeTotal = Number((data.range || {}).cost_usd) || 0;
+    const rangeTotal = Number((data.range || {}).tokens) || 0;
     const hideEmpty = !refs.aiHideEmptyDays || refs.aiHideEmptyDays.checked;
     const rows = (hideEmpty ? daily.filter((d) => (d.calls || 0) > 0) : daily).slice().reverse();
 
@@ -2984,14 +3282,13 @@ function renderAiDailyTable() {
         refs.aiDailyTableBody.innerHTML = `<tr><td colspan="5" class="table-empty">${escapeHtml(message)}</td></tr>`;
     } else {
         refs.aiDailyTableBody.innerHTML = rows.map((d) => {
-            const cost = Number(d.cost_usd) || 0;
-            const share = rangeTotal > 0 ? (cost / rangeTotal) * 100 : 0;
+            const share = rangeTotal > 0 ? ((Number(d.tokens) || 0) / rangeTotal) * 100 : 0;
             return `
                 <tr${(d.calls || 0) ? '' : ' class="ai-daily-empty-row"'}>
                     <td>${escapeHtml(formatAiDate(d.date))}</td>
                     <td>${escapeHtml((d.calls || 0).toLocaleString())}</td>
                     <td>${escapeHtml(formatTokens(d.tokens))}</td>
-                    <td><strong>${escapeHtml(formatAiUsd(cost))}</strong></td>
+                    <td>${escapeHtml(formatTokens(d.tts_characters))}</td>
                     <td>${escapeHtml(share.toFixed(1))}%</td>
                 </tr>`;
         }).join('');
@@ -3002,14 +3299,15 @@ function renderAiDailyTable() {
     const totalTokens = daily.reduce((sum, d) => sum + (d.tokens || 0), 0);
     put(refs.aiDailyTotalCalls, totalCalls.toLocaleString());
     put(refs.aiDailyTotalTokens, formatTokens(totalTokens));
-    put(refs.aiDailyTotalCost, formatAiUsd(rangeTotal));
+    put(refs.aiDailyTotalCost, formatTokens(daily.reduce((sum, day) => sum + (Number(day.tts_characters) || 0), 0)));
+    put(refs.aiDailyTotalShare, totalTokens > 0 ? '100%' : '0%');
 }
 
-// --- AI cost timeline (SVG column chart) -----------------------------------
+// --- Recorded token timeline (SVG column chart) -----------------------------------
 // Single series, so no legend — the card title names what is plotted. One hue
 // (#6366f1, validated against the white card surface), hairline solid gridlines,
 // value axis, per-column hover/keyboard tooltip, and a direct label on the peak
-// only. Every value is also in the "Spend by date" table below, so the tooltip
+// only. Every value is also in the "Usage by date" table below, so the tooltip
 // enhances rather than gates.
 const AI_CHART = {
     height: 300,
@@ -3023,23 +3321,17 @@ const AI_CHART = {
     labelInk: '#18181b',
 };
 
-// Steps of 1/2/5 × 10ⁿ only — a 2.5 step would render as "$3" beside "$5" once the
-// label is rounded, which misstates the gridline.
+// Integer token gridlines use steps of 1/2/5 × 10ⁿ.
 function niceAxis(max, targetCount = 4) {
     if (!(max > 0)) return { top: 1, step: 1, ticks: [0, 1] };
     const rawStep = max / targetCount;
     const magnitude = Math.pow(10, Math.floor(Math.log10(rawStep)));
     const normalized = rawStep / magnitude;
-    const step = (normalized <= 1 ? 1 : normalized <= 2 ? 2 : normalized <= 5 ? 5 : 10) * magnitude;
+    const step = Math.max(1, (normalized <= 1 ? 1 : normalized <= 2 ? 2 : normalized <= 5 ? 5 : 10) * magnitude);
     const top = Math.ceil(max / step) * step;
     const ticks = [];
     for (let v = 0; v <= top + step / 2; v += step) ticks.push(Number(v.toPrecision(12)));
     return { top, step, ticks };
-}
-
-function formatAxisUsd(value, step) {
-    const decimals = step >= 1 ? 0 : Math.min(4, Math.ceil(-Math.log10(step)));
-    return `$${Number(value).toFixed(decimals)}`;
 }
 
 // Square at the baseline, 4px rounded at the data end.
@@ -3058,15 +3350,15 @@ function renderAiTimelineChart() {
     const host = refs.aiTimelineChart;
     if (!host) return;
     const series = Array.isArray(state.aiSeries) ? state.aiSeries : [];
-    const values = series.map((d) => Number(d.cost_usd) || 0);
+    const values = series.map((d) => Number(d.tokens) || 0);
     if (!series.length || !values.some((v) => v > 0)) {
-        host.innerHTML = '<div class="table-empty">No AI usage in the selected range.</div>';
+        host.innerHTML = '<div class="table-empty">0 recorded tokens in the selected range.</div>';
         return;
     }
     if (series.length < 2) {
-        // A single bucket is a number, not a chart — "Spent in range" above already
+        // A single bucket is a number, not a chart — "Recorded tokens" above already
         // states it, and a lone column would just be that number drawn badly.
-        host.innerHTML = '<div class="table-empty">One day selected — see <strong>Spent in range</strong> above.'
+        host.innerHTML = '<div class="table-empty">One day selected — see <strong>Recorded tokens</strong> above.'
             + '<br>Pick a wider range to see the trend.</div>';
         return;
     }
@@ -3115,7 +3407,7 @@ function renderAiTimelineChart() {
         const text = make('text', {
             x: pad.left - 10, y: y + 4, 'text-anchor': 'end', class: 'ai-chart-axis-text',
         });
-        text.textContent = formatAxisUsd(tick, axis.step);
+        text.textContent = formatTokens(tick);
         svg.appendChild(text);
     });
 
@@ -3135,7 +3427,7 @@ function renderAiTimelineChart() {
 
     // Direct-label the peak only; everything else is carried by the axis and tooltip.
     if (values[peakIndex] > 0) {
-        const label = formatAiUsd(values[peakIndex]);
+        const label = formatTokens(values[peakIndex]);
         const centre = pad.left + peakIndex * band + band / 2;
         const halfText = label.length * 3.4;
         const x = Math.min(Math.max(centre, pad.left + halfText), pad.left + plotW - halfText);
@@ -3174,7 +3466,7 @@ function renderAiTimelineChart() {
 
     host.tabIndex = 0;
     host.setAttribute('aria-label',
-        `Estimated AI cost per ${state.aiGranularity || 'day'}, ${series.length} points. Values are listed in the Spend by date table below.`);
+        `Recorded tokens per ${state.aiGranularity || 'day'}, ${series.length} points. Values are listed in the Usage by date table below.`);
 
     let active = -1;
     const clear = () => {
@@ -3193,7 +3485,7 @@ function renderAiTimelineChart() {
         // Labels are data — build the readout with textContent, never innerHTML.
         tip.textContent = '';
         const value = document.createElement('strong');
-        value.textContent = formatAiUsd(values[index]);
+        value.textContent = `${formatTokens(values[index])} tokens`;
         const when = document.createElement('span');
         when.textContent = aiBucketSpan(d);
         const detail = document.createElement('span');
@@ -3245,20 +3537,28 @@ function renderAiTimelineChart() {
     }
 }
 
+function aiActivitySummary(row) {
+    const parts = [`${aiExactCount(row.calls)} calls`];
+    const isTts = String(row.model || '').startsWith('gcp-tts/') || row.source === 'mock_interview_tts';
+    if (Number(row.tokens) > 0 || (!isTts && !Number(row.tts_characters))) parts.push(`${formatTokens(row.tokens)} tokens`);
+    if (Number(row.tts_characters) > 0) parts.push(`${aiExactCount(row.tts_characters)} TTS characters`);
+    else if (isTts) parts.push(row.tts_characters == null ? '0 TTS characters (not recorded)' : '0 TTS characters');
+    return parts.join(' · ');
+}
+
 function renderAiBreakdown(el, rows, labelFn) {
     if (!el) return;
     const list = Array.isArray(rows) ? rows.slice() : [];
-    if (!list.length) { el.innerHTML = '<div class="table-empty">No AI usage recorded yet.</div>'; return; }
-    const total = list.reduce((sum, r) => sum + (Number(r.cost_usd) || 0), 0) || 1;
-    el.innerHTML = list.map((r, index) => {
-        const amount = Number(r.cost_usd) || 0;
-        const pct = Math.min(Math.max((amount / total) * 100, 0), 100);
-        return `
-            <div class="finance-breakdown-row">
-                <div class="finance-breakdown-top"><strong>${escapeHtml(labelFn(r, index) || '—')}</strong><span>${escapeHtml(formatAiUsd(amount))}</span></div>
-                <div class="finance-breakdown-track"><span style="width: ${pct.toFixed(2)}%"></span></div>
-                <div class="finance-breakdown-percent">${escapeHtml((r.calls || 0).toLocaleString())} calls · ${escapeHtml(formatTokens(r.tokens))} tokens</div>
-            </div>`;
+    if (!list.length) { el.innerHTML = '<div class="table-empty">0 recorded calls · 0 recorded tokens</div>'; return; }
+    const totalTokens = list.reduce((sum, row) => sum + (Number(row.tokens) || 0), 0);
+    el.innerHTML = list.map((row, index) => {
+        const tokens = Number(row.tokens) || 0;
+        const percent = totalTokens > 0 ? Math.min(Math.max(tokens / totalTokens * 100, 0), 100) : 0;
+        return `<div class="finance-breakdown-row">
+            <div class="finance-breakdown-top"><strong>${escapeHtml(labelFn(row, index) || 'Unknown')}</strong></div>
+            ${tokens > 0 ? `<div class="finance-breakdown-track"><span style="width: ${percent.toFixed(2)}%"></span></div>` : ''}
+            <div class="finance-breakdown-percent">${escapeHtml(aiActivitySummary(row))}</div>
+        </div>`;
     }).join('');
 }
 

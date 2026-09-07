@@ -2175,6 +2175,24 @@ class GeminiUsageEvent(Base):
     # and per organization (B2B) so we can compute per-account cost and profit.
     user_id = Column(Integer, ForeignKey("users.id"), nullable=True, index=True)
     organization_id = Column(Integer, ForeignKey("enterprise_organizations.id"), nullable=True, index=True)
+    # v2 records keep provider counters and attribution independently of prices.
+    # Legacy defaults intentionally do not invent historical provider/profile facts.
+    event_key = Column(String(96), nullable=True, unique=True, index=True)
+    response_id = Column(String(256), nullable=True, index=True)
+    provider = Column(String(32), nullable=True, index=True)
+    project_id = Column(String(128), nullable=True, index=True)
+    product = Column(String(24), nullable=False, default="unknown", server_default="unknown", index=True)
+    trigger = Column(String(24), nullable=False, default="unknown", server_default="unknown")
+    metering_version = Column(Integer, nullable=False, default=1, server_default="1")
+    candidate_tokens = Column(Integer, nullable=False, default=0, server_default="0")
+    thought_tokens = Column(Integer, nullable=False, default=0, server_default="0")
+    tool_tokens = Column(Integer, nullable=False, default=0, server_default="0")
+    unit_type = Column(String(24), nullable=False, default="tokens", server_default="tokens")
+    character_count = Column(Integer, nullable=False, default=0, server_default="0")
+    raw_usage_json = Column(Text, nullable=True)
+    usage_state = Column(String(24), nullable=False, default="legacy", server_default="legacy", index=True)
+    pricing_status = Column(String(24), nullable=False, default="legacy_estimate", server_default="legacy_estimate")
+    pricing_version = Column(String(80), nullable=True)
     prompt_tokens = Column(Integer, nullable=False, default=0)
     output_tokens = Column(Integer, nullable=False, default=0)
     total_tokens = Column(Integer, nullable=False, default=0)
@@ -2193,6 +2211,15 @@ class GeminiUsageEvent(Base):
     # enterprise per-action margin) picks up grounding cost without changing.
     estimated_cost_usd = Column(Numeric(12, 6), nullable=False, default=0)
     created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False, index=True)
+
+    # Null project IDs are a real unknown scope, not an exemption from deduplication.
+    # A duplicate attempt remains auditable but only one row carries response usage.
+    __table_args__ = (
+        Index("uq_gemini_usage_provider_response", func.coalesce(provider, "unknown"),
+              func.coalesce(project_id, ""), response_id, unique=True,
+              sqlite_where=(response_id.isnot(None) & (usage_state != "duplicate")),
+              postgresql_where=(response_id.isnot(None) & (usage_state != "duplicate"))),
+    )
 
 
 # ===========================================================================

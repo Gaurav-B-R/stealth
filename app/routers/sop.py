@@ -104,7 +104,7 @@ def sop_generate(
     subscription = get_or_create_user_subscription(db, current_user.id)
     visa_pass.enforce_feature_or_402(db, subscription, "sop_generator")
 
-    token = set_usage_account(user_id=current_user.id)
+    token = set_usage_account(user_id=current_user.id, product="b2c", trigger="user")
     try:
         draft = sop_kit.generate_sop(
             db, current_user,
@@ -140,7 +140,7 @@ def sop_refine(
     subscription = get_or_create_user_subscription(db, current_user.id)
     visa_pass.enforce_feature_or_402(db, subscription, "sop_generator")
 
-    token = set_usage_account(user_id=current_user.id)
+    token = set_usage_account(user_id=current_user.id, product="b2c", trigger="user")
     try:
         draft = sop_kit.refine_sop(db, current_user, latest, payload.instruction)
     except RuntimeError:

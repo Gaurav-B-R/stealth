@@ -320,8 +320,15 @@ def run_conversion_analysis(db: Session, limit: int = GROWTH_AGENT_MAX_CANDIDATE
         for candidate_model in _model_candidates():
             try:
                 model = genai.GenerativeModel(candidate_model)
-                response = model.generate_content(prompt)
-                ai_usage.record_gemini_usage("growth_agent", candidate_model, response)
+                # This one request covers a batch of profiles. It is a shared
+                # cost; assigning its tokens to the initiating admin is incorrect.
+                response = ai_usage.tracked_gemini_call(
+                    "growth_agent", candidate_model,
+                    lambda: model.generate_content(prompt, **(
+                        {} if gemini_utils.USE_VERTEX_AI else {"request_options": {"retry": None}}
+                    )),
+                    product="shared", trigger="automation",
+                )
                 parsed = _parse_json_array(getattr(response, "text", None))
                 if parsed:
                     model_used = candidate_model
@@ -398,8 +405,13 @@ def analyze_account(db: Session, user_id: int) -> dict:
         for candidate_model in _model_candidates():
             try:
                 model = genai.GenerativeModel(candidate_model)
-                response = model.generate_content(prompt)
-                ai_usage.record_gemini_usage("growth_agent_single", candidate_model, response)
+                response = ai_usage.tracked_gemini_call(
+                    "growth_agent_single", candidate_model,
+                    lambda: model.generate_content(prompt, **(
+                        {} if gemini_utils.USE_VERTEX_AI else {"request_options": {"retry": None}}
+                    )),
+                    user_id=user.id, product="b2c", trigger="automation",
+                )
                 parsed = _parse_json_array(getattr(response, "text", None))
                 if parsed:
                     item = parsed[0]

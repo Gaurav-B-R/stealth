@@ -154,6 +154,8 @@ stealth/
 
 ## Development
 
+AI cost accounting, an isolated local review of retained records, actual Google billing, and validation: [AI cost accounting guide](docs/ai-cost-accounting.md).
+
 To run in development mode with auto-reload:
 ```bash
 uvicorn app.main:app --reload
@@ -188,6 +190,8 @@ GEMINI_MODEL=gemini-2.5-flash
 RILONO_AI_CHAT_MODEL=gemini-2.5-flash
 GEMINI_DOCUMENT_MODEL=gemini-2.5-flash
 DAILY_AI_NOTIFIER_MODEL=gemini-2.5-flash
+DAILY_AI_NOTIFIER_DORMANT_AFTER_DAYS=30    # no login for this many days → account is dormant
+DAILY_AI_NOTIFIER_DORMANT_CADENCE_DAYS=14  # dormant accounts are scanned/emailed once per this many days (0 AFTER_DAYS = off)
 RESEND_CONTACTS_SYNC_BATCH_SIZE=100
 RESEND_CONTACTS_SYNC_TIMEOUT_SECONDS=30
 RESEND_CONTACTS_SYNC_UNSUBSCRIBE_INELIGIBLE=false

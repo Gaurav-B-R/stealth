@@ -231,12 +231,10 @@ def _run_gemini(prompt: str, user_id: int) -> tuple[str, str]:
     last_error: Exception | None = None
     for model_name in _model_candidates():
         try:
-            # Pass usage_source so build_generative_model's own instrumentation records
-            # this under "sop_generator". It previously defaulted to "document_ai" and the
-            # explicit record_gemini_usage below logged the SAME response a second time —
-            # double-counting SOP spend and mislabelling half of it as document AI.
+            # The shared model boundary records every attempt before parsing.
             model = gemini_utils.build_generative_model(
                 model_name, usage_source="sop_generator", user_id=user_id,
+                product="b2c", trigger="user",
             )
             response = model.generate_content(prompt)
             text = (getattr(response, "text", None) or "").strip()

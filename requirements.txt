@@ -18,6 +18,7 @@ cryptography>=41.0.0
 google-generativeai>=0.3.0
 # Shared Cloud client and compatibility adapter are verified against this SDK.
 google-genai==2.8.0
+google-cloud-bigquery>=3.25.0,<4
 # Keep google-cloud-aiplatform out: its import tree exceeded this service's memory budget.
 pillow>=10.0.0
 requests>=2.31.0

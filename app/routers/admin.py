@@ -14,6 +14,7 @@ from sqlalchemy.orm import Session, aliased
 
 from app import models, schemas
 from app import ai_usage
+from app import ai_cost_reporting, ai_billing
 from app import acquisition
 from app import enterprise_credits
 from app import enterprise_billing
@@ -34,7 +35,7 @@ from app.auth import (
     get_current_admin_user,
 )
 from app.database import get_db
-from app.utils import user_deletion
+from app.utils import user_deletion, user_export
 from app.utils.rate_limiter import check_ip_rate_limit, extract_client_ip, is_request_ip_whitelisted
 from app.utils.turnstile import is_turnstile_enabled, verify_turnstile_token
 
@@ -411,29 +412,10 @@ def _add_month_bucket(monthly_buckets: dict, when, *, investment: Decimal = Deci
     monthly_buckets[key]["returns_usd"] += returns
 
 
-@router.get("/users", response_model=schemas.AdminUserListResponse)
-def list_users_admin(
-    request: Request,
-    page: int = Query(1, ge=1),
-    page_size: int = Query(20, ge=1, le=100),
-    search: str | None = Query(None, min_length=1, max_length=120),
-    plan_filter: str = Query("all", alias="plan"),
-    role_filter: str = Query("all", alias="role"),
-    current_user: models.User = Depends(get_current_admin_user),
-    _: None = Depends(require_admin_turnstile_proof),
-    db: Session = Depends(get_db),
+def _filtered_admin_users_query(
+    db: Session, *, search: str | None, plan_filter: str, role_filter: str
 ):
-    """
-    List users for admin dashboard with search + filters + pagination.
-    """
-    _enforce_rate_limit_or_429(
-        request=request,
-        scope="admin.users.list",
-        limit=ADMIN_ENDPOINT_RATE_LIMIT,
-        window_seconds=ADMIN_ENDPOINT_RATE_WINDOW_SECONDS,
-        extra_key=f"user:{current_user.id}",
-    )
-
+    """Keep the Student Accounts table and its full export on identical filters."""
     normalized_plan = (plan_filter or "all").strip().lower()
     if normalized_plan not in VALID_USER_PLAN_FILTERS:
         raise HTTPException(
@@ -481,6 +463,32 @@ def list_users_admin(
     elif normalized_plan == "visa_pass":
         query = query.filter(models.User.id.in_(active_pass_user_ids_select))
 
+    return query
+
+
+@router.get("/users", response_model=schemas.AdminUserListResponse)
+def list_users_admin(
+    request: Request,
+    page: int = Query(1, ge=1),
+    page_size: int = Query(20, ge=1, le=100),
+    search: str | None = Query(None, min_length=1, max_length=120),
+    plan_filter: str = Query("all", alias="plan"),
+    role_filter: str = Query("all", alias="role"),
+    current_user: models.User = Depends(get_current_admin_user),
+    _: None = Depends(require_admin_turnstile_proof),
+    db: Session = Depends(get_db),
+):
+    """List users for admin dashboard with search + filters + pagination."""
+    _enforce_rate_limit_or_429(
+        request=request,
+        scope="admin.users.list",
+        limit=ADMIN_ENDPOINT_RATE_LIMIT,
+        window_seconds=ADMIN_ENDPOINT_RATE_WINDOW_SECONDS,
+        extra_key=f"user:{current_user.id}",
+    )
+    query = _filtered_admin_users_query(
+        db, search=search, plan_filter=plan_filter, role_filter=role_filter
+    )
     total = query.count()
     filtered_user_ids_subquery = query.with_entities(models.User.id).subquery()
     metrics = _build_plan_metrics_for_filtered_users(db=db, filtered_user_ids_subquery=filtered_user_ids_subquery)
@@ -498,6 +506,73 @@ def list_users_admin(
         "page_size": page_size,
         "metrics": metrics,
     }
+
+
+@router.get("/users/export")
+def export_users_admin(
+    request: Request,
+    export_format: str = Query("xlsx", alias="format", pattern="^(xlsx|csv)$"),
+    search: str | None = Query(None, min_length=1, max_length=120),
+    plan_filter: str = Query("all", alias="plan"),
+    role_filter: str = Query("all", alias="role"),
+    current_user: models.User = Depends(get_current_admin_user),
+    _: None = Depends(require_admin_turnstile_proof),
+    db: Session = Depends(get_db),
+):
+    """Download every matching Student Accounts row, independent of pagination."""
+    _enforce_rate_limit_or_429(
+        request=request,
+        scope="admin.users.export",
+        limit=ADMIN_ENDPOINT_RATE_LIMIT,
+        window_seconds=ADMIN_ENDPOINT_RATE_WINDOW_SECONDS,
+        extra_key=f"user:{current_user.id}",
+    )
+    query = _filtered_admin_users_query(
+        db, search=search, plan_filter=plan_filter, role_filter=role_filter
+    )
+    # Select only the fields shown in the table, including its name fallback. Never
+    # load password hashes, tokens, private notes, or unrelated account data.
+    users = query.with_entities(
+        models.User.full_name,
+        models.User.username,
+        models.User.email,
+        models.User.university,
+        models.User.acquisition_channel,
+        models.User.destination_country_code,
+        models.User.visa_type_key,
+        models.User.is_developer,
+        models.User.is_admin,
+        models.User.is_active,
+        models.User.email_verified,
+        models.User.created_at,
+        models.User.last_login_at,
+    ).order_by(desc(models.User.created_at), desc(models.User.id)).yield_per(500)
+    try:
+        content = (
+            user_export.build_xlsx(users)
+            if export_format == "xlsx"
+            else user_export.build_csv(users)
+        )
+    except ImportError:
+        logger.exception("Student Accounts Excel export dependency unavailable")
+        raise HTTPException(
+            status_code=503,
+            detail="Excel export is temporarily unavailable. Please try CSV instead.",
+        )
+    except Exception:
+        logger.exception("Failed to create Student Accounts export")
+        raise HTTPException(status_code=500, detail="Could not create the user export. Please try again.")
+
+    stamp = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    filename = f"rilono-student-accounts-{stamp}.{export_format}"
+    return Response(
+        content=content,
+        media_type=user_export.XLSX_MEDIA_TYPE if export_format == "xlsx" else "text/csv; charset=utf-8",
+        headers={
+            "Content-Disposition": f'attachment; filename="{filename}"',
+            "Cache-Control": "no-store",
+        },
+    )
 
 
 def _compute_company_finance_analytics(db: Session, *, ledger_limit: int | None = 250) -> dict:
@@ -1127,13 +1202,14 @@ def delete_company_finance_entry_admin(
 @router.get("/ai-usage/analytics")
 def ai_usage_analytics_admin(
     request: Request,
+    response: Response,
     start: str | None = None,
     end: str | None = None,
     current_user: models.User = Depends(get_current_admin_user),
     _: None = Depends(require_admin_turnstile_proof),
     db: Session = Depends(get_db),
 ):
-    """Gemini API usage & estimated cost analytics for the admin console.
+    """Retained Gemini usage counters for the admin console.
 
     Optional `start`/`end` (YYYY-MM-DD, inclusive, UTC) filter the range summary,
     timeline, per-day table and breakdowns. Omitted = the last 30 days.
@@ -1147,7 +1223,99 @@ def ai_usage_analytics_admin(
     )
     start_date = _finance_parse_date(start) if (start or "").strip() else None
     end_date = _finance_parse_date(end) if (end or "").strip() else None
-    return ai_usage.build_ai_usage_analytics(db, start=start_date, end=end_date)
+    response.headers["Cache-Control"] = "no-store"
+    return ai_cost_reporting.recorded_usage_analytics(db, start=start_date, end=end_date)
+
+
+def _ai_cost_range(start, end):
+    return (_finance_parse_date(start) if (start or "").strip() else None,
+            _finance_parse_date(end) if (end or "").strip() else None)
+
+
+def _ai_cost_rate_limit(request, user_id, *, sync=False):
+    _enforce_rate_limit_or_429(
+        request=request, scope="admin.ai_costs.sync" if sync else "admin.ai_costs.read",
+        limit=6 if sync else ADMIN_ENDPOINT_RATE_LIMIT,
+        window_seconds=60 if sync else ADMIN_ENDPOINT_RATE_WINDOW_SECONDS,
+        extra_key=f"user:{user_id}")
+
+
+@router.get("/ai-usage/profiles/export")
+def ai_profiles_export(request: Request, start: str | None = None, end: str | None = None,
+                       search: str = Query("", max_length=200),
+                       current_user: models.User = Depends(get_current_admin_user),
+                       _: None = Depends(require_admin_turnstile_proof), db: Session = Depends(get_db)):
+    _ai_cost_rate_limit(request, current_user.id)
+    start_date, end_date = _ai_cost_range(start, end)
+    content = ai_cost_reporting.profiles_csv(db, start=start_date, end=end_date, search=search)
+    return Response(content, media_type="text/csv; charset=utf-8", headers={
+        "Content-Disposition": 'attachment; filename="rilono-b2c-ai-profile-usage.csv"',
+        "Cache-Control": "no-store", "X-Content-Type-Options": "nosniff"})
+
+
+@router.get("/ai-usage/profiles")
+def ai_profiles(request: Request, response: Response, start: str | None = None, end: str | None = None,
+                search: str = Query("", max_length=200), page: int = Query(1, ge=1),
+                page_size: int = Query(25, ge=1, le=100),
+                current_user: models.User = Depends(get_current_admin_user),
+                _: None = Depends(require_admin_turnstile_proof), db: Session = Depends(get_db)):
+    _ai_cost_rate_limit(request, current_user.id)
+    response.headers["Cache-Control"] = "no-store"
+    start_date, end_date = _ai_cost_range(start, end)
+    return ai_cost_reporting.build_profiles(db, start=start_date, end=end_date, search=search, page=page, page_size=page_size)
+
+
+@router.get("/ai-usage/profiles/{user_id}")
+def ai_profile_detail(user_id: int, request: Request, response: Response,
+                      start: str | None = None, end: str | None = None,
+                      current_user: models.User = Depends(get_current_admin_user),
+                      _: None = Depends(require_admin_turnstile_proof), db: Session = Depends(get_db)):
+    _ai_cost_rate_limit(request, current_user.id)
+    response.headers["Cache-Control"] = "no-store"
+    start_date, end_date = _ai_cost_range(start, end)
+    result = ai_cost_reporting.build_profile_detail(db, user_id, start=start_date, end=end_date)
+    if result is None:
+        raise HTTPException(404, "B2C profile not found.")
+    return result
+
+
+@router.get("/ai-usage/reconciliation")
+def ai_reconciliation(request: Request, response: Response,
+                      start: str | None = None, end: str | None = None,
+                      current_user: models.User = Depends(get_current_admin_user),
+                      _: None = Depends(require_admin_turnstile_proof), db: Session = Depends(get_db)):
+    _ai_cost_rate_limit(request, current_user.id)
+    response.headers["Cache-Control"] = "no-store"
+    start_date, end_date = _ai_cost_range(start, end)
+    try:
+        return ai_billing.build_reconciliation(db, start=start_date, end=end_date)
+    except ai_billing.BillingConfigurationError as exc:
+        raise HTTPException(503, str(exc)) from exc
+
+
+@router.post("/ai-usage/reconciliation/sync")
+def ai_reconciliation_sync(request: Request, response: Response, payload: dict = Body(default={}),
+                           current_user: models.User = Depends(get_current_admin_user),
+                           _: None = Depends(require_admin_turnstile_proof), db: Session = Depends(get_db)):
+    _ai_cost_rate_limit(request, current_user.id, sync=True)
+    response.headers["Cache-Control"] = "no-store"
+    if any(v is not None and not isinstance(v, str) for v in (payload.get("start"), payload.get("end"))):
+        raise HTTPException(422, "Dates must use YYYY-MM-DD.")
+    start_date, end_date = _ai_cost_range(payload.get("start"), payload.get("end"))
+    try:
+        return ai_billing.sync_billing(db, start=start_date, end=end_date)
+    except ai_billing.BillingConfigurationError as exc:
+        raise HTTPException(409, str(exc)) from exc
+    except ai_billing.BillingExportPending as exc:
+        # 202 reports an observed pending export without creating a false successful snapshot.
+        response.status_code = 202
+        result = ai_billing.build_reconciliation(db, start=start_date, end=end_date)
+        result.update(sync_status="awaiting_export", message=str(exc))
+        if result["last_synced_at"] is None:
+            result.update(status="awaiting_export", billing_status="awaiting_export")
+        return result
+    except ai_billing.BillingSyncError as exc:
+        raise HTTPException(502, str(exc)) from exc
 
 
 @router.get("/acquisition/analytics")
@@ -1608,11 +1776,12 @@ def enterprise_revenue_analytics_admin(
 @router.get("/b2c/revenue")
 def b2c_revenue_analytics_admin(
     request: Request,
+    response: Response,
     current_user: models.User = Depends(get_current_admin_user),
     _: None = Depends(require_admin_turnstile_proof),
     db: Session = Depends(get_db),
 ):
-    """B2C 'Visa Success Pass' economics: one-time pass revenue vs real Gemini cost."""
+    """Verified B2C revenue with explicit unavailable billed-cost and margin status."""
     _enforce_rate_limit_or_429(
         request=request,
         scope="admin.b2c.revenue",
@@ -1620,18 +1789,20 @@ def b2c_revenue_analytics_admin(
         window_seconds=ADMIN_ENDPOINT_RATE_WINDOW_SECONDS,
         extra_key=f"user:{current_user.id}",
     )
-    return visa_pass.build_revenue_analytics(db)
+    response.headers["Cache-Control"] = "no-store"
+    return ai_cost_reporting.recorded_b2c_revenue(visa_pass.build_revenue_analytics(db))
 
 
 @router.get("/b2c/accounts")
 def b2c_account_cost_profit_admin(
     request: Request,
+    response: Response,
     limit: int = Query(100, ge=1, le=500),
     current_user: models.User = Depends(get_current_admin_user),
     _: None = Depends(require_admin_turnstile_proof),
     db: Session = Depends(get_db),
 ):
-    """Per-account B2C economics: each student's attributed Gemini cost vs pass revenue = profit."""
+    """Verified per-account B2C revenue; unallocated billed costs and profit are unavailable."""
     _enforce_rate_limit_or_429(
         request=request,
         scope="admin.b2c.accounts",
@@ -1639,7 +1810,8 @@ def b2c_account_cost_profit_admin(
         window_seconds=ADMIN_ENDPOINT_RATE_WINDOW_SECONDS,
         extra_key=f"user:{current_user.id}",
     )
-    return visa_pass.build_account_cost_profit(db, limit=limit)
+    response.headers["Cache-Control"] = "no-store"
+    return ai_cost_reporting.recorded_b2c_accounts(visa_pass.build_account_cost_profit(db, limit=limit))
 
 
 @router.post("/enterprise/calendar-reminders/run")
@@ -1663,11 +1835,12 @@ def run_enterprise_calendar_reminders_admin(
 @router.get("/ai-optimization")
 def ai_optimization_analytics_admin(
     request: Request,
+    response: Response,
     current_user: models.User = Depends(get_current_admin_user),
     _: None = Depends(require_admin_turnstile_proof),
     db: Session = Depends(get_db),
 ):
-    """GCP cost-optimization metrics: off-topic prompts blocked + context-cache savings."""
+    """Recorded guardrail and cache event counts, without hypothetical savings."""
     _enforce_rate_limit_or_429(
         request=request,
         scope="admin.ai_optimization",
@@ -1675,7 +1848,8 @@ def ai_optimization_analytics_admin(
         window_seconds=ADMIN_ENDPOINT_RATE_WINDOW_SECONDS,
         extra_key=f"user:{current_user.id}",
     )
-    return ai_guardrails.build_optimization_analytics(db)
+    response.headers["Cache-Control"] = "no-store"
+    return ai_cost_reporting.recorded_optimization_counts(db)
 
 
 @router.get("/enterprise/accounts", response_model=schemas.AdminEnterpriseAccountListResponse)

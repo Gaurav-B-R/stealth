@@ -420,7 +420,7 @@ def courses_recommend(
     reserved = visa_pass.reserve_feature_or_402(db, subscription, FEATURE_KEY)
 
     try:
-        usage_token = ai_usage.set_usage_account(user_id=current_user.id)
+        usage_token = ai_usage.set_usage_account(user_id=current_user.id, product="b2c", trigger="user")
         try:
             result = course_catalog.recommend_courses(
                 destination_country=course_catalog.country_name(code),

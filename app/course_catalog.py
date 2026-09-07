@@ -389,20 +389,15 @@ def _grounded_generate(prompt: str, model_names: list[str] | str, usage_source: 
             config = _types.GenerateContentConfig(
                 tools=[_types.Tool(google_search=_types.GoogleSearch())],
                 temperature=0.3,
+                automatic_function_calling=_types.AutomaticFunctionCallingConfig(disable=True),
             )
-            response = client.models.generate_content(model=model_name, contents=prompt, config=config)
+            from app import ai_usage
+            response = ai_usage.tracked_gemini_call(
+                usage_source, model_name,
+                lambda: client.models.generate_content(model=model_name, contents=prompt, config=config),
+                product="shared", trigger="automation",
+            )
             text = (getattr(response, "text", "") or "").strip()
-            # Meter BEFORE the empty-text guard. Google has already billed this call —
-            # tokens plus every search the model ran — and a grounded response that comes
-            # back empty is the expensive case, not the free one. Recording after the
-            # `continue` below is how those calls used to vanish from the ledger.
-            try:
-                from app import ai_usage
-                ai_usage.record_gemini_usage(
-                    usage_source, model_name, response, status="ok" if text else "empty",
-                )
-            except Exception:
-                pass
             if not text:
                 continue
             return text, _extract_grounding_urls(response), _extract_grounding_domains(response)
@@ -428,7 +423,9 @@ def _generate_json(prompt: str, usage_source: str, *, prefer_grounded: bool) -> 
             text, source_urls, source_domains = grounded_result
             grounded = True
     if not text:
-        response = gemini_service._generate_content_with_fallback(candidates, prompt, usage_source=usage_source)
+        response = gemini_service._generate_content_with_fallback(
+            candidates, prompt, usage_source=usage_source, product="shared", trigger="automation",
+        )
         text = (getattr(response, "text", "") or "")
         # The fallback chain may have served from a later candidate — report the
         # model that actually answered when the response exposes it.

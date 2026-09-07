@@ -3176,77 +3176,75 @@ def ensure_ai_optimization_events_table():
 
 
 def ensure_gemini_usage_table():
-    """Ensure the gemini_usage_events table exists for the admin AI-cost tracker, and
-    that it carries per-account attribution columns (user_id, organization_id)."""
+    """Add the v2 usage ledger without claiming legacy rows were fully metered.
+
+    Repeated startup is safe. The only historical counter correction converts the
+    documented legacy GCP TTS character counters into their own unit columns.
+    Profile, product, provider and response attribution are never guessed.
+    """
+    from app.models import GeminiUsageEvent
+    GeminiUsageEvent.__table__.create(bind=engine, checkfirst=True)
+    additions = {
+        "user_id": "INTEGER", "organization_id": "INTEGER",
+        "cached_tokens": "INTEGER NOT NULL DEFAULT 0",
+        "search_queries": "INTEGER NOT NULL DEFAULT 0",
+        "search_cost_usd": "NUMERIC(12,6) NOT NULL DEFAULT 0",
+        "status": "VARCHAR NOT NULL DEFAULT 'ok'",
+        "event_key": "VARCHAR(96)", "response_id": "VARCHAR(256)",
+        "provider": "VARCHAR(32)", "project_id": "VARCHAR(128)",
+        "product": "VARCHAR(24) NOT NULL DEFAULT 'unknown'",
+        "trigger": "VARCHAR(24) NOT NULL DEFAULT 'unknown'",
+        "metering_version": "INTEGER NOT NULL DEFAULT 1",
+        "candidate_tokens": "INTEGER NOT NULL DEFAULT 0",
+        "thought_tokens": "INTEGER NOT NULL DEFAULT 0",
+        "tool_tokens": "INTEGER NOT NULL DEFAULT 0",
+        "unit_type": "VARCHAR(24) NOT NULL DEFAULT 'tokens'",
+        "character_count": "INTEGER NOT NULL DEFAULT 0",
+        "raw_usage_json": "TEXT",
+        "usage_state": "VARCHAR(24) NOT NULL DEFAULT 'legacy'",
+        "pricing_status": "VARCHAR(24) NOT NULL DEFAULT 'legacy_estimate'",
+        "pricing_version": "VARCHAR(80)",
+    }
     with engine.begin() as conn:
-        if _table_exists(conn, "gemini_usage_events"):
-            # Backfill per-account attribution columns on existing installs.
-            cols = _get_table_columns(conn, "gemini_usage_events")
-            if "user_id" not in cols:
-                conn.execute(text("ALTER TABLE gemini_usage_events ADD COLUMN user_id INTEGER"))
-                conn.execute(text("CREATE INDEX IF NOT EXISTS ix_gemini_usage_events_user_id ON gemini_usage_events(user_id)"))
-            if "organization_id" not in cols:
-                conn.execute(text("ALTER TABLE gemini_usage_events ADD COLUMN organization_id INTEGER"))
-                conn.execute(text("CREATE INDEX IF NOT EXISTS ix_gemini_usage_events_organization_id ON gemini_usage_events(organization_id)"))
-            if "cached_tokens" not in cols:
-                conn.execute(text("ALTER TABLE gemini_usage_events ADD COLUMN cached_tokens INTEGER NOT NULL DEFAULT 0"))
-            # Google Search grounding is billed per request, not per token, so it needs
-            # its own columns — estimated_cost_usd stays the TOTAL (tokens + search) and
-            # pre-existing rows keep their meaning, with search columns defaulting to 0.
-            if "search_queries" not in cols:
-                conn.execute(text("ALTER TABLE gemini_usage_events ADD COLUMN search_queries INTEGER NOT NULL DEFAULT 0"))
-            if "search_cost_usd" not in cols:
-                conn.execute(text("ALTER TABLE gemini_usage_events ADD COLUMN search_cost_usd NUMERIC(12,6) NOT NULL DEFAULT 0"))
-            if "status" not in cols:
-                conn.execute(text("ALTER TABLE gemini_usage_events ADD COLUMN status VARCHAR NOT NULL DEFAULT 'ok'"))
-                conn.execute(text("CREATE INDEX IF NOT EXISTS ix_gemini_usage_events_status ON gemini_usage_events(status)"))
-            return
-        if engine.dialect.name == "sqlite":
-            conn.execute(text("""
-                CREATE TABLE gemini_usage_events (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    source VARCHAR NOT NULL,
-                    model VARCHAR NOT NULL,
-                    user_id INTEGER,
-                    organization_id INTEGER,
-                    prompt_tokens INTEGER NOT NULL DEFAULT 0,
-                    output_tokens INTEGER NOT NULL DEFAULT 0,
-                    total_tokens INTEGER NOT NULL DEFAULT 0,
-                    cached_tokens INTEGER NOT NULL DEFAULT 0,
-                    search_queries INTEGER NOT NULL DEFAULT 0,
-                    search_cost_usd NUMERIC(12,6) NOT NULL DEFAULT 0,
-                    status VARCHAR NOT NULL DEFAULT 'ok',
-                    estimated_cost_usd NUMERIC(12,6) NOT NULL DEFAULT 0,
-                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP NOT NULL
-                )
-            """))
-        else:
-            conn.execute(text("""
-                CREATE TABLE gemini_usage_events (
-                    id SERIAL PRIMARY KEY,
-                    source VARCHAR NOT NULL,
-                    model VARCHAR NOT NULL,
-                    user_id INTEGER,
-                    organization_id INTEGER,
-                    prompt_tokens INTEGER NOT NULL DEFAULT 0,
-                    output_tokens INTEGER NOT NULL DEFAULT 0,
-                    total_tokens INTEGER NOT NULL DEFAULT 0,
-                    cached_tokens INTEGER NOT NULL DEFAULT 0,
-                    search_queries INTEGER NOT NULL DEFAULT 0,
-                    search_cost_usd NUMERIC(12,6) NOT NULL DEFAULT 0,
-                    status VARCHAR NOT NULL DEFAULT 'ok',
-                    estimated_cost_usd NUMERIC(12,6) NOT NULL DEFAULT 0,
-                    created_at TIMESTAMPTZ DEFAULT NOW() NOT NULL
-                )
-            """))
-        for stmt in (
-            "CREATE INDEX IF NOT EXISTS ix_gemini_usage_events_source ON gemini_usage_events(source)",
-            "CREATE INDEX IF NOT EXISTS ix_gemini_usage_events_model ON gemini_usage_events(model)",
-            "CREATE INDEX IF NOT EXISTS ix_gemini_usage_events_user_id ON gemini_usage_events(user_id)",
-            "CREATE INDEX IF NOT EXISTS ix_gemini_usage_events_organization_id ON gemini_usage_events(organization_id)",
-            "CREATE INDEX IF NOT EXISTS ix_gemini_usage_events_created_at ON gemini_usage_events(created_at)",
-        ):
-            conn.execute(text(stmt))
+        cols = _get_table_columns(conn, "gemini_usage_events")
+        for name, definition in additions.items():
+            if name not in cols:
+                conn.execute(text(f"ALTER TABLE gemini_usage_events ADD COLUMN {name} {definition}"))
+        for name in ("source", "model", "user_id", "organization_id", "created_at", "status",
+                     "response_id", "provider", "project_id", "product", "usage_state"):
+            conn.execute(text(f"CREATE INDEX IF NOT EXISTS ix_gemini_usage_events_{name} "
+                              f"ON gemini_usage_events({name})"))
+        conn.execute(text("CREATE UNIQUE INDEX IF NOT EXISTS ix_gemini_usage_events_event_key "
+                          "ON gemini_usage_events(event_key)"))
+        conn.execute(text("""
+            UPDATE gemini_usage_events
+            SET character_count = CASE WHEN prompt_tokens > total_tokens THEN prompt_tokens ELSE total_tokens END,
+                prompt_tokens = 0, output_tokens = 0, total_tokens = 0, cached_tokens = 0,
+                candidate_tokens = 0, thought_tokens = 0, tool_tokens = 0,
+                unit_type = 'characters', provider = 'google_cloud_tts'
+            WHERE model LIKE 'gcp-tts/%' AND metering_version = 1 AND unit_type = 'tokens'
+        """))
+
+        # Early local v2 installs may have retained the same response under two
+        # attempt IDs. Preserve those attempts while selecting one canonical meter.
+        conn.execute(text("""
+            UPDATE gemini_usage_events
+            SET usage_state = 'duplicate', status = 'duplicate', pricing_status = 'duplicate',
+                prompt_tokens = 0, output_tokens = 0, total_tokens = 0, cached_tokens = 0,
+                candidate_tokens = 0, thought_tokens = 0, tool_tokens = 0, character_count = 0,
+                search_queries = 0, search_cost_usd = 0, estimated_cost_usd = 0
+            WHERE response_id IS NOT NULL AND usage_state <> 'duplicate'
+              AND id NOT IN (
+                SELECT MIN(id) FROM gemini_usage_events
+                WHERE response_id IS NOT NULL AND usage_state <> 'duplicate'
+                GROUP BY COALESCE(provider, 'unknown'), COALESCE(project_id, ''), response_id
+              )
+        """))
+        conn.execute(text("""
+            CREATE UNIQUE INDEX IF NOT EXISTS uq_gemini_usage_provider_response
+            ON gemini_usage_events(COALESCE(provider, 'unknown'), COALESCE(project_id, ''), response_id)
+            WHERE response_id IS NOT NULL AND usage_state <> 'duplicate'
+        """))
 
 
 def ensure_company_finance_entries_table():

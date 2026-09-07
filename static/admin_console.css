@@ -482,6 +482,32 @@ body {
     justify-content: start;
 }
 
+.users-table-toolbar {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    justify-content: space-between;
+    gap: 0.6rem 1rem;
+    margin-bottom: 0.7rem;
+}
+
+.users-table-toolbar .users-summary {
+    margin: 0;
+}
+
+.users-export-actions {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 0.5rem;
+}
+
+.users-export-hint {
+    color: #64748b;
+    font-size: 0.8rem;
+    margin-right: 0.2rem;
+}
+
 .enterprise-credential-card {
     margin-bottom: 0.9rem;
     border: 1px solid #d7e4f5;
@@ -1155,6 +1181,18 @@ button:disabled {
 }
 
 @media (max-width: 620px) {
+    .users-export-actions {
+        width: 100%;
+    }
+
+    .users-export-hint {
+        flex-basis: 100%;
+    }
+
+    .users-export-actions .ghost-btn {
+        flex: 1;
+    }
+
     .tab-row {
         width: 100%;
         display: grid;
@@ -1682,6 +1720,60 @@ body.admin-modal-open {
     border-top: 1px solid #cbd5e1;
     font-size: 0.82rem;
     color: #0f172a;
+}
+
+/* --- AI cost timeline (SVG column chart) --- */
+/* Profile accounting and provider reconciliation share the selected UTC range. */
+.ai-accounting-card {
+    margin: 0 0 1rem;
+    padding: 1.1rem;
+    border: 1px solid #d7e4f5;
+    border-radius: 16px;
+    background: #fff;
+}
+.ai-accounting-head { display: flex; justify-content: space-between; align-items: flex-start; gap: 1rem; flex-wrap: wrap; }
+.ai-accounting-head h3, .ai-accounting-head h4 { margin: .2rem 0; color: #0f172a; font-size: 1.04rem; }
+.ai-accounting-head p, .ai-accounting-note { margin: .35rem 0 0; color: #475569; font-size: .82rem; line-height: 1.6; }
+.ai-accounting-head > .table-btn { flex-shrink: 0; }
+.ai-section-eyebrow { color: #6d28d9; font-size: .7rem; font-weight: 800; letter-spacing: .08em; text-transform: uppercase; }
+.ai-coverage-note { margin: .9rem 0; padding: .75rem .9rem; border: 1px solid #fde68a; border-radius: 10px; background: #fffbeb; color: #713f12; font-size: .8rem; line-height: 1.65; }
+.ai-coverage-note p { margin: 0; }
+.ai-coverage-note p + p { margin-top: .35rem; }
+.ai-profile-search { display: flex; align-items: flex-end; flex-wrap: wrap; gap: .5rem; margin: 1rem 0; }
+.ai-profile-search .finance-field { flex: 1; min-width: 180px; max-width: 380px; }
+.ai-profile-search .table-btn { min-height: 2.35rem; }
+.ai-table-caption { text-align: left; padding: .5rem 0 .75rem; color: #64748b; font-size: .76rem; line-height: 1.5; }
+.ai-profiles-table th span, .ai-feature-table th span { font-weight: 500; text-transform: none; letter-spacing: 0; }
+.ai-profiles-table td { font-variant-numeric: tabular-nums; vertical-align: top; }
+.ai-profile-link { padding: 0; border: 0; background: none; color: #4338ca; font: inherit; font-weight: 750; cursor: pointer; text-align: left; }
+.ai-profile-link:hover { text-decoration: underline; }
+.ai-profile-link:focus-visible { outline: 2px solid #6366f1; outline-offset: 4px; border-radius: 3px; }
+.ai-coverage-chip { display: inline-block; margin: 0 .25rem .2rem 0; border-radius: 6px; padding: .2rem .4rem; background: #f1f5f9; color: #475569; font-size: .69rem; font-weight: 650; white-space: nowrap; }
+.ai-coverage-chip.warning { background: #fff7ed; color: #9a3412; }
+.ai-profiles-pagination { display: flex; justify-content: space-between; gap: .75rem; align-items: center; flex-wrap: wrap; margin-top: .8rem; }
+.ai-profiles-pagination p, .ai-profiles-pagination span { margin: 0; font-size: .79rem; color: #64748b; }
+.ai-profiles-pagination > div { display: flex; gap: .65rem; align-items: center; }
+.ai-profile-detail { margin-top: 1rem; padding-top: 1.1rem; border-top: 1px solid #e2e8f0; scroll-margin-top: 1rem; }
+.ai-profile-detail[hidden] { display: none; }
+.ai-profile-detail h5 { margin: 1.25rem 0 .55rem; font-size: .85rem; color: #334155; }
+.ai-feature-table { min-width: 1120px; }
+.ai-feature-table th, .ai-feature-table td { white-space: nowrap; font-variant-numeric: tabular-nums; }
+.ai-feature-table th:first-child, .ai-feature-table td:first-child { width: 200px; min-width: 190px; max-width: 220px; white-space: normal; overflow-wrap: anywhere; }
+.ai-scroll-hint { margin-top: 0; font-weight: 600; }
+.ai-feature-table .ai-feature-total td { background: #f8fafc; font-weight: 750; }
+.ai-detail-help { margin: .65rem 0; color: #64748b; font-size: .77rem; line-height: 1.65; }
+.ai-reconciliation-content { margin-top: .85rem; }
+.ai-billing-metrics { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: .7rem; }
+.ai-billing-metric { padding: .8rem; border-radius: 10px; border: 1px solid #e2e8f0; background: #f8fafc; }
+.ai-billing-metric span { display: block; color: #64748b; font-size: .72rem; margin-bottom: .3rem; }
+.ai-billing-metric strong { display: block; overflow-wrap: anywhere; color: #0f172a; font-size: 1.2rem; font-variant-numeric: tabular-nums; }
+.ai-billing-meta { display: flex; flex-wrap: wrap; gap: .45rem 1.1rem; font-size: .76rem; color: #64748b; margin: .8rem 0 0; }
+@media (max-width: 680px) {
+    .ai-accounting-card { padding: .85rem; }
+    .ai-billing-metrics { grid-template-columns: 1fr; }
+    .ai-accounting-head > .table-btn { width: 100%; }
+    .ai-profiles-pagination > div { width: 100%; justify-content: space-between; }
+    .ai-profile-search .finance-field { min-width: 100%; }
 }
 
 /* --- AI cost timeline (SVG column chart) --- */

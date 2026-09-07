@@ -525,7 +525,7 @@ def upload_document(
         )
 
     # Attribute the document-AI (validation/extraction) Gemini cost to this account.
-    ai_usage.set_usage_account(user_id=current_user.id)
+    ai_usage.set_usage_account(user_id=current_user.id, product="b2c", trigger="user")
 
     ensure_default_document_type_catalog(db)
     _scope_country, _scope_visa = _user_visa_scope(current_user)
@@ -1077,7 +1077,7 @@ def ai_validate_document_transient(
     content_type = get_content_type(upload_filename)
 
     # Attribute the Gemini cost to this account.
-    ai_usage.set_usage_account(user_id=current_user.id)
+    ai_usage.set_usage_account(user_id=current_user.id, product="b2c", trigger="user")
 
     try:
         student_profile_context, related_documents_context = build_upload_validation_context(
