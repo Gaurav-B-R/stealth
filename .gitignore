@@ -57,6 +57,11 @@ build/
 
 # Local sandbox document storage (rilono-local preview / e2e sandbox)
 _docs_local/
+
+# Generated files for local demo-video work
+/_docs_demo/
+/_demo_video.db*
+/demo_video/
 .aider*
 # Private accounting recovery records must never be committed.
 /data/ai_usage_spool/
