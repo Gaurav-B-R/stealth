@@ -274,19 +274,62 @@ test('headline uses only imported native-currency gross, credits and net, never 
     assert.match(headline, /INR -100\.00/);
     assert.match(headline, /INR 1,100\.00/);
     assert.doesNotMatch(headline, /\$15|\$12|\$3|estimate|difference/i);
-    assert.equal(app.refs.aiMonthHero.textContent, 'INR 1,100.00');
+    // The tracked headline is the charge before credits; credits and net stay visible beneath it.
+    assert.equal(app.refs.aiMonthHero.textContent, 'INR 1,200.00');
+    assert.equal(app.refs.aiHeroLabel.textContent, 'Google cost before credits');
+    assert.equal(app.refs.aiHeroNote.textContent, 'Credits INR -100.00 · Net INR 1,100.00');
 });
 
 test('an actual zero billing record remains distinguishable from missing imports', () => {
     const app = setup();
     app.renderAiReconciliation({ configured: true, status: 'available', totals: [{ currency: 'USD', cost: 0, credits: 0, net_cost: 0 }] });
     assert.equal(app.refs.aiMonthHero.textContent, '$0.00');
-    assert.equal(app.refs.aiHeroLabel.textContent, 'Imported Google net cost');
+    assert.equal(app.refs.aiHeroLabel.textContent, 'Google cost before credits');
+    assert.equal(app.refs.aiHeroNote.textContent, 'Credits $0.00 · Net $0.00');
     assert.match(app.refs.aiReconciliation.innerHTML, /Imported Google billing records/);
-    assert.doesNotMatch(app.refs.aiReconciliation.innerHTML, /no billed amount has been imported/);
+    assert.doesNotMatch(app.refs.aiReconciliation.innerHTML, /no billed amount has been imported|credits reduce/);
     app.renderAiReconciliation({ configured: true, status: 'no_data', totals: [] });
     assert.equal(app.refs.aiMonthHero.textContent, '$0.00');
     assert.equal(app.refs.aiHeroLabel.textContent, 'No imported billing amount');
+    assert.equal(app.refs.aiHeroNote.textContent, '');
+});
+
+test('fully credited usage keeps the charge before credits as the tracked figure and lists credits by name', () => {
+    const app = setup();
+    app.renderAiReconciliation({ configured: true, status: 'available', range: {}, credits_applied: true, credit_breakdown_available: true,
+        totals: [{ currency: 'USD', cost: '3.493160', credits: '-3.493160', net_cost: '0.000000' }],
+        credit_breakdown: [{ currency: 'USD', type: 'PROMOTION', name: 'FreeTrial:Credit-1', full_name: '<Free Trial>', amount: '-3.493160' }] });
+    assert.equal(app.refs.aiMonthHero.textContent, '$3.49316');
+    assert.equal(app.refs.aiHeroLabel.textContent, 'Google cost before credits');
+    assert.equal(app.refs.aiHeroNote.textContent, 'Credits $-3.49316 · Net $0.00');
+    const html = app.refs.aiReconciliation.innerHTML;
+    assert.match(html, /Track the cost before credits as the actual usage cost/);
+    assert.match(html, /Credits applied by Google/);
+    assert.match(html, /&lt;Free Trial&gt; · promotion/);
+    assert.match(html, /\$-3\.49316/);
+    assert.doesNotMatch(html, /<Free Trial>/);
+    // A snapshot imported before credit names existed says so instead of implying there were no credits.
+    app.renderAiReconciliation({ configured: true, status: 'available', range: {}, credit_breakdown_available: false,
+        totals: [{ currency: 'USD', cost: '1', credits: '-1', net_cost: '0' }], credit_breakdown: [] });
+    assert.match(app.refs.aiReconciliation.innerHTML, /Run Sync billing to load them/);
+    // Without credits there is no credit copy at all.
+    app.renderAiReconciliation({ configured: true, status: 'available', range: {}, totals: [{ currency: 'USD', cost: '1', credits: '0', net_cost: '1' }] });
+    assert.doesNotMatch(app.refs.aiReconciliation.innerHTML, /credits reduce|Credits applied|Sync billing to load/);
+    assert.equal(app.refs.aiHeroNote.textContent, 'Credits $0.00 · Net $1.00');
+    // A credit present only in the breakdown is still listed, and same-named grants stay distinguishable.
+    app.renderAiReconciliation({ configured: true, status: 'available', range: {}, totals: [{ currency: 'USD', cost: '1', credits: '0', net_cost: '1' }],
+        credit_breakdown_available: true, credit_breakdown: [
+            { currency: 'USD', type: 'PROMOTION', name: 'FreeTrial:Credit-A', full_name: 'Free Trial', amount: '-0.75' },
+            { currency: 'USD', type: 'PROMOTION', name: 'FreeTrial:Credit-B', full_name: 'Free Trial', amount: '-0.25' }] });
+    const listed = app.refs.aiReconciliation.innerHTML;
+    assert.match(listed, /Credits applied by Google/);
+    assert.match(listed, /<small>FreeTrial:Credit-A<\/small>/);
+    assert.match(listed, /<small>FreeTrial:Credit-B<\/small>/);
+    // While Google's export is pending, the copy does not tell the admin to run the sync they just ran.
+    app.renderAiReconciliation({ configured: true, status: 'available', sync_status: 'awaiting_export', last_synced_at: '2026-09-01T12:00:00', range: {},
+        totals: [{ currency: 'USD', cost: '1', credits: '-1', net_cost: '0' }], credit_breakdown: [], credit_breakdown_available: false });
+    assert.match(app.refs.aiReconciliation.innerHTML, /imported by the next successful sync/);
+    assert.doesNotMatch(app.refs.aiReconciliation.innerHTML, /Run Sync billing to load them/);
 });
 
 test('billing sync snapshots selected dates and requires admin protection', async () => {
@@ -419,7 +462,8 @@ test('pending export retains the prior import and timestamp without claiming a f
     assert.match(app.refs.flash.textContent, /Awaiting Google billing export/);
     assert.equal(app.refs.flash.className, 'flash info');
     assert.equal(app.state.aiBilling.data.last_synced_at, oldTimestamp);
-    assert.equal(app.refs.aiMonthHero.textContent, '$1.023456789');
+    assert.equal(app.refs.aiMonthHero.textContent, '$1.123456789');
+    assert.equal(app.refs.aiHeroNote.textContent, 'Credits $-0.10 · Net $1.023456789');
 });
 
 test('billing string formatting preserves all significant digits without floating-point conversion', () => {
@@ -481,7 +525,8 @@ test('global cards daily rows and CSV show calculated money while Google billing
     assert.match(csv, /current_standard_list_rates/);
     assert.doesNotMatch(csv, /98765/);
     app.renderAiReconciliation({ configured: true, status: 'available', totals: [{ currency: 'INR', cost: '12', credits: '-2', net_cost: '10' }] });
-    assert.equal(app.refs.aiMonthHero.textContent, 'INR 10.00');
+    assert.equal(app.refs.aiMonthHero.textContent, 'INR 12.00');
+    assert.equal(app.refs.aiHeroNote.textContent, 'Credits INR -2.00 · Net INR 10.00');
     assert.equal(app.refs.aiCalculatedCost.textContent, '$0.00123456789');
     app.aiUsageEmptyState('Offline');
     assert.equal(app.refs.aiCalculatedCost.textContent, '$0.00');

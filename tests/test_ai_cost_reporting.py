@@ -1,6 +1,7 @@
 """Accounting scope, lifetime history, exports and admin-only billing reconciliation."""
 import csv
-from datetime import date, datetime
+import json
+from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal
 from io import StringIO
 from types import SimpleNamespace
@@ -36,6 +37,21 @@ def db(monkeypatch, tmp_path):
     yield session
     session.close()
     engine.dispose()
+
+
+@pytest.fixture(autouse=True)
+def credit_breakdown_stub(monkeypatch):
+    """Sync tests stub query_export; the credit-name query is stubbed empty unless a test overrides it."""
+    original = ai_billing.query_credit_breakdown
+    monkeypatch.setattr(ai_billing, "query_credit_breakdown", lambda cfg, start, end, *, client=None, as_of=None: [])
+    return original
+
+
+def credit_row(**changes):
+    data = {"currency": "USD", "credit_type": "PROMOTION", "credit_name": "FreeTrial:Credit-1",
+            "credit_id": "FreeTrial:Credit-1", "credit_full_name": "Free Trial", "amount": "-0.5"}
+    data.update(changes)
+    return data
 
 
 def event(db, **changes):
@@ -536,3 +552,122 @@ def test_real_rate_engine_matches_profile_daily_feature_and_global_cost_sums(db)
         assert sum(Decimal(row["calculated_cost_usd"]) for row in data[field]) == Decimal("2.73875")
     assert Decimal(data["range"]["calculated_cost_usd"]) == Decimal("2.73875")
     assert Decimal(data["totals"]["all_time"]["calculated_cost_usd"]) == Decimal("2.73875")
+
+
+def test_credits_are_tracked_separately_from_the_charge_before_credits(db, monkeypatch):
+    configured(monkeypatch)
+    monkeypatch.setattr(ai_billing, "query_export", lambda *a, **k: [
+        google_row(currency="USD", currency_conversion_rate="1", cost="0.5", credits="-0.5")])
+    monkeypatch.setattr(ai_billing, "query_credit_breakdown", lambda *a, **k: [
+        credit_row(), credit_row(credit_type="DISCOUNT", credit_name="Committed use", credit_full_name="", amount="0")])
+    data = ai_billing.sync_billing(db, start=START, end=END)
+    # The charge before credits stays the tracked usage cost even when a free-trial credit makes net 0.
+    assert data["google_cost_usd"] == 0.5
+    assert data["google_credits_usd"] == -0.5
+    assert data["google_net_cost_usd"] == 0
+    assert data["totals"][0]["cost"] == "0.5" and data["totals"][0]["net_cost"] == "0.0"
+    assert data["credits_applied"] is True
+    assert data["credit_breakdown_available"] is True
+    assert data["credit_breakdown"][0] == {"currency": "USD", "type": "PROMOTION", "name": "FreeTrial:Credit-1",
+                                           "id": "FreeTrial:Credit-1", "full_name": "Free Trial", "amount": "-0.5"}
+    assert [c["amount"] for c in data["credit_breakdown"]] == ["-0.5", "0"]
+    # Row snapshots keep their original list shape; credit names live in their own table so a
+    # build without credit support keeps reading and rewriting the row snapshot unchanged.
+    assert isinstance(json.loads(db.query(ai_billing.AiBillingSnapshot).one().payload_json), list)
+    credit_snapshot = db.query(ai_billing.AiBillingCreditSnapshot).one()
+    assert credit_snapshot.synced_at == db.query(ai_billing.AiBillingSnapshot).one().synced_at
+    assert [c["credit_name"] for c in json.loads(credit_snapshot.payload_json)] == ["FreeTrial:Credit-1", "Committed use"]
+    # Invalid credit values are rejected before the previous snapshot is replaced.
+    monkeypatch.setattr(ai_billing, "query_credit_breakdown", lambda *a, **k: [credit_row(amount="NaN")])
+    with pytest.raises(ai_billing.BillingSyncError):
+        ai_billing.sync_billing(db, start=START, end=END)
+    retained = ai_billing.build_reconciliation(db, start=START, end=END)
+    assert retained["credit_breakdown"][0]["amount"] == "-0.5"
+    assert retained["last_synced_at"] == data["last_synced_at"]
+
+
+def test_snapshots_written_before_credit_breakdowns_still_render(db, monkeypatch):
+    configured(monkeypatch)
+    cfg = ai_billing.configuration()
+    legacy_rows = [google_row(currency="USD", currency_conversion_rate="1", cost="2", credits="-2")]
+    db.add(ai_billing.AiBillingSnapshot(scope_key=cfg["scope_key"], start_date=START, end_date=END,
+                                        payload_json=json.dumps(legacy_rows), synced_at=datetime(2026, 9, 1, tzinfo=timezone.utc)))
+    db.commit()
+    data = ai_billing.build_reconciliation(db, start=START, end=END)
+    assert data["status"] == "available"
+    assert data["google_cost_usd"] == 2
+    assert data["credits_applied"] is True
+    assert data["credit_breakdown"] == []
+    assert data["credit_breakdown_available"] is False
+    uncredited = ai_billing.build_reconciliation(db, start=date(2026, 7, 1), end=date(2026, 7, 2))
+    assert uncredited["credits_applied"] is False and uncredited["credit_breakdown"] == []
+    # A credit snapshot older than the rows (rows re-imported by a build without credit support)
+    # is not paired with those rows.
+    db.add(ai_billing.AiBillingCreditSnapshot(scope_key=cfg["scope_key"], start_date=START, end_date=END,
+                                              payload_json=json.dumps([credit_row()]), synced_at=datetime(2026, 8, 31, tzinfo=timezone.utc)))
+    db.commit()
+    stale = ai_billing.build_reconciliation(db, start=START, end=END)
+    assert stale["credit_breakdown"] == [] and stale["credit_breakdown_available"] is False
+    monkeypatch.setattr(ai_billing, "query_export", lambda *a, **k: legacy_rows)
+    monkeypatch.setattr(ai_billing, "query_credit_breakdown", lambda *a, **k: [credit_row()])
+    fresh = ai_billing.sync_billing(db, start=START, end=END)
+    assert fresh["credit_breakdown_available"] is True and fresh["credit_breakdown"][0]["full_name"] == "Free Trial"
+
+
+def test_credit_breakdown_query_is_scoped_bounded_and_parameterized(monkeypatch, credit_breakdown_stub):
+    configured(monkeypatch)
+    captured = {}
+    class Client:
+        def query(self, sql, **kwargs):
+            captured.update(sql=sql, **kwargs)
+            return SimpleNamespace(result=lambda timeout: iter([credit_row(amount=Decimal("-1.5"))]))
+    rows = credit_breakdown_stub(ai_billing.configuration(), START, END, client=Client())
+    assert rows == [credit_row(amount="-1.5")]
+    assert "UNNEST(credits)" in captured["sql"]
+    assert "FOR SYSTEM_TIME AS OF @as_of" in captured["sql"]
+    assert "@usage_project" in captured["sql"] and "@services" in captured["sql"] and "@start_date" in captured["sql"]
+    assert captured["job_config"].maximum_bytes_billed == 1000000000
+    assert [param.name for param in captured["job_config"].query_parameters] == ["start_date", "end_date", "usage_project", "services", "as_of"]
+    as_of = captured["job_config"].query_parameters[4].value
+    assert as_of.tzinfo is not None and as_of < datetime.now(timezone.utc)
+
+
+def test_both_sync_queries_share_one_read_point_and_credits_alone_count(db, monkeypatch):
+    configured(monkeypatch)
+    seen = []
+    monkeypatch.setattr(ai_billing, "query_export", lambda cfg, start, end, *, client=None, as_of=None: seen.append(as_of) or [
+        google_row(currency="USD", currency_conversion_rate="1", cost="1", credits="0")])
+    monkeypatch.setattr(ai_billing, "query_credit_breakdown", lambda cfg, start, end, *, client=None, as_of=None: seen.append(as_of) or [credit_row(amount="-1")])
+    data = ai_billing.sync_billing(db, start=START, end=END)
+    assert len(seen) == 2 and seen[0] == seen[1] and seen[0] is not None
+    assert seen[0] <= datetime.now(timezone.utc) - timedelta(seconds=59)
+    # A credit that the row totals do not show yet is still reported rather than hidden.
+    assert data["totals"][0]["credits"] == "0"
+    assert data["credits_applied"] is True
+    assert data["credit_breakdown"][0]["amount"] == "-1"
+
+
+def test_credit_query_failure_after_rows_keeps_previous_snapshot(db, monkeypatch):
+    from google.api_core.exceptions import NotFound
+    configured(monkeypatch)
+    monkeypatch.setattr(ai_billing, "query_export", lambda cfg, start, end, *, client=None, as_of=None: [google_row()])
+    monkeypatch.setattr(ai_billing, "query_credit_breakdown", lambda cfg, start, end, *, client=None, as_of=None: [credit_row()])
+    previous = ai_billing.sync_billing(db, start=START, end=END)
+    def boom(cfg, start, end, *, client=None, as_of=None):
+        raise RuntimeError("SECRET credit query failure")
+    monkeypatch.setattr(ai_billing, "query_credit_breakdown", boom)
+    with pytest.raises(ai_billing.BillingSyncError) as exc:
+        ai_billing.sync_billing(db, start=START, end=END)
+    assert "SECRET" not in str(exc.value)
+    retained = ai_billing.build_reconciliation(db, start=START, end=END)
+    assert retained["last_synced_at"] == previous["last_synced_at"]
+    assert retained["totals"] == previous["totals"]
+    assert retained["credit_breakdown"] == previous["credit_breakdown"]
+    def not_yet_exported(cfg, start, end, *, client=None, as_of=None):
+        raise NotFound("no table")
+    monkeypatch.setattr(ai_billing, "query_credit_breakdown", not_yet_exported)
+    fresh_start, fresh_end = date(2026, 7, 1), date(2026, 7, 31)
+    with pytest.raises(ai_billing.BillingExportPending):
+        ai_billing.sync_billing(db, start=fresh_start, end=fresh_end)
+    assert db.query(ai_billing.AiBillingSnapshot).filter_by(start_date=fresh_start).count() == 0
+    assert db.query(ai_billing.AiBillingCreditSnapshot).filter_by(start_date=fresh_start).count() == 0

@@ -666,6 +666,7 @@ body {
 
 .finance-hero-stat strong {
     margin-top: 6px;
+    overflow-wrap: anywhere;
     font-size: 1.85rem;
     font-weight: 650;
     letter-spacing: -0.04em;
@@ -1760,6 +1761,14 @@ body.admin-modal-open {
 .ai-billing-metric span { display: block; color: #64748b; font-size: .72rem; margin-bottom: .3rem; }
 .ai-billing-metric strong { display: block; overflow-wrap: anywhere; color: #0f172a; font-size: 1.2rem; font-variant-numeric: tabular-nums; }
 .ai-billing-meta { display: flex; flex-wrap: wrap; gap: .45rem 1.1rem; font-size: .76rem; color: #64748b; margin: .8rem 0 0; }
+.finance-hero-note { display: block; margin-top: 6px; font-size: .74rem; color: #635892; font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
+.finance-hero-note:empty { display: none; }
+.ai-billing-credits { margin-top: .85rem; }
+.ai-billing-credits h5 { margin: 0 0 .4rem; font-size: .8rem; color: #334155; }
+.ai-billing-credits ul { list-style: none; margin: 0; padding: 0; display: grid; gap: .35rem; }
+.ai-billing-credits li { display: flex; justify-content: space-between; gap: 1rem; padding: .55rem .75rem; border: 1px solid #e2e8f0; border-radius: 8px; background: #fff; font-size: .8rem; color: #475569; }
+.ai-billing-credits li strong { color: #0f172a; font-variant-numeric: tabular-nums; }
+.ai-billing-credits li small { display: block; color: #94a3b8; font-size: .7rem; overflow-wrap: anywhere; }
 @media (max-width: 680px) {
     .ai-accounting-card { padding: .85rem; }
     .ai-billing-metrics { grid-template-columns: 1fr; }

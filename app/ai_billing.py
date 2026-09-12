@@ -9,7 +9,7 @@ import hashlib
 import json
 import os
 import re
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from decimal import Decimal, InvalidOperation, localcontext
 
 from sqlalchemy import Column, Date, DateTime, Integer, String, Text, UniqueConstraint, func, or_
@@ -28,6 +28,22 @@ class AiBillingSnapshot(Base):
     payload_json = Column(Text, nullable=False)
     synced_at = Column(DateTime(timezone=True), nullable=False)
     __table_args__ = (UniqueConstraint("scope_key", "start_date", "end_date", name="uq_ai_billing_window"),)
+
+
+class AiBillingCreditSnapshot(Base):
+    """Credits by Google credit type/name for one synced window.
+
+    Kept beside, not inside, AiBillingSnapshot.payload_json so that builds without credit support
+    (the live prod worker during rollout) keep reading and rewriting the row snapshot unchanged.
+    """
+    __tablename__ = "ai_billing_credit_snapshots"
+    id = Column(Integer, primary_key=True)
+    scope_key = Column(String(64), nullable=False, index=True)
+    start_date = Column(Date, nullable=False)
+    end_date = Column(Date, nullable=False)
+    payload_json = Column(Text, nullable=False)
+    synced_at = Column(DateTime(timezone=True), nullable=False)
+    __table_args__ = (UniqueConstraint("scope_key", "start_date", "end_date", name="uq_ai_billing_credit_window"),)
 
 
 class BillingConfigurationError(ValueError):
@@ -91,8 +107,22 @@ def _client(cfg):
     return bigquery.Client(project=cfg["query_project"], credentials=credentials, location=cfg["location"])
 
 
-def query_export(cfg, start, end, *, client=None):
-    from google.cloud import bigquery
+# Both sync queries read the table as of one timestamp so rows and credits describe the same state.
+# The point sits a minute in the past so a clock slightly ahead of Google's never requests the future.
+def _read_point(now=None):
+    return (now or datetime.now(timezone.utc)) - timedelta(seconds=60)
+
+
+# Shared scope for every export query: the selected usage days, the configured project and services.
+_EXPORT_SCOPE = """
+        WHERE usage_start_time >= TIMESTAMP(@start_date, 'UTC')
+          AND usage_start_time < TIMESTAMP(DATE_ADD(@end_date, INTERVAL 1 DAY), 'UTC')
+          AND project.id = @usage_project
+          AND service.description IN UNNEST(@services)
+"""
+
+
+def query_export(cfg, start, end, *, client=None, as_of=None):
     # Identifier comes only from strictly validated server configuration. All filters are parameters.
     query = f"""
         SELECT DATE(usage_start_time, 'UTC') AS usage_date,
@@ -102,22 +132,43 @@ def query_export(cfg, start, end, *, client=None):
                SUM(CAST(usage.amount AS NUMERIC)) AS usage_amount,
                SUM(CAST(cost AS NUMERIC)) AS cost,
                SUM(IFNULL((SELECT SUM(CAST(c.amount AS NUMERIC)) FROM UNNEST(credits) c), 0)) AS credits
-        FROM `{cfg['table']}`
-        WHERE usage_start_time >= TIMESTAMP(@start_date, 'UTC')
-          AND usage_start_time < TIMESTAMP(DATE_ADD(@end_date, INTERVAL 1 DAY), 'UTC')
-          AND project.id = @usage_project
-          AND service.description IN UNNEST(@services)
+        FROM `{cfg['table']}` FOR SYSTEM_TIME AS OF @as_of
+        {_EXPORT_SCOPE}
         GROUP BY usage_date, service, sku_id, sku, unit, currency,
                  currency_conversion_rate, invoice_month, cost_type
         ORDER BY usage_date, service, sku_id, currency, unit
     """
+    return _run_export_query(cfg, query, start, end, client=client, as_of=as_of)
+
+
+def query_credit_breakdown(cfg, start, end, *, client=None, as_of=None):
+    """Credits by Google credit type and name (free trial, promotions, discounts) for the same scope.
+
+    Credits are negative amounts in the export. They are reported separately so the charge before
+    credits remains the tracked usage cost while a promotion or free-trial credit brings net to 0.
+    """
+    query = f"""
+        SELECT currency, credit.type AS credit_type, credit.name AS credit_name, credit.id AS credit_id,
+               credit.full_name AS credit_full_name,
+               SUM(CAST(credit.amount AS NUMERIC)) AS amount
+        FROM `{cfg['table']}` FOR SYSTEM_TIME AS OF @as_of, UNNEST(credits) AS credit
+        {_EXPORT_SCOPE}
+        GROUP BY currency, credit_type, credit_name, credit_id, credit_full_name
+        ORDER BY amount, credit_type, credit_name
+    """
+    return _run_export_query(cfg, query, start, end, client=client, as_of=as_of)
+
+
+def _run_export_query(cfg, query, start, end, *, client=None, as_of=None):
+    from google.cloud import bigquery
     config = bigquery.QueryJobConfig(
         use_legacy_sql=False,
         maximum_bytes_billed=int(os.getenv("AI_BILLING_MAX_BYTES", "1000000000")),
         query_parameters=[bigquery.ScalarQueryParameter("start_date", "DATE", start),
                           bigquery.ScalarQueryParameter("end_date", "DATE", end),
                           bigquery.ScalarQueryParameter("usage_project", "STRING", cfg["project"]),
-                          bigquery.ArrayQueryParameter("services", "STRING", cfg["services"])],
+                          bigquery.ArrayQueryParameter("services", "STRING", cfg["services"]),
+                          bigquery.ScalarQueryParameter("as_of", "TIMESTAMP", as_of or _read_point())],
     )
     owner = client is None
     client = client or _client(cfg)
@@ -161,12 +212,17 @@ def sync_billing(db, *, start=None, end=None, client=None):
     if (end - start).days > 366:
         raise BillingConfigurationError("Select at most 366 days for a billing sync. Profile lifetime totals have no such limit.")
     try:
-        rows = query_export(cfg, start, end, client=client)
+        as_of = _read_point()
+        rows = query_export(cfg, start, end, client=client, as_of=as_of)
+        credit_rows = query_credit_breakdown(cfg, start, end, client=client, as_of=as_of)
         # Validate before replacing a prior successful snapshot.
         for row in rows:
             for field in ("cost", "credits", "usage_amount", "currency_conversion_rate"):
                 _decimal(row.get(field))
+        for credit in credit_rows:
+            _decimal(credit.get("amount"))
         payload = json.dumps(rows, sort_keys=True, allow_nan=False)
+        credit_payload = json.dumps(credit_rows, sort_keys=True, allow_nan=False)
     except (BillingConfigurationError, BillingSyncError):
         raise
     except Exception as exc:
@@ -175,14 +231,40 @@ def sync_billing(db, *, start=None, end=None, client=None):
             raise BillingExportPending(EXPORT_PENDING_MESSAGE) from exc
         # Provider exception text may contain credential paths, queries or account details.
         raise BillingSyncError("Google billing sync failed. Check export access, location and query limits; the previous snapshot is retained.") from exc
-    row = db.query(AiBillingSnapshot).filter_by(scope_key=cfg["scope_key"], start_date=start, end_date=end).first()
+    stamp = datetime.now(timezone.utc)
+    window = dict(scope_key=cfg["scope_key"], start_date=start, end_date=end)
+    row = db.query(AiBillingSnapshot).filter_by(**window).first()
     if row is None:
-        row = AiBillingSnapshot(scope_key=cfg["scope_key"], start_date=start, end_date=end)
+        row = AiBillingSnapshot(**window)
         db.add(row)
     row.payload_json = payload
-    row.synced_at = datetime.now(timezone.utc)
+    row.synced_at = stamp
+    credit = db.query(AiBillingCreditSnapshot).filter_by(**window).first()
+    if credit is None:
+        credit = AiBillingCreditSnapshot(**window)
+        db.add(credit)
+    credit.payload_json = credit_payload
+    credit.synced_at = stamp
     db.commit()
     return build_reconciliation(db, start=start, end=end)
+
+
+def _utc(value):
+    return value if value.tzinfo is not None else value.replace(tzinfo=timezone.utc)
+
+
+def _snapshot_payload(db, snapshot):
+    """Rows from the snapshot plus its credit breakdown, if the same sync produced both.
+
+    A build without credit support (or an older sync) leaves no matching credit snapshot, or one
+    older than the rows; those are reported as unavailable rather than paired with stale rows.
+    """
+    rows = json.loads(snapshot.payload_json)
+    credit = db.query(AiBillingCreditSnapshot).filter_by(
+        scope_key=snapshot.scope_key, start_date=snapshot.start_date, end_date=snapshot.end_date).first()
+    if credit is None or _utc(credit.synced_at) < _utc(snapshot.synced_at):
+        return rows, [], False
+    return rows, json.loads(credit.payload_json), True
 
 
 def build_reconciliation(db, *, start=None, end=None):
@@ -194,6 +276,7 @@ def build_reconciliation(db, *, start=None, end=None):
                 "project_id": cfg["project"] or None, "totals": [], "usage_rows": [],
                 "google_cost_usd": 0, "google_credits_usd": 0, "google_net_cost_usd": 0,
                 "google_cost_available": False, "billing_data_available": False,
+                "credits_applied": False, "credit_breakdown": [], "credit_breakdown_available": False,
                 "scope_note": SCOPE_NOTE}
     if not cfg["configured"]:
         return response
@@ -202,7 +285,7 @@ def build_reconciliation(db, *, start=None, end=None):
         response.update(status="no_data", billing_status="not_synced",
                         message="No Google billing snapshot for this date range. Displayed 0 means no imported charge is available.")
         return response
-    rows = json.loads(snapshot.payload_json)
+    rows, credit_rows, breakdown_available = _snapshot_payload(db, snapshot)
     totals = {}
     google_usd = Decimal(0)
     google_credits_usd = Decimal(0)
@@ -240,9 +323,16 @@ def build_reconciliation(db, *, start=None, end=None):
                       or_(E.provider.is_(None), ~E.provider.in_(list(SERVICE_PROVIDERS.values())))).scalar() or 0
     incomplete = bool(app["unknown_calls"] or app["legacy_calls"] or missing_scope or unknown_provider
                       or any(service not in SERVICE_PROVIDERS for service in cfg["services"]))
-    stamp = snapshot.synced_at
-    if stamp.tzinfo is None:
-        stamp = stamp.replace(tzinfo=timezone.utc)
+    # Google credits are negative amounts; a promotion or free trial can bring net to 0 while usage is real.
+    credit_breakdown = sorted(
+        ({"currency": credit.get("currency") or "UNKNOWN", "type": credit.get("credit_type") or "UNKNOWN",
+          "name": credit.get("credit_name") or "", "id": credit.get("credit_id") or "",
+          "full_name": credit.get("credit_full_name") or "", "amount": _decimal_text(credit.get("amount"))}
+         for credit in credit_rows),
+        key=lambda credit: (credit["currency"], Decimal(credit["amount"])))
+    credits_applied = (any(item["credits"] != 0 for item in totals.values())
+                       or any(Decimal(credit["amount"]) != 0 for credit in credit_breakdown))
+    stamp = _utc(snapshot.synced_at)
     billing_status = "available" if rows and currency_complete else "currency_unavailable" if rows else "no_records"
     message = ("Google billing snapshot loaded. Recent usage and corrections can arrive later." if rows else
                "Google returned no billing rows for this range. Displayed 0 is not confirmation of a zero charge.")
@@ -256,6 +346,8 @@ def build_reconciliation(db, *, start=None, end=None):
                     google_credits_usd=float(google_credits_usd) if currency_complete and rows else 0,
                     google_net_cost_usd=float(google_usd + google_credits_usd) if currency_complete and rows else 0,
                     google_cost_available=bool(rows and currency_complete), billing_data_available=bool(rows),
+                    credits_applied=credits_applied, credit_breakdown=credit_breakdown,
+                    credit_breakdown_available=breakdown_available,
                     metering_status="incomplete" if incomplete else "recorded",
                     usage_rows=usage_rows, coverage={"unknown_project_calls": missing_scope,
                                                     "unknown_provider_calls": unknown_provider, **app})

@@ -168,6 +168,7 @@ const refs = {
     aiSourceChart: document.getElementById('adminAiSourceChart'),
     aiModelChart: document.getElementById('adminAiModelChart'),
     aiHeroLabel: document.getElementById('adminAiHeroLabel'),
+    aiHeroNote: document.getElementById('adminAiHeroNote'),
     aiRangeCaption: document.getElementById('adminAiRangeCaption'),
     aiRangePresets: document.getElementById('adminAiRangePresets'),
     aiRangeForm: document.getElementById('adminAiRangeForm'),
@@ -3047,6 +3048,7 @@ function invalidateAiAccounting() {
     closeAiProfileDetail();
     if (refs.aiMonthHero) refs.aiMonthHero.textContent = '$0.00';
     if (refs.aiHeroLabel) refs.aiHeroLabel.textContent = 'Billing not loaded for these dates';
+    if (refs.aiHeroNote) refs.aiHeroNote.textContent = '';
     if (refs.aiProfilesTableBody) refs.aiProfilesTableBody.innerHTML = '<tr><td colspan="6" class="table-empty">Loading profile usage…</td></tr>';
     if (refs.aiCoverage) refs.aiCoverage.textContent = 'Checking available records and coverage…';
     if (refs.aiReconciliation) refs.aiReconciliation.innerHTML = `${aiBillingMetrics()}<p class="ai-accounting-note">Loading imported billing…</p>`;
@@ -3281,6 +3283,31 @@ function aiBillingMetrics(totals = []) {
     return `<div class="ai-billing-metrics"><div class="ai-billing-metric"><span>Imported Google cost before credits</span>${value('cost')}</div><div class="ai-billing-metric"><span>Imported Google credits</span>${value('credits')}</div><div class="ai-billing-metric"><span>Imported Google net cost</span>${value('net_cost')}</div></div>`;
 }
 
+function aiBillingCreditsApplied(data = {}, totals = []) {
+    // Credits arrive as decimal strings; any nonzero digit in the totals or the breakdown means Google applied a credit.
+    const nonZero = (value) => /[1-9]/.test(String(value ?? ''));
+    return data.credits_applied === true || totals.some((row) => nonZero(row.credits))
+        || (Array.isArray(data.credit_breakdown) && data.credit_breakdown.some((item) => nonZero(item.amount)));
+}
+
+function aiBillingCredits(data = {}, totals = [], awaitingExport = false) {
+    if (!aiBillingCreditsApplied(data, totals)) return '';
+    const items = Array.isArray(data.credit_breakdown) ? data.credit_breakdown : [];
+    if (!items.length) {
+        const reason = awaitingExport ? 'Credit names will be imported by the next successful sync.'
+            : data.credit_breakdown_available ? 'Google returned no credit details for this range.'
+            : 'Credit names are not part of this snapshot yet. Run Sync billing to load them.';
+        return `<p class="ai-detail-help">${escapeHtml(reason)}</p>`;
+    }
+    const line = (item) => {
+        const label = item.full_name || item.name || 'Credit';
+        // Google's credit name is unique per grant; show it when the display name alone cannot tell grants apart.
+        const grant = item.name && item.name !== label ? `<small>${escapeHtml(item.name)}</small>` : '';
+        return `<li><span>${escapeHtml(label)}${item.type ? ` · ${escapeHtml(String(item.type).toLowerCase())}` : ''}${grant}</span><strong>${escapeHtml(aiBillingMoney(item.amount, item.currency))}</strong></li>`;
+    };
+    return `<div class="ai-billing-credits"><h5>Credits applied by Google</h5><ul>${items.map(line).join('')}</ul></div>`;
+}
+
 function renderAiReconciliation(data = {}) {
     state.aiBilling.data = data;
     renderAiBillingControls();
@@ -3296,10 +3323,16 @@ function renderAiReconciliation(data = {}) {
         : !data.configured ? 'Google billing is not connected.' : 'No imported billing records for this range.';
     const zeroNote = available ? 'Amounts below are copied from Google billing records in their original currencies.'
         : 'Displayed amounts are 0 because no billed amount has been imported. This does not confirm that Google charged 0.';
-    if (refs.aiMonthHero) refs.aiMonthHero.textContent = totals.length ? totals.map((row) => aiBillingMoney(row.net_cost, row.currency)).join(' / ') : '$0.00';
-    if (refs.aiHeroLabel) refs.aiHeroLabel.textContent = available ? 'Imported Google net cost' : 'No imported billing amount';
+    const creditNote = aiBillingCreditsApplied(data, totals)
+        ? ' Google credits reduce the net amount. Track the cost before credits as the actual usage cost.' : '';
+    // The tracked figure is the charge before credits: a promotion or free-trial credit can bring net to 0 while usage is real.
+    if (refs.aiMonthHero) refs.aiMonthHero.textContent = totals.length ? totals.map((row) => aiBillingMoney(row.cost, row.currency)).join(' / ') : '$0.00';
+    if (refs.aiHeroLabel) refs.aiHeroLabel.textContent = available ? 'Google cost before credits' : 'No imported billing amount';
+    if (refs.aiHeroNote) refs.aiHeroNote.textContent = totals.length
+        ? totals.map((row) => `Credits ${aiBillingMoney(row.credits, row.currency)} · Net ${aiBillingMoney(row.net_cost, row.currency)}`).join(' / ') : '';
     refs.aiReconciliation.innerHTML = `${aiBillingMetrics(totals)}${meta}
-        <p class="ai-accounting-note"><strong>${status}</strong> ${escapeHtml(zeroNote)} ${escapeHtml(data.message || '')}</p>
+        <p class="ai-accounting-note"><strong>${status}</strong> ${escapeHtml(zeroNote)}${escapeHtml(creditNote)} ${escapeHtml(data.message || '')}</p>
+        ${aiBillingCredits(data, totals, awaitingExport)}
         <p class="ai-detail-help">${escapeHtml(note)} Billing quantities can use different units and services; they are not combined into a single token total.</p>
         ${available && Array.isArray(data.usage_rows) && data.usage_rows.length ? `<details><summary class="ai-detail-help">Provider usage by service and billing item</summary><div class="table-wrap"><table class="users-table"><thead><tr><th>Service</th><th>Billing item</th><th>Usage</th><th>Unit</th><th>Cost</th></tr></thead><tbody>${data.usage_rows.map((row) => `<tr><td>${escapeHtml(row.service || 'Unknown')}</td><td>${escapeHtml(row.sku || 'Unknown')}</td><td>${escapeHtml(String(row.usage_amount ?? 0))}</td><td>${escapeHtml(row.unit || 'Unknown')}</td><td>${escapeHtml(aiBillingMoney(row.cost, row.currency))}</td></tr>`).join('')}</tbody></table></div></details>` : ''}`;
 }
@@ -3325,6 +3358,7 @@ async function loadAiReconciliation() {
         billing.data = null;
         if (refs.aiMonthHero) refs.aiMonthHero.textContent = '$0.00';
         if (refs.aiHeroLabel) refs.aiHeroLabel.textContent = 'Billing could not be loaded';
+        if (refs.aiHeroNote) refs.aiHeroNote.textContent = '';
         if (refs.aiReconciliation) refs.aiReconciliation.innerHTML = `${aiBillingMetrics()}<p class="ai-accounting-note">${escapeHtml(error.message || 'Could not load imported billing. Please retry.')} No imported amount is available for this view.</p>`;
     } finally {
         if (requestId === billing.requestId) { billing.loading = false; renderAiBillingControls(); }
