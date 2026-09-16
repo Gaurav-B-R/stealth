@@ -77,6 +77,12 @@ function setup(fetchImpl = async () => successResponse()) {
     const api = context.exportTest;
     api.state.total = 47;
     api.state.authToken = 'test-admin-token';
+    api.state.access = {
+        role: 'admin', sections: ['users', 'enterprise', 'analytics', 'finance', 'ai', 'team'],
+        can_manage_team: true, can_provision_enterprise: true,
+        can_write_sections: ['users', 'enterprise', 'analytics', 'finance', 'ai', 'team'],
+        can_delete_sections: ['users', 'enterprise', 'analytics', 'finance', 'ai', 'team']
+    };
     api.renderUsersExportControls();
     return { ...api, requests, downloads, objectUrls, revokedUrls, timers };
 }
@@ -113,7 +119,8 @@ for (const format of ['csv', 'xlsx']) {
         assert.deepEqual(Object.fromEntries(url.searchParams), {
             format, plan: 'visa_pass', role: 'student', search: 'A & B university'
         });
-        assert.equal(request.options.headers.Authorization, 'Bearer test-admin-token');
+        assert.equal(request.options.headers.Authorization, undefined);
+        assert.equal(request.options.headers['X-Admin-Console-Session'], 'required');
         assert.equal(request.options.credentials, 'same-origin');
         assert.equal(app.downloads.length, 1);
         assert.equal(app.downloads[0].filename, filename);
@@ -137,7 +144,8 @@ test('cookie sessions use credentials without exposing the sentinel and missing 
     await app.exportUsers('xlsx');
 
     assert.equal(app.requests.length, 1);
-    assert.deepEqual(Object.keys(app.requests[0].options.headers), []);
+    assert.deepEqual(Object.keys(app.requests[0].options.headers), ['X-Admin-Console-Session']);
+    assert.equal(app.requests[0].options.headers['X-Admin-Console-Session'], 'required');
     assert.equal(app.requests[0].options.credentials, 'same-origin');
     const params = new URL(app.requests[0].url, 'https://example.test').searchParams;
     assert.deepEqual(Object.fromEntries(params), { format: 'xlsx', plan: 'all', role: 'all' });

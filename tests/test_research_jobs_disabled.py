@@ -12,7 +12,7 @@ from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
 
 from app import database, models
-from app.auth import get_current_user
+from app.admin_sessions import get_current_console_user
 from app.database import Base, get_db
 from app.routers import admin
 from app.services import course_catalog_refresh as catalog_job
@@ -81,10 +81,10 @@ def test_admin_refresh_is_gone_and_stored_catalog_history_remains_readable(db, m
     monkeypatch.setenv("COURSE_CATALOG_REFRESH_ENABLED", "true")
     monkeypatch.setattr(admin, "_is_admin_turnstile_required", lambda request: False)
     monkeypatch.setattr(admin, "check_ip_rate_limit", lambda **kwargs: (True, 0))
-    actor = models.User(id=9000, email="admin@example.com", is_admin=True, is_active=True)
+    actor = models.User(id=9000, email="admin@example.com", is_admin=True, is_active=True, email_verified=True)
     application = FastAPI()
     application.include_router(admin.router)
-    application.dependency_overrides[get_current_user] = lambda: actor
+    application.dependency_overrides[get_current_console_user] = lambda: actor
     application.dependency_overrides[get_db] = lambda: db
     with TestClient(application) as client:
         response = client.post("/api/admin/course-catalog/refresh-now?limit=100&countries=US,UK")

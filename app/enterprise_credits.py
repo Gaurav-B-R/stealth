@@ -440,6 +440,23 @@ def get_or_create_wallet(
     return wallet
 
 
+def wallet_snapshot(db: Session, organization_id: int) -> models.EnterpriseCreditWallet:
+    """Read the stored balance without granting credits or inserting a missing wallet."""
+    with db.no_autoflush:
+        wallet = db.query(models.EnterpriseCreditWallet).filter(
+            models.EnterpriseCreditWallet.organization_id == int(organization_id)
+        ).first()
+    if wallet is not None:
+        return wallet
+    return models.EnterpriseCreditWallet(
+        organization_id=int(organization_id), balance_credits=0,
+        lifetime_purchased_credits=0, lifetime_spent_credits=0,
+        plan_credits_granted=0, plan_credits_remaining=0,
+        copilot_msgs_today=0, copilot_unbilled_msgs=0,
+        interview_staff_previews_used=0,
+    )
+
+
 def get_wallet_for_update(db: Session, organization_id: int) -> models.EnterpriseCreditWallet:
     """Row-locked wallet fetch for read-modify-write paths (debits, copilot
     counters). Concurrent requests — e.g. the dashboard copilot and the Chrome
@@ -690,13 +707,13 @@ def _spend_from_wallet(wallet: models.EnterpriseCreditWallet, cost: int) -> None
     wallet.lifetime_spent_credits = int(wallet.lifetime_spent_credits) + cost
 
 
-def plan_credits_state(db: Session, organization_id: int) -> dict:
+def plan_credits_state(db: Session, organization_id: int, *, read_only: bool = False) -> dict:
     """The allowance panel: what this tier includes, how much of it is left, and when it
     refreshes. Read-only — call `sync_plan_credits` first if a grant may be due."""
     from app import enterprise_billing as billing
 
-    wallet = get_or_create_wallet(db, organization_id, commit=False)
-    sub = billing.get_or_create_org_subscription(db, organization_id, commit=False)
+    wallet = wallet_snapshot(db, organization_id) if read_only else get_or_create_wallet(db, organization_id, commit=False)
+    sub = billing.subscription_snapshot(db, organization_id) if read_only else billing.get_or_create_org_subscription(db, organization_id, commit=False)
     plan_key = billing.effective_plan_key(sub)
     allowance = billing.included_credits_for(plan_key)
     recurring = billing.credits_recur_for(plan_key)
@@ -1138,8 +1155,8 @@ def record_copilot_message(
 # Staff-run mock-interview "previews" (a few free, then normal mock_interview price)
 # ---------------------------------------------------------------------------
 
-def staff_interview_preview_remaining(db: Session, organization_id: int) -> int:
-    wallet = get_or_create_wallet(db, organization_id, commit=False)
+def staff_interview_preview_remaining(db: Session, organization_id: int, *, read_only: bool = False) -> int:
+    wallet = wallet_snapshot(db, organization_id) if read_only else get_or_create_wallet(db, organization_id, commit=False)
     used = int(getattr(wallet, "interview_staff_previews_used", 0) or 0)
     return max(0, INTERVIEW_FREE_STAFF_PREVIEWS - used)
 
@@ -1197,7 +1214,7 @@ def consume_staff_interview(
 # still resolve `kind="infra_fee"` rows through them.
 # ---------------------------------------------------------------------------
 
-def infra_fee_state(db: Session, organization_id: int, *, currency: str | None = None) -> dict:
+def infra_fee_state(db: Session, organization_id: int, *, currency: str | None = None, read_only: bool = False) -> dict:
     """Legacy infra-fee status. `retired` is always True and `fee_due` always False.
 
     Kept so an old cached SPA bundle that still reads `wallet.infra_fee` renders a dormant
@@ -1208,7 +1225,7 @@ def infra_fee_state(db: Session, organization_id: int, *, currency: str | None =
     except money.UnsupportedCurrency:
         code = money.DEFAULT_CURRENCY
     fee_minor = money.price_minor("infra_fee", code)
-    wallet = get_or_create_wallet(db, organization_id, commit=False)
+    wallet = wallet_snapshot(db, organization_id) if read_only else get_or_create_wallet(db, organization_id, commit=False)
     clients_used = active_client_count(db, organization_id)
     paid_until = _naive(wallet.infra_fee_paid_until)
     return {
@@ -1326,7 +1343,15 @@ def actions_payload() -> list[dict]:
     return payload
 
 
-def wallet_state(db: Session, organization_id: int, *, currency: str | None = None) -> dict:
+def wallet_state(db: Session, organization_id: int, *, currency: str | None = None, read_only: bool = False) -> dict:
+    """Render the wallet; read-only views preserve the stored balance and grant period."""
+    if read_only:
+        with db.no_autoflush:
+            return _wallet_state(db, organization_id, currency=currency, read_only=True)
+    return _wallet_state(db, organization_id, currency=currency)
+
+
+def _wallet_state(db: Session, organization_id: int, *, currency: str | None = None, read_only: bool = False) -> dict:
     """Wallet + catalogue, with all real CHARGES priced in `currency`.
 
     Credits themselves stay an INR-denominated unit of account (1 credit = ₹10) whatever
@@ -1340,8 +1365,9 @@ def wallet_state(db: Session, organization_id: int, *, currency: str | None = No
         code = money.DEFAULT_CURRENCY
     # Every entry into the Credits screen is also the moment a due allowance should land,
     # so the balance the user is looking at is never one renewal behind.
-    _sync_plan_credits_quietly(db, organization_id, commit=True)
-    wallet = get_or_create_wallet(db, organization_id, commit=False)
+    if not read_only:
+        _sync_plan_credits_quietly(db, organization_id, commit=True)
+    wallet = wallet_snapshot(db, organization_id) if read_only else get_or_create_wallet(db, organization_id, commit=False)
     balance = int(wallet.balance_credits)
     return {
         "balance_credits": balance,
@@ -1359,12 +1385,12 @@ def wallet_state(db: Session, organization_id: int, *, currency: str | None = No
         "actions": actions_payload(),
         # What the org's plan includes each month and how much of it is left. This is the
         # primary "where do credits come from" panel now; top-ups are overage.
-        "plan_credits": plan_credits_state(db, organization_id),
+        "plan_credits": plan_credits_state(db, organization_id, read_only=read_only),
         # Retired — always dormant. Kept so a stale cached SPA bundle does not break.
-        "infra_fee": infra_fee_state(db, organization_id, currency=code),
+        "infra_fee": infra_fee_state(db, organization_id, currency=code, read_only=read_only),
         "staff_interview_previews": {
             "free": INTERVIEW_FREE_STAFF_PREVIEWS,
-            "remaining": staff_interview_preview_remaining(db, organization_id),
+            "remaining": staff_interview_preview_remaining(db, organization_id, read_only=read_only),
         },
         # What an agency gets without spending a credit. Surfaced on the pricing
         # tab so the free tier is visible next to the prices, not buried in the
@@ -1373,7 +1399,7 @@ def wallet_state(db: Session, organization_id: int, *, currency: str | None = No
             "deep_scans_per_client": DEEP_SCAN_FREE_SCANS_PER_CLIENT,
             "deep_scans_monthly_cap": DEEP_SCAN_FREE_MONTHLY_ORG_CAP,
             "interview_previews": INTERVIEW_FREE_STAFF_PREVIEWS,
-            "interview_previews_left": staff_interview_preview_remaining(db, organization_id),
+            "interview_previews_left": staff_interview_preview_remaining(db, organization_id, read_only=read_only),
             "copilot_msgs_daily": COPILOT_FREE_DAILY,
             "copilot_msgs_left_today": max(0, COPILOT_FREE_DAILY - _copilot_used_today(wallet)),
             "copilot_msgs_per_credit": COPILOT_MSGS_PER_CREDIT,

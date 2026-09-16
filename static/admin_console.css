@@ -1769,6 +1769,10 @@ body.admin-modal-open {
 .ai-billing-credits li { display: flex; justify-content: space-between; gap: 1rem; padding: .55rem .75rem; border: 1px solid #e2e8f0; border-radius: 8px; background: #fff; font-size: .8rem; color: #475569; }
 .ai-billing-credits li strong { color: #0f172a; font-variant-numeric: tabular-nums; }
 .ai-billing-credits li small { display: block; color: #94a3b8; font-size: .7rem; overflow-wrap: anywhere; }
+.ai-accounts-summary { margin-top: .85rem; }
+.ai-accounts-summary .ai-range-metrics { margin-bottom: .6rem; }
+.ai-accounts-subtitle { margin: 1.2rem 0 .3rem; font-size: .92rem; color: #0f172a; }
+.ai-accounts-table td:first-child { min-width: 220px; }
 @media (max-width: 680px) {
     .ai-accounting-card { padding: .85rem; }
     .ai-billing-metrics { grid-template-columns: 1fr; }
@@ -2394,3 +2398,33 @@ input::placeholder {
     }
     .session-badge::before { display: none; }
 }
+
+
+/* Console team access follows the existing account-card and table design. */
+.team-role-guide { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; margin: 0 0 22px; }
+.team-role-guide p { margin: 0; padding: 16px; border: 1px solid var(--border, #e2e8f0); border-radius: 12px; background: #f8fafc; color: #64748b; font-size: 13px; line-height: 1.6; }
+.team-role-guide strong { display: block; color: #0f172a; margin-bottom: 3px; }
+.team-form-card { border: 1px solid #e2e8f0; border-radius: 14px; padding: 24px; margin-bottom: 24px; background: #fff; }
+.team-form-card h3 { margin: 0 0 8px; font-size: 17px; }
+.team-hint { color: #64748b; font-size: 13px; line-height: 1.6; margin: 0 0 16px; }
+.team-fields { display: grid; grid-template-columns: 2fr 1fr; gap: 16px; }
+.team-fields label { display: grid; gap: 8px; font-size: 13px; font-weight: 600; color: #334155; }
+.team-fields input, .team-fields select { width: 100%; min-width: 0; height: 42px; padding: 9px 12px; border: 1px solid #cbd5e1; border-radius: 8px; background: #fff; color: #0f172a; font: inherit; }
+.team-sections-fieldset { min-width: 0; margin: 22px 0; padding: 0; border: 0; }
+.team-sections-fieldset legend { font-size: 13px; font-weight: 700; margin-bottom: 8px; }
+.team-password-fieldset { min-width: 0; margin: 22px 0; padding: 18px 0 0; border: 0; border-top: 1px solid #e2e8f0; }
+.team-password-fieldset legend { font-size: 13px; font-weight: 700; padding: 0 10px 0 0; }
+.team-password-fields { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+.team-sections { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; }
+.team-section-option { display: flex; align-items: flex-start; gap: 10px; border: 1px solid #e2e8f0; border-radius: 9px; padding: 13px 12px; font-size: 13px; color: #334155; cursor: pointer; }
+.team-section-option:has(input:checked) { border-color: #8b5cf6; background: #faf5ff; }
+.team-section-option input { width: 16px; height: 16px; margin: 1px 0 0; flex: 0 0 auto; accent-color: #7c3aed; }
+.team-section-option small { display: block; margin-top: 4px; font-size: 11px; color: #64748b; }
+.team-section-option.is-unavailable { opacity: .55; cursor: default; }
+.team-form-actions { display: flex; gap: 10px; }
+.team-section-chips { display: flex; flex-wrap: wrap; gap: 5px; max-width: 440px; }
+.team-section-chips span { background: #f1f5f9; color: #475569; border-radius: 5px; padding: 4px 7px; font-size: 11px; }
+.team-footer-note { margin-top: 16px; }
+.team-fields :focus-visible, .team-section-option:focus-within { outline: 2px solid #7c3aed; outline-offset: 3px; }
+@media (max-width: 760px) { .team-role-guide, .team-fields { grid-template-columns: 1fr; } .team-sections { grid-template-columns: repeat(2, minmax(0, 1fr)); } .team-form-card { padding: 18px; } }
+@media (max-width: 430px) { .team-sections { grid-template-columns: 1fr; } }

@@ -148,13 +148,14 @@ def query_credit_breakdown(cfg, start, end, *, client=None, as_of=None):
     credits remains the tracked usage cost while a promotion or free-trial credit brings net to 0.
     """
     query = f"""
-        SELECT currency, credit.type AS credit_type, credit.name AS credit_name, credit.id AS credit_id,
+        SELECT DATE(usage_start_time, 'UTC') AS usage_date, currency,
+               credit.type AS credit_type, credit.name AS credit_name, credit.id AS credit_id,
                credit.full_name AS credit_full_name,
                SUM(CAST(credit.amount AS NUMERIC)) AS amount
         FROM `{cfg['table']}` FOR SYSTEM_TIME AS OF @as_of, UNNEST(credits) AS credit
         {_EXPORT_SCOPE}
-        GROUP BY currency, credit_type, credit_name, credit_id, credit_full_name
-        ORDER BY amount, credit_type, credit_name
+        GROUP BY usage_date, currency, credit_type, credit_name, credit_id, credit_full_name
+        ORDER BY usage_date, amount, credit_type, credit_name
     """
     return _run_export_query(cfg, query, start, end, client=client, as_of=as_of)
 
@@ -277,15 +278,30 @@ def build_reconciliation(db, *, start=None, end=None):
                 "google_cost_usd": 0, "google_credits_usd": 0, "google_net_cost_usd": 0,
                 "google_cost_available": False, "billing_data_available": False,
                 "credits_applied": False, "credit_breakdown": [], "credit_breakdown_available": False,
-                "scope_note": SCOPE_NOTE}
+                "source_range": None, "derived": False, "scope_note": SCOPE_NOTE}
     if not cfg["configured"]:
         return response
-    snapshot = db.query(AiBillingSnapshot).filter_by(scope_key=cfg["scope_key"], start_date=start, end_date=end).first()
+    # Imports are grouped per usage day, so any dates inside an import can be served from it. The most
+    # recently synced import covering the dates wins, whether it is the exact window or a wider one.
+    snapshot = (db.query(AiBillingSnapshot)
+                .filter(AiBillingSnapshot.scope_key == cfg["scope_key"],
+                        AiBillingSnapshot.start_date <= start, AiBillingSnapshot.end_date >= end)
+                .order_by(AiBillingSnapshot.synced_at.desc(), AiBillingSnapshot.id.desc()).first())
     if snapshot is None:
         response.update(status="no_data", billing_status="not_synced",
-                        message="No Google billing snapshot for this date range. Displayed 0 means no imported charge is available.")
+                        message="No Google billing import covers these dates yet. Sync billing fetches them from Google. "
+                                "Displayed 0 means no imported charge is available.")
         return response
     rows, credit_rows, breakdown_available = _snapshot_payload(db, snapshot)
+    source_range = {"start": snapshot.start_date.isoformat(), "end": snapshot.end_date.isoformat()}
+    derived = (snapshot.start_date, snapshot.end_date) != (start, end)
+    if derived:
+        start_iso, end_iso = start.isoformat(), end.isoformat()
+        rows = [row for row in rows if start_iso <= str(row.get("usage_date") or "") <= end_iso]
+        if credit_rows and not all(credit.get("usage_date") for credit in credit_rows):
+            credit_rows, breakdown_available = [], False   # imported before credits were kept per day
+        else:
+            credit_rows = [credit for credit in credit_rows if start_iso <= str(credit.get("usage_date")) <= end_iso]
     totals = {}
     google_usd = Decimal(0)
     google_credits_usd = Decimal(0)
@@ -324,18 +340,26 @@ def build_reconciliation(db, *, start=None, end=None):
     incomplete = bool(app["unknown_calls"] or app["legacy_calls"] or missing_scope or unknown_provider
                       or any(service not in SERVICE_PROVIDERS for service in cfg["services"]))
     # Google credits are negative amounts; a promotion or free trial can bring net to 0 while usage is real.
+    grouped_credits = {}
+    for credit in credit_rows:
+        key = (credit.get("currency") or "UNKNOWN", credit.get("credit_type") or "UNKNOWN", credit.get("credit_name") or "",
+               credit.get("credit_id") or "", credit.get("credit_full_name") or "")
+        grouped_credits[key] = _decimal_add(grouped_credits.get(key, Decimal(0)), _decimal(credit.get("amount")))
     credit_breakdown = sorted(
-        ({"currency": credit.get("currency") or "UNKNOWN", "type": credit.get("credit_type") or "UNKNOWN",
-          "name": credit.get("credit_name") or "", "id": credit.get("credit_id") or "",
-          "full_name": credit.get("credit_full_name") or "", "amount": _decimal_text(credit.get("amount"))}
-         for credit in credit_rows),
+        ({"currency": key[0], "type": key[1], "name": key[2], "id": key[3], "full_name": key[4], "amount": _decimal_text(amount)}
+         for key, amount in grouped_credits.items()),
         key=lambda credit: (credit["currency"], Decimal(credit["amount"])))
     credits_applied = (any(item["credits"] != 0 for item in totals.values())
                        or any(Decimal(credit["amount"]) != 0 for credit in credit_breakdown))
     stamp = _utc(snapshot.synced_at)
     billing_status = "available" if rows and currency_complete else "currency_unavailable" if rows else "no_records"
-    message = ("Google billing snapshot loaded. Recent usage and corrections can arrive later." if rows else
-               "Google returned no billing rows for this range. Displayed 0 is not confirmation of a zero charge.")
+    if derived:
+        window = f"the Google billing import covering {source_range['start']} to {source_range['end']}"
+        message = (f"Figures for these dates come from {window}. Recent usage and corrections can arrive later." if rows else
+                   f"{window[0].upper()}{window[1:]} has no billing rows for these dates. Displayed 0 is not confirmation of a zero charge.")
+    else:
+        message = ("Google billing snapshot loaded. Recent usage and corrections can arrive later." if rows else
+                   "Google returned no billing rows for this range. Displayed 0 is not confirmation of a zero charge.")
     if rows and not currency_complete:
         message = "Google charges are available in the exported currencies. USD is 0 because the exported conversion rate is missing."
     response.update(status="available", billing_status=billing_status, message=message,
@@ -347,7 +371,7 @@ def build_reconciliation(db, *, start=None, end=None):
                     google_net_cost_usd=float(google_usd + google_credits_usd) if currency_complete and rows else 0,
                     google_cost_available=bool(rows and currency_complete), billing_data_available=bool(rows),
                     credits_applied=credits_applied, credit_breakdown=credit_breakdown,
-                    credit_breakdown_available=breakdown_available,
+                    credit_breakdown_available=breakdown_available, source_range=source_range, derived=derived,
                     metering_status="incomplete" if incomplete else "recorded",
                     usage_rows=usage_rows, coverage={"unknown_project_calls": missing_scope,
                                                     "unknown_provider_calls": unknown_provider, **app})

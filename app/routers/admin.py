@@ -1,4 +1,5 @@
 import calendar
+import json
 import os
 import logging
 import secrets
@@ -10,6 +11,7 @@ from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
 from fastapi import APIRouter, Body, Depends, HTTPException, Query, Request, Response, status
 from jose import JWTError, jwt
 from sqlalchemy import case, desc, func, or_, select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, aliased
 
 from app import models, schemas
@@ -32,14 +34,16 @@ from app.auth import (
     SECRET_KEY,
     _resolve_auth_cookie_secure,
     get_password_hash,
-    get_current_admin_user,
 )
 from app.database import get_db
+from app import admin_access, admin_sessions
+from app.admin_access import console_section, get_current_admin_user
 from app.utils import user_deletion, user_export
 from app.utils.rate_limiter import check_ip_rate_limit, extract_client_ip, is_request_ip_whitelisted
 from app.utils.turnstile import is_turnstile_enabled, verify_turnstile_token
 
-router = APIRouter(prefix="/api/admin", tags=["admin"])
+router = APIRouter(prefix="/api/admin", tags=["admin"], dependencies=[Depends(get_current_admin_user)],
+                   route_class=admin_sessions.SensitiveInputRoute)
 logger = logging.getLogger(__name__)
 
 VALID_USER_PLAN_FILTERS = {"all", "free", "visa_pass"}
@@ -102,7 +106,7 @@ def _inr_to_usd_rate(fx_state: dict | None = None) -> Decimal:
     return Decimal(1) / usd_to_inr
 
 
-def _assert_manageable_target(target_user: models.User, acting_user: models.User) -> None:
+def _assert_manageable_target(target_user: models.User, acting_user: models.User, db: Session | None = None) -> None:
     """Guardrails for privileged account management actions."""
     if target_user.id == acting_user.id:
         raise HTTPException(status_code=400, detail="You cannot perform this action on your own account.")
@@ -112,6 +116,9 @@ def _assert_manageable_target(target_user: models.User, acting_user: models.User
 
     if target_user.is_admin and not acting_user.is_developer:
         raise HTTPException(status_code=403, detail="Only a developer can manage admin accounts.")
+
+    if db is not None and admin_access.membership_for(db, target_user.id) is not None:
+        admin_access.assert_manageable_member(db, acting_user, target_user)
 
 
 def _is_development_env() -> bool:
@@ -263,6 +270,7 @@ def require_admin_turnstile_proof(
 
 
 @router.post("/turnstile/verify")
+@console_section(None, "access")
 def verify_admin_turnstile(
     payload: schemas.AdminTurnstileVerifyRequest,
     request: Request,
@@ -298,6 +306,7 @@ def verify_admin_turnstile(
 
 
 @router.post("/turnstile/clear")
+@console_section(None, "access")
 def clear_admin_turnstile(
     response: Response,
     current_user: models.User = Depends(get_current_admin_user),
@@ -306,6 +315,126 @@ def clear_admin_turnstile(
     del current_user
     _clear_admin_turnstile_cookie(response)
     return {"message": "Cloudflare verification cleared."}
+
+
+@router.get("/access")
+@console_section(None, "access")
+def admin_console_access(
+    response: Response,
+    current_user: models.User = Depends(get_current_admin_user),
+    db: Session = Depends(get_db),
+):
+    """Resolve the current console role before the Turnstile-protected data loads."""
+    response.headers["Cache-Control"] = "no-store"
+    return admin_access.access_payload(db, current_user)
+
+
+@router.get("/team")
+@console_section("team", "read")
+def list_admin_console_team(
+    request: Request,
+    response: Response,
+    current_user: models.User = Depends(get_current_admin_user),
+    _: None = Depends(require_admin_turnstile_proof),
+    db: Session = Depends(get_db),
+):
+    admin_access.require_team_manager(db, current_user)
+    response.headers["Cache-Control"] = "no-store"
+    rows = (db.query(models.User, models.AdminConsoleAccess)
+            .outerjoin(models.AdminConsoleAccess, models.AdminConsoleAccess.user_id == models.User.id)
+            .filter(or_(models.User.is_admin.is_(True), models.User.is_developer.is_(True),
+                        models.AdminConsoleAccess.user_id.is_not(None)))
+            .order_by(func.lower(models.User.email), models.User.id).all())
+    return {
+        "members": [admin_access.serialize_member(db, current_user, user, membership) for user, membership in rows],
+        "sections": list(admin_access.SECTIONS), "roles": list(admin_access.ROLES),
+    }
+
+
+@router.post("/team", status_code=201)
+@console_section("team", "write")
+@admin_sessions.sensitive_input
+def add_admin_console_member(
+    payload: admin_access.TeamAccessCreate,
+    current_user: models.User = Depends(get_current_admin_user),
+    _: None = Depends(require_admin_turnstile_proof),
+    db: Session = Depends(get_db),
+):
+    sections = admin_access.validated_grant(db, current_user, payload)
+    # All credential/session changes lock the same User row, including login.
+    # This prevents an in-flight login inserting a session after a Team revoke.
+    user = (db.query(models.User).populate_existing().with_for_update()
+            .filter(func.lower(models.User.email) == str(payload.email).lower()).first())
+    if user is None:
+        raise HTTPException(404, "No existing account was found for this email. No invitation was sent.")
+    if not user.is_active or not user.email_verified or admin_access.is_enterprise_only_account(user):
+        raise HTTPException(400, "Choose an active, verified personal account that can sign in to the Admin Console.")
+    admin_access.assert_manageable_member(db, current_user, user)
+    if admin_access.membership_for(db, user.id) is not None:
+        raise HTTPException(409, "This account already has Admin Console access. Edit its existing access instead.")
+    password_hash = admin_sessions.prepare_password(payload.console_password, user.email)
+    membership = models.AdminConsoleAccess(
+        user_id=user.id, role=payload.role, sections=json.dumps(sections), updated_by_user_id=current_user.id,
+    )
+    db.add(membership)
+    try:
+        db.flush()
+        if password_hash is not None:
+            admin_sessions.set_password_hash(db, user.id, password_hash)
+        db.commit()
+    except IntegrityError:
+        db.rollback()
+        raise HTTPException(409, "This account's access changed while saving. Refresh Team and try again.")
+    return admin_access.serialize_member(db, current_user, user, membership)
+
+
+@router.patch("/team/{user_id}")
+@console_section("team", "write")
+@admin_sessions.sensitive_input
+def update_admin_console_member(
+    user_id: int,
+    payload: admin_access.TeamAccessUpdate,
+    current_user: models.User = Depends(get_current_admin_user),
+    _: None = Depends(require_admin_turnstile_proof),
+    db: Session = Depends(get_db),
+):
+    sections = admin_access.validated_grant(db, current_user, payload)
+    user = db.query(models.User).populate_existing().with_for_update().filter(models.User.id == user_id).first()
+    if user is None:
+        raise HTTPException(404, "Team member not found.")
+    admin_access.assert_manageable_member(db, current_user, user)
+    membership = admin_access.membership_for(db, user.id)
+    if membership is None:
+        raise HTTPException(404, "Team member not found.")
+    password_hash = admin_sessions.prepare_password(payload.console_password, user.email)
+    if password_hash is not None:
+        admin_sessions.set_password_hash(db, user.id, password_hash)
+    membership.role = payload.role
+    membership.sections = json.dumps(sections)
+    membership.updated_by_user_id = current_user.id
+    db.commit()
+    return admin_access.serialize_member(db, current_user, user, membership)
+
+
+@router.delete("/team/{user_id}")
+@console_section("team", "delete")
+def revoke_admin_console_member(
+    user_id: int,
+    current_user: models.User = Depends(get_current_admin_user),
+    _: None = Depends(require_admin_turnstile_proof),
+    db: Session = Depends(get_db),
+):
+    user = db.query(models.User).populate_existing().with_for_update().filter(models.User.id == user_id).first()
+    if user is None:
+        raise HTTPException(404, "Team member not found.")
+    admin_access.assert_manageable_member(db, current_user, user)
+    membership = admin_access.membership_for(db, user.id)
+    if membership is None:
+        raise HTTPException(404, "Team member not found.")
+    admin_sessions.revoke_credentials(db, user.id)
+    db.delete(membership)
+    db.commit()
+    return {"user_id": user.id, "message": "Admin Console access revoked. The account is unchanged."}
 
 
 def _build_plan_metrics_for_filtered_users(db: Session, filtered_user_ids_subquery) -> dict[str, int]:
@@ -467,6 +596,7 @@ def _filtered_admin_users_query(
 
 
 @router.get("/users", response_model=schemas.AdminUserListResponse)
+@console_section("users", "read")
 def list_users_admin(
     request: Request,
     page: int = Query(1, ge=1),
@@ -509,6 +639,7 @@ def list_users_admin(
 
 
 @router.get("/users/export")
+@console_section("users", "read")
 def export_users_admin(
     request: Request,
     export_format: str = Query("xlsx", alias="format", pattern="^(xlsx|csv)$"),
@@ -779,6 +910,7 @@ def _compute_company_finance_analytics(db: Session, *, ledger_limit: int | None 
     "/company-finance/analytics",
     response_model=schemas.AdminCompanyFinanceAnalyticsResponse,
 )
+@console_section("finance", "read")
 def company_finance_analytics_admin(
     request: Request,
     current_user: models.User = Depends(get_current_admin_user),
@@ -1006,6 +1138,7 @@ def _build_finance_xlsx(payload: dict) -> bytes | None:
 
 
 @router.get("/company-finance/export")
+@console_section("finance", "read")
 def export_company_finance_admin(
     request: Request,
     export_format: str = Query("xlsx", alias="format", pattern="^(xlsx|csv)$"),
@@ -1094,6 +1227,7 @@ def _serialize_finance_entry(entry: models.CompanyFinanceEntry) -> dict:
 
 
 @router.post("/company-finance/entries")
+@console_section("finance", "write")
 def create_company_finance_entry_admin(
     request: Request,
     payload: schemas.AdminCompanyFinanceEntryCreateRequest,
@@ -1133,6 +1267,7 @@ def create_company_finance_entry_admin(
 
 
 @router.patch("/company-finance/entries/{entry_id}")
+@console_section("finance", "write")
 def update_company_finance_entry_admin(
     entry_id: int,
     request: Request,
@@ -1178,6 +1313,7 @@ def update_company_finance_entry_admin(
 
 
 @router.delete("/company-finance/entries/{entry_id}")
+@console_section("finance", "delete")
 def delete_company_finance_entry_admin(
     entry_id: int,
     request: Request,
@@ -1200,6 +1336,7 @@ def delete_company_finance_entry_admin(
 
 
 @router.get("/ai-usage/analytics")
+@console_section("ai", "read")
 def ai_usage_analytics_admin(
     request: Request,
     response: Response,
@@ -1241,6 +1378,7 @@ def _ai_cost_rate_limit(request, user_id, *, sync=False):
 
 
 @router.get("/ai-usage/profiles/export")
+@console_section("ai", "read")
 def ai_profiles_export(request: Request, start: str | None = None, end: str | None = None,
                        search: str = Query("", max_length=200),
                        current_user: models.User = Depends(get_current_admin_user),
@@ -1253,7 +1391,33 @@ def ai_profiles_export(request: Request, start: str | None = None, end: str | No
         "Cache-Control": "no-store", "X-Content-Type-Options": "nosniff"})
 
 
+@router.get("/ai-usage/accounts")
+@console_section("ai", "read")
+def ai_usage_accounts(request: Request, response: Response, start: str | None = None, end: str | None = None,
+                      current_user: models.User = Depends(get_current_admin_user),
+                      _: None = Depends(require_admin_turnstile_proof), db: Session = Depends(get_db)):
+    """All recorded AI usage for the dates, split by B2C, enterprise, shared and unattributed, plus Google."""
+    _ai_cost_rate_limit(request, current_user.id)
+    response.headers["Cache-Control"] = "no-store"
+    start_date, end_date = _ai_cost_range(start, end)
+    return ai_cost_reporting.build_usage_by_account(db, start=start_date, end=end_date)
+
+
+@router.get("/ai-usage/accounts/export")
+@console_section("ai", "read")
+def ai_usage_accounts_export(request: Request, start: str | None = None, end: str | None = None,
+                             current_user: models.User = Depends(get_current_admin_user),
+                             _: None = Depends(require_admin_turnstile_proof), db: Session = Depends(get_db)):
+    _ai_cost_rate_limit(request, current_user.id)
+    start_date, end_date = _ai_cost_range(start, end)
+    content = ai_cost_reporting.usage_by_account_csv(db, start=start_date, end=end_date)
+    return Response(content, media_type="text/csv; charset=utf-8", headers={
+        "Content-Disposition": 'attachment; filename="rilono-ai-usage-by-account.csv"',
+        "Cache-Control": "no-store", "X-Content-Type-Options": "nosniff"})
+
+
 @router.get("/ai-usage/profiles")
+@console_section("ai", "read")
 def ai_profiles(request: Request, response: Response, start: str | None = None, end: str | None = None,
                 search: str = Query("", max_length=200), page: int = Query(1, ge=1),
                 page_size: int = Query(25, ge=1, le=100),
@@ -1266,6 +1430,7 @@ def ai_profiles(request: Request, response: Response, start: str | None = None, 
 
 
 @router.get("/ai-usage/profiles/{user_id}")
+@console_section("ai", "read")
 def ai_profile_detail(user_id: int, request: Request, response: Response,
                       start: str | None = None, end: str | None = None,
                       current_user: models.User = Depends(get_current_admin_user),
@@ -1280,6 +1445,7 @@ def ai_profile_detail(user_id: int, request: Request, response: Response,
 
 
 @router.get("/ai-usage/reconciliation")
+@console_section("ai", "read")
 def ai_reconciliation(request: Request, response: Response,
                       start: str | None = None, end: str | None = None,
                       current_user: models.User = Depends(get_current_admin_user),
@@ -1294,6 +1460,7 @@ def ai_reconciliation(request: Request, response: Response,
 
 
 @router.post("/ai-usage/reconciliation/sync")
+@console_section("ai", "write")
 def ai_reconciliation_sync(request: Request, response: Response, payload: dict = Body(default={}),
                            current_user: models.User = Depends(get_current_admin_user),
                            _: None = Depends(require_admin_turnstile_proof), db: Session = Depends(get_db)):
@@ -1319,6 +1486,7 @@ def ai_reconciliation_sync(request: Request, response: Response, payload: dict =
 
 
 @router.get("/acquisition/analytics")
+@console_section("analytics", "read")
 def acquisition_analytics_admin(
     request: Request,
     current_user: models.User = Depends(get_current_admin_user),
@@ -1337,6 +1505,7 @@ def acquisition_analytics_admin(
 
 
 @router.post("/growth/conversion-analysis")
+@console_section("analytics", "write")
 def growth_conversion_analysis_admin(
     request: Request,
     current_user: models.User = Depends(get_current_admin_user),
@@ -1365,6 +1534,7 @@ def growth_conversion_analysis_admin(
 
 
 @router.get("/growth/funnel")
+@console_section("analytics", "read")
 def growth_funnel_admin(
     request: Request,
     current_user: models.User = Depends(get_current_admin_user),
@@ -1384,6 +1554,7 @@ def growth_funnel_admin(
 
 
 @router.get("/growth/outcomes")
+@console_section("analytics", "read")
 def growth_outcomes_admin(
     request: Request,
     current_user: models.User = Depends(get_current_admin_user),
@@ -1432,6 +1603,7 @@ def _serialize_coupon_code(db: Session, row: models.CouponCode) -> dict:
 
 
 @router.get("/users/{user_id}/detail")
+@console_section("users", "read")
 def admin_user_detail(
     user_id: int,
     request: Request,
@@ -1571,6 +1743,7 @@ def admin_user_detail(
 
 
 @router.get("/coupons")
+@console_section("users", "read")
 def list_coupon_codes_admin(
     request: Request,
     user_id: int | None = None,
@@ -1596,6 +1769,7 @@ def list_coupon_codes_admin(
 
 
 @router.post("/coupons")
+@console_section("users", "write")
 def create_coupon_code_admin(
     request: Request,
     payload: schemas.AdminCouponCodeCreateRequest,
@@ -1655,6 +1829,7 @@ def create_coupon_code_admin(
 
 
 @router.delete("/coupons/{code}")
+@console_section("users", "delete")
 def delete_coupon_code_admin(
     code: str,
     request: Request,
@@ -1692,6 +1867,7 @@ def growth_agent_features_safe(db, user, sub):
 
 
 @router.post("/users/{user_id}/conversion-reco")
+@console_section("users", "write")
 def admin_user_conversion_reco(
     user_id: int,
     request: Request,
@@ -1717,6 +1893,7 @@ def admin_user_conversion_reco(
 
 
 @router.post("/users/{user_id}/visa-decision")
+@console_section("users", "write")
 def admin_set_visa_decision(
     user_id: int,
     request: Request,
@@ -1756,6 +1933,7 @@ def admin_set_visa_decision(
 
 
 @router.get("/enterprise/revenue")
+@console_section("enterprise", "read")
 def enterprise_revenue_analytics_admin(
     request: Request,
     current_user: models.User = Depends(get_current_admin_user),
@@ -1774,6 +1952,7 @@ def enterprise_revenue_analytics_admin(
 
 
 @router.get("/b2c/revenue")
+@console_section("finance", "read")
 def b2c_revenue_analytics_admin(
     request: Request,
     response: Response,
@@ -1794,6 +1973,7 @@ def b2c_revenue_analytics_admin(
 
 
 @router.get("/b2c/accounts")
+@console_section("finance", "read")
 def b2c_account_cost_profit_admin(
     request: Request,
     response: Response,
@@ -1815,6 +1995,7 @@ def b2c_account_cost_profit_admin(
 
 
 @router.post("/enterprise/calendar-reminders/run")
+@console_section("enterprise", "write")
 def run_enterprise_calendar_reminders_admin(
     request: Request,
     current_user: models.User = Depends(get_current_admin_user),
@@ -1833,6 +2014,7 @@ def run_enterprise_calendar_reminders_admin(
 
 
 @router.get("/ai-optimization")
+@console_section("ai", "read")
 def ai_optimization_analytics_admin(
     request: Request,
     response: Response,
@@ -1853,6 +2035,7 @@ def ai_optimization_analytics_admin(
 
 
 @router.get("/enterprise/accounts", response_model=schemas.AdminEnterpriseAccountListResponse)
+@console_section("enterprise", "read")
 def list_enterprise_accounts_admin(
     request: Request,
     page: int = Query(1, ge=1),
@@ -2028,6 +2211,7 @@ def list_enterprise_accounts_admin(
     "/enterprise/credentials",
     response_model=schemas.AdminEnterpriseCredentialCreateResponse,
 )
+@console_section("enterprise", "write", legacy_admin=True)
 def create_enterprise_credentials_admin(
     payload: schemas.AdminEnterpriseCredentialCreateRequest,
     request: Request,
@@ -2231,6 +2415,7 @@ def _refund_window_state(payment: models.EnterpriseCreditPayment) -> tuple[datet
 
 
 @router.get("/enterprise/accounts/{organization_id}/details")
+@console_section("enterprise", "read")
 def enterprise_account_details_admin(
     request: Request,
     organization_id: int,
@@ -2264,7 +2449,7 @@ def enterprise_account_details_admin(
     )
 
     # --- wallet (balance, lifetime purchased/spent, infra-fee state) ---
-    wallet = enterprise_credits.wallet_state(db, org.id)
+    wallet = enterprise_credits.wallet_state(db, org.id, read_only=True)
 
     # --- credit/infra purchases (Razorpay charges) ---
     P = models.EnterpriseCreditPayment
@@ -2498,7 +2683,7 @@ def enterprise_account_details_admin(
         # Which tier this org is on, its caps, and where it sits against them. The console
         # showed only the retired infra fee before, so a founder looking at an account had
         # no way to see what it actually pays every month.
-        "subscription": enterprise_billing.build_subscription_state(db, org.id),
+        "subscription": enterprise_billing.build_subscription_state(db, org.id, read_only=True),
         # Every *_paise total here is INR SETTLEMENT (base_amount_paise), which is what
         # makes it summable at all. `currency` says so explicitly so the console never has
         # to infer it. The refund-derived figures go null when they can't be stated in one
@@ -2539,6 +2724,7 @@ def enterprise_account_details_admin(
 
 
 @router.post("/enterprise/accounts/{organization_id}/refunds")
+@console_section("enterprise", "delete")
 def issue_enterprise_account_refund_admin(
     request: Request,
     organization_id: int,
@@ -2643,6 +2829,7 @@ def issue_enterprise_account_refund_admin(
 
 
 @router.get("/enterprise/accounts/{organization_id}/coupons")
+@console_section("enterprise", "read")
 def list_enterprise_account_coupons_admin(
     request: Request,
     organization_id: int,
@@ -2673,6 +2860,7 @@ def list_enterprise_account_coupons_admin(
 
 
 @router.post("/enterprise/accounts/{organization_id}/coupons")
+@console_section("enterprise", "write")
 def create_enterprise_account_coupon_admin(
     request: Request,
     organization_id: int,
@@ -2720,6 +2908,7 @@ def create_enterprise_account_coupon_admin(
 
 
 @router.patch("/enterprise/accounts/{organization_id}/coupons/{coupon_id}")
+@console_section("enterprise", "write")
 def update_enterprise_account_coupon_admin(
     request: Request,
     organization_id: int,
@@ -2767,6 +2956,7 @@ def update_enterprise_account_coupon_admin(
 
 
 @router.delete("/enterprise/accounts/{organization_id}/coupons/{coupon_id}")
+@console_section("enterprise", "delete")
 def delete_enterprise_account_coupon_admin(
     request: Request,
     organization_id: int,
@@ -2807,6 +2997,7 @@ _COUPON_APPLIES_EMAIL_LABELS = {
 
 
 @router.post("/enterprise/accounts/{organization_id}/coupons/{coupon_id}/send-email")
+@console_section("enterprise", "write")
 def send_enterprise_account_coupon_email_admin(
     request: Request,
     organization_id: int,
@@ -2908,6 +3099,7 @@ def send_enterprise_account_coupon_email_admin(
 
 
 @router.patch("/users/{user_id}/status", response_model=schemas.AdminUserSummary)
+@console_section("users", "write")
 def update_user_status_admin(
     request: Request,
     user_id: int,
@@ -2931,8 +3123,7 @@ def update_user_status_admin(
     if not user:
         raise HTTPException(status_code=404, detail="User not found")
 
-    if not payload.is_active:
-        _assert_manageable_target(user, current_user)
+    _assert_manageable_target(user, current_user, db)
 
     user.is_active = bool(payload.is_active)
     db.commit()
@@ -2941,6 +3132,7 @@ def update_user_status_admin(
 
 
 @router.delete("/users/{user_id}")
+@console_section("users", "delete")
 def delete_user_admin(
     request: Request,
     user_id: int,
@@ -2963,7 +3155,7 @@ def delete_user_admin(
     if not user:
         raise HTTPException(status_code=404, detail="User not found")
 
-    _assert_manageable_target(user, current_user)
+    _assert_manageable_target(user, current_user, db)
 
     # NOT NULL ownership rows (enterprise orgs / CRM clients / legacy students the user
     # created) cannot be de-linked or auto-deleted — refuse up front with the reason
@@ -3015,6 +3207,7 @@ def delete_user_admin(
 # ===========================================================================
 
 @router.post("/course-catalog/refresh-now")
+@console_section("ai", "write")
 def run_course_catalog_refresh_admin(
     request: Request,
     limit: int | None = Query(None, ge=1, le=100),
@@ -3037,6 +3230,7 @@ def run_course_catalog_refresh_admin(
 
 
 @router.get("/course-catalog/status")
+@console_section("ai", "read")
 def course_catalog_status_admin(
     request: Request,
     current_user: models.User = Depends(get_current_admin_user),

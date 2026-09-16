@@ -3,10 +3,16 @@ const COOKIE_AUTH_SENTINEL = '__cookie_session__';
 const ADMIN_PAGE_SIZE = 20;
 const ADMIN_TIME_ZONE = 'UTC';
 const ADMIN_TIME_ZONE_LABEL = 'UTC';
+const ADMIN_SECTIONS = ['users', 'enterprise', 'analytics', 'finance', 'ai', 'team'];
+const ADMIN_SECTION_LABELS = { users: 'Student Accounts', enterprise: 'Enterprise Accounts', analytics: 'Analytics & Agent', finance: 'Investment Analytics', ai: 'AI Costs', team: 'Team' };
 
 const state = {
     authToken: null,
     currentUser: null,
+    access: null,
+    accessRevision: 0,
+    accessRequestId: 0,
+    team: { members: [], sections: [], loading: false, saving: false, editingId: null },
     adminProtectionVerified: false,
     activeTab: 'users',
     users: [],
@@ -45,6 +51,7 @@ const state = {
     aiUsageData: null,
     aiUsageRequestId: 0,
     aiProfiles: { page: 1, pageSize: 25, total: 0, search: '', loading: false, exporting: false, requestId: 0, data: null },
+    aiAccounts: { loading: false, exporting: false, requestId: 0, data: null },
     aiProfileId: null,
     aiProfileRequestId: 0,
     aiBilling: { data: null, loading: false, syncing: false, requestId: 0 },
@@ -65,6 +72,20 @@ const refs = {
     loginPassword: document.getElementById('adminLoginPassword'),
     loginBtn: document.getElementById('adminLoginBtn'),
     logoutBtn: document.getElementById('adminLogoutBtn'),
+    teamTabBtn: document.getElementById('adminTeamTabBtn'),
+    teamTabPanel: document.getElementById('adminTeamTabPanel'),
+    teamForm: document.getElementById('adminTeamForm'),
+    teamEmail: document.getElementById('adminTeamEmail'),
+    teamRole: document.getElementById('adminTeamRole'),
+    teamPassword: document.getElementById('adminTeamPassword'),
+    teamPasswordConfirm: document.getElementById('adminTeamPasswordConfirm'),
+    teamSections: document.getElementById('adminTeamSections'),
+    teamSave: document.getElementById('adminTeamSave'),
+    teamCancel: document.getElementById('adminTeamCancel'),
+    teamError: document.getElementById('adminTeamError'),
+    teamTableBody: document.getElementById('adminTeamTableBody'),
+    teamSummary: document.getElementById('adminTeamSummary'),
+    teamFormTitle: document.getElementById('adminTeamFormTitle'),
     sessionBadge: document.getElementById('adminSessionBadge'),
     sidebar: document.getElementById('adminSidebar'),
     sidebarClose: document.getElementById('adminSidebarClose'),
@@ -206,6 +227,12 @@ const refs = {
     aiProfilesApplyBtn: document.getElementById('adminAiProfilesApplyBtn'),
     aiProfilesResetBtn: document.getElementById('adminAiProfilesResetBtn'),
     aiProfilesExportBtn: document.getElementById('adminAiProfilesExportBtn'),
+    aiAccountsSummary: document.getElementById('adminAiAccountsSummary'),
+    aiOrgsTableBody: document.getElementById('adminAiOrgsTableBody'),
+    aiUnlistedTableBody: document.getElementById('adminAiUnlistedTableBody'),
+    aiSharedTableBody: document.getElementById('adminAiSharedTableBody'),
+    aiUnattributedTableBody: document.getElementById('adminAiUnattributedTableBody'),
+    aiAccountsExportBtn: document.getElementById('adminAiAccountsExportBtn'),
     aiProfilesTableBody: document.getElementById('adminAiProfilesTableBody'),
     aiProfilesSummary: document.getElementById('adminAiProfilesSummary'),
     aiProfilesPrevBtn: document.getElementById('adminAiProfilesPrevBtn'),
@@ -236,6 +263,341 @@ document.addEventListener('DOMContentLoaded', () => {
     void bootstrap();
 });
 
+function canAccessSection(section) {
+    return Boolean(state.access?.sections?.includes(section)
+        && (section !== 'team' || (state.access.role === 'admin' && state.access.can_manage_team)));
+}
+
+function canWriteSection(section) {
+    return canAccessSection(section) && ['admin', 'editor'].includes(state.access.role)
+        && state.access.can_write_sections.includes(section);
+}
+
+function canDeleteSection(section) {
+    return canAccessSection(section) && state.access.role === 'admin'
+        && state.access.can_delete_sections.includes(section);
+}
+
+function canProvisionEnterprise() {
+    return canWriteSection('enterprise') && Boolean(state.access?.can_provision_enterprise
+        ?? (state.currentUser?.is_admin || state.currentUser?.is_developer));
+}
+
+function requireAdminPermission(section, action = 'read') {
+    const allowed = action === 'delete' ? canDeleteSection(section)
+        : action === 'write' ? canWriteSection(section) : canAccessSection(section);
+    if (!allowed) showFlash(action === 'read' ? 'You do not have access to this section.'
+        : 'Your role does not allow this action.', 'error');
+    return allowed;
+}
+
+function applyAdminPermissions() {
+    if (!document.querySelectorAll) return;
+    document.querySelectorAll('[data-admin-write], [data-admin-delete], [data-admin-provision], [data-admin-read]').forEach((element) => {
+        const allowed = element.hasAttribute('data-admin-provision') ? canProvisionEnterprise()
+            : element.dataset.adminDelete ? canDeleteSection(element.dataset.adminDelete)
+                : element.dataset.adminWrite ? canWriteSection(element.dataset.adminWrite)
+                    : canAccessSection(element.dataset.adminRead);
+        // Restore only visibility hidden by this guard; retain form/dialog lifecycle state.
+        if (!allowed) {
+            if (!element.hidden) { element.dataset.adminPermissionHidden = 'true'; element.hidden = true; }
+            if ('disabled' in element && !element.disabled) { element.dataset.adminPermissionDisabled = 'true'; element.disabled = true; }
+        } else {
+            if (element.dataset.adminPermissionHidden) { element.hidden = false; delete element.dataset.adminPermissionHidden; }
+            if (element.dataset.adminPermissionDisabled) { element.disabled = false; delete element.dataset.adminPermissionDisabled; }
+        }
+    });
+}
+
+function adminRequestSection(url) {
+    const path = String(url).split('?')[0];
+    if (/\/api\/admin\/team(?:\/|$)/.test(path)) return 'team';
+    if (/\/api\/admin\/(?:users|coupons)(?:\/|$)/.test(path)) return 'users';
+    if (/\/api\/admin\/enterprise(?:\/|$)/.test(path)) return 'enterprise';
+    if (/\/api\/admin\/(?:growth|acquisition)(?:\/|$)/.test(path)) return 'analytics';
+    if (/\/api\/admin\/(?:company-finance|b2c)(?:\/|$)/.test(path)) return 'finance';
+    if (/\/api\/admin\/ai-usage(?:\/|$)/.test(path)) return 'ai';
+    return null;
+}
+
+function deniedAdminResponse(message, status = 403) {
+    return { ok: false, status, headers: { get: () => null }, json: async () => ({ detail: message }) };
+}
+
+async function adminFetch(url, options = {}) {
+    const section = adminRequestSection(url);
+    const method = String(options.method || 'GET').toUpperCase();
+    const destructive = method === 'DELETE' || (method === 'POST' && /\/enterprise\/accounts\/[^/]+\/refunds$/.test(String(url).split('?')[0]));
+    const allowed = section && (destructive ? canDeleteSection(section)
+        : ['GET', 'HEAD'].includes(method) ? canAccessSection(section) : canWriteSection(section));
+    if (!allowed || (String(url).split('?')[0].endsWith('/enterprise/credentials') && !canProvisionEnterprise())) {
+        return deniedAdminResponse('Your role does not allow this action.');
+    }
+    const revision = state.accessRevision;
+    const response = await fetch(url, { ...options, headers: buildAuthHeaders(options.headers) });
+    if (revision !== state.accessRevision) return deniedAdminResponse('Your console access changed. Refresh this view.', 409);
+    // Access is rechecked for every server denial, including readers whose grants were revoked.
+    if (response.status === 401 || response.status === 403) {
+        const payload = await response.json().catch(() => ({}));
+        await handleAdminAuthOrProtectionError(response.status, payload);
+        return deniedAdminResponse(normalizeErrorMessage(payload, 'Your console access changed.'), response.status);
+    }
+    // Body reads can finish after logout or an access update. Discard those old responses.
+    return {
+        get ok() { return revision === state.accessRevision && response.ok; },
+        status: response.status,
+        headers: response.headers,
+        async json() {
+            const payload = await response.json();
+            return revision === state.accessRevision ? payload : { detail: 'Your console access changed.' };
+        },
+        async blob() {
+            const blob = await response.blob();
+            if (revision !== state.accessRevision) throw new Error('Your console access changed.');
+            return blob;
+        }
+    };
+}
+
+function clearPrivilegedState() {
+    state.accessRevision += 1;
+    if (refs.loginPassword) refs.loginPassword.value = '';
+    ['adminConfirmOverlay', 'adminPromptOverlay'].forEach((id) => {
+        const overlay = document.getElementById(id);
+        overlay?.dismiss?.();
+        overlay?.remove?.();
+    });
+    state.users = []; state.total = 0; state.loading = false; state.usersExportFormat = null;
+    state.metrics = { visa_pass_users: 0, free_users: 0 };
+    state.enterpriseAccounts = []; state.enterpriseTotal = 0; state.enterpriseLoading = false;
+    state.enterpriseMetrics = { active_members: 0, active_admins: 0 };
+    state.financeAnalytics = null; state.financeLoading = false;
+    state.accountDetails = null;
+    state.couponOrg = null; state.couponList = []; state.couponLoading = false;
+    state.aiUsageRequestId += 1; state.aiUsageData = null; state.aiSeries = [];
+    state.aiProfiles.requestId += 1; state.aiProfiles.data = null; state.aiProfiles.total = 0;
+    state.aiProfiles.loading = false; state.aiProfiles.exporting = false;
+    state.aiProfileId = null; state.aiProfileRequestId += 1;
+    state.aiBilling.requestId += 1; state.aiBilling.data = null; state.aiBilling.loading = false; state.aiBilling.syncing = false;
+    state.team = { members: [], sections: [], loading: false, saving: false, editingId: null };
+    const cacheRefs = ['tableBody', 'enterpriseTableBody', 'financeTableBody', 'financeTimelineChart', 'financeBreakdownChart', 'financeContributorChart',
+        'aiProfilesTableBody', 'aiProfileDetailBody', 'aiCoverage', 'aiReconciliation', 'aiDailyTableBody', 'aiTimelineChart', 'aiSourceChart', 'aiModelChart',
+        'enterpriseCredentialResult', 'accountDetails', 'couponTableBody', 'teamTableBody', 'teamSummary', 'usersSummary', 'enterpriseSummary',
+        'aiMonthHero', 'aiTodayCost', 'aiTodaySub', 'ai7Cost', 'ai7Sub', 'aiMonthCost', 'aiMonthSub', 'aiAllCost', 'aiAllSub',
+        'aiHeroLabel', 'aiHeroNote', 'aiRangeCaption', 'aiRangeCost', 'aiCalculatedCost', 'aiCalculatedCostSub', 'aiCalculatedCoverage', 'aiRangeSub',
+        'aiRangeAvg', 'aiRangeAvgSub', 'aiRangeTopDay', 'aiRangeTopDaySub', 'aiRangeSaved', 'aiRangeSavedSub', 'aiRangeSearch', 'aiRangeSearchSub',
+        'aiDailyTotalCalls', 'aiDailyTotalTokens', 'aiDailyTotalCost', 'aiDailyCalculatedTotal', 'aiDailyTotalShare',
+        'b2cRevenue', 'b2cRevenueSub', 'b2cActive', 'b2cCost', 'b2cCostSub', 'b2cConversion', 'b2cConversionSub'];
+    cacheRefs.forEach((key) => { if (refs[key]) refs[key].textContent = ''; });
+    ['adminGrowthResults', 'adminGrowthMeta', 'adminAcquisitionBreakdown', 'adminAcquisitionMeta', 'adminFunnelBody', 'adminOutcomesBody', 'adminAccountBody', 'adminAccountActions', 'adminAccountTitle'].forEach((id) => {
+        const element = document.getElementById(id); if (element) element.textContent = '';
+    });
+    ['couponModal', 'aiProfileDetail', 'enterpriseCredentialResult', 'financeEntryForm'].forEach((key) => { if (refs[key]) refs[key].hidden = true; });
+    const accountPanel = document.getElementById('adminAccountDetail');
+    if (accountPanel) accountPanel.hidden = true;
+    if (document.body?.style) document.body.style.overflow = '';
+    document.querySelectorAll?.('.metric-card strong, .finance-hero-stat strong, .metric-subtext').forEach((element) => { element.textContent = '—'; });
+    refs.enterpriseCredentialForm?.reset(); refs.financeEntryForm?.reset();
+    resetTeamForm();
+}
+
+function applyAdminAccess(payload) {
+    const sections = ADMIN_SECTIONS.filter((key) => Array.isArray(payload?.sections) && payload.sections.includes(key));
+    const access = {
+        role: payload?.role,
+        sections,
+        can_manage_team: Boolean(payload?.can_manage_team),
+        can_provision_enterprise: Boolean(payload?.can_provision_enterprise ?? (payload?.user?.is_admin || payload?.user?.is_developer)),
+        can_write_sections: sections.filter((key) => payload?.can_write_sections?.includes(key)),
+        can_delete_sections: sections.filter((key) => payload?.can_delete_sections?.includes(key))
+    };
+    if (!payload?.user || !['admin', 'editor', 'viewer'].includes(access.role) || !sections.length) return false;
+    if (state.currentUser?.id !== payload.user.id || JSON.stringify(state.access) !== JSON.stringify(access)) clearPrivilegedState();
+    state.currentUser = payload.user;
+    state.access = access;
+    if (!canAccessSection(state.activeTab)) state.activeTab = ADMIN_SECTIONS.find(canAccessSection) || null;
+    renderActiveTab(); applyAdminPermissions(); updateSessionBadge();
+    return Boolean(state.activeTab);
+}
+
+function setTeamError(message = '') {
+    if (!refs.teamError) return;
+    refs.teamError.textContent = message;
+    refs.teamError.hidden = !message;
+}
+
+function selectedTeamSections() {
+    return Array.from(refs.teamSections?.querySelectorAll('input:checked') || []).map((input) => input.value);
+}
+
+function renderTeamSections(selected = []) {
+    if (!refs.teamSections) return;
+    const adminRole = refs.teamRole?.value === 'admin';
+    refs.teamSections.innerHTML = ADMIN_SECTIONS.filter(canAccessSection).map((key) => {
+        const disabled = key === 'team' && !adminRole;
+        const label = state.team.sections.find((item) => item.key === key)?.label || ADMIN_SECTION_LABELS[key];
+        return `<label class="team-section-option${disabled ? ' is-unavailable' : ''}">
+            <input type="checkbox" name="sections" value="${key}" ${!disabled && selected.includes(key) ? 'checked' : ''} ${disabled ? 'disabled' : ''}>
+            <span>${escapeHtml(label)}${key === 'team' ? '<small>Admin role only</small>' : ''}</span></label>`;
+    }).join('');
+}
+
+function clearTeamPasswordFields() {
+    if (refs.teamPassword) refs.teamPassword.value = '';
+    if (refs.teamPasswordConfirm) refs.teamPasswordConfirm.value = '';
+}
+
+function resetTeamForm({ focus = false } = {}) {
+    state.team.editingId = null;
+    refs.teamForm?.reset();
+    clearTeamPasswordFields();
+    if (refs.teamEmail) { refs.teamEmail.disabled = false; refs.teamEmail.value = ''; }
+    if (refs.teamRole) refs.teamRole.value = 'viewer';
+    if (refs.teamFormTitle) refs.teamFormTitle.textContent = 'Add a team member';
+    if (refs.teamSave) refs.teamSave.textContent = 'Add member';
+    if (refs.teamCancel) refs.teamCancel.textContent = 'Reset';
+    setTeamError(); renderTeamSections();
+    if (focus) refs.teamEmail?.focus();
+}
+
+function renderTeamMembers() {
+    if (!refs.teamTableBody) return;
+    refs.teamTableBody.innerHTML = state.team.members.map((member) => {
+        const manageable = Boolean(member.can_manage && !member.protected && canWriteSection('team'));
+        const sections = (member.sections || []).filter((key) => ADMIN_SECTIONS.includes(key));
+        const roleLabel = { admin: 'Admin', editor: 'Editor', viewer: 'Viewer' }[member.role] || member.role;
+        return `<tr><td><div class="user-name">${escapeHtml(member.full_name || member.email)}</div><div class="user-meta">${escapeHtml(member.email)}</div></td>
+            <td><span class="role-chip">${escapeHtml(roleLabel)}</span><div class="user-meta">${member.has_console_password ? 'Console password set' : 'Existing Rilono password'}</div>${member.protected ? '<div class="user-meta">Protected platform administrator</div>' : ''}</td>
+            <td><div class="team-section-chips">${sections.map((key) => `<span>${escapeHtml(ADMIN_SECTION_LABELS[key])}</span>`).join('')}</div></td>
+            <td>${manageable ? `<div class="row-actions"><button type="button" class="table-btn" data-team-action="edit" data-user-id="${escapeHtml(member.user_id)}">Edit</button><button type="button" class="table-btn danger" data-admin-delete="team" data-team-action="revoke" data-user-id="${escapeHtml(member.user_id)}">Revoke access</button></div>`
+                : '<span class="user-meta">Access locked</span>'}</td></tr>`;
+    }).join('') || '<tr><td colspan="4" class="table-empty">No team members found.</td></tr>';
+    if (refs.teamSummary) refs.teamSummary.textContent = `${state.team.members.length} console member${state.team.members.length === 1 ? '' : 's'}`;
+    applyAdminPermissions();
+}
+
+async function loadTeam() {
+    if (!requireAdminPermission('team') || !await ensureAdminProtection({ silent: false })) return;
+    setTeamError();
+    state.team.loading = true;
+    if (refs.teamTableBody) refs.teamTableBody.innerHTML = '<tr><td colspan="4" class="table-empty">Loading team…</td></tr>';
+    try {
+        const response = await adminFetch(`${API_BASE}/api/admin/team`, { headers: buildAuthHeaders(), credentials: 'same-origin' });
+        const payload = await response.json().catch(() => ({}));
+        if (!response.ok) { setTeamError(normalizeErrorMessage(payload, 'Could not load team members.')); return; }
+        // Keep only display/access metadata; credentials must never enter cached state.
+        state.team.members = Array.isArray(payload.members) ? payload.members.map((member) => ({
+            user_id: member.user_id, email: member.email, full_name: member.full_name,
+            role: member.role, sections: member.sections, protected: Boolean(member.protected),
+            can_manage: Boolean(member.can_manage), has_console_password: Boolean(member.has_console_password)
+        })) : [];
+        state.team.sections = Array.isArray(payload.sections) ? payload.sections : [];
+        renderTeamMembers(); renderTeamSections(selectedTeamSections());
+    } catch { setTeamError('Could not load team members. Please retry.'); }
+    finally { state.team.loading = false; }
+}
+
+function editTeamMember(userId) {
+    if (!requireAdminPermission('team', 'write') || state.team.saving) return;
+    clearTeamPasswordFields();
+    const member = state.team.members.find((item) => String(item.user_id) === String(userId));
+    if (!member || member.protected || !member.can_manage) { setTeamError('This member’s access cannot be changed by your account.'); return; }
+    state.team.editingId = member.user_id;
+    refs.teamEmail.value = member.email; refs.teamEmail.disabled = true;
+    refs.teamRole.value = member.role;
+    refs.teamFormTitle.textContent = 'Edit team access';
+    refs.teamSave.textContent = 'Save changes'; refs.teamCancel.textContent = 'Cancel edit';
+    setTeamError(); renderTeamSections(member.sections); refs.teamRole.focus();
+}
+
+function teamMemberPayload() {
+    const role = String(refs.teamRole?.value || '');
+    const sections = selectedTeamSections().filter((key) => canAccessSection(key) && (key !== 'team' || role === 'admin'));
+    if (!['admin', 'editor', 'viewer'].includes(role)) throw new Error('Choose an available role.');
+    if (!sections.length) throw new Error('Select at least one section.');
+    const payload = { role, sections: [...new Set(sections)] };
+    const password = refs.teamPassword?.value || '';
+    const confirmation = refs.teamPasswordConfirm?.value || '';
+    if (password || confirmation) {
+        if (!password.trim()) throw new Error('Enter a new console password or leave both password fields blank.');
+        if (password !== confirmation) throw new Error('The console passwords do not match.');
+        payload.console_password = password;
+    }
+    if (state.team.editingId === null) {
+        payload.email = (refs.teamEmail?.value || '').trim();
+        if (!payload.email) throw new Error('Enter an existing Rilono account email.');
+    }
+    return payload;
+}
+
+function setTeamSaving(saving) {
+    state.team.saving = saving;
+    refs.teamForm?.setAttribute('aria-busy', String(saving));
+    refs.teamForm?.querySelectorAll('input, select, button').forEach((control) => { control.disabled = saving; });
+    if (!saving) {
+        if (refs.teamEmail) refs.teamEmail.disabled = state.team.editingId !== null;
+        refs.teamSections?.querySelectorAll('input').forEach((input) => { input.disabled = input.value === 'team' && refs.teamRole?.value !== 'admin'; });
+    }
+    if (refs.teamSave) refs.teamSave.textContent = saving ? 'Saving…' : state.team.editingId === null ? 'Add member' : 'Save changes';
+    refs.teamTableBody?.querySelectorAll('button').forEach((button) => { button.disabled = saving; });
+    applyAdminPermissions();
+}
+
+async function saveTeamMember(event) {
+    event?.preventDefault();
+    if (!requireAdminPermission('team', 'write') || state.team.saving) return;
+    setTeamError();
+    let payload;
+    try { payload = teamMemberPayload(); } catch (error) { setTeamError(error.message); return; }
+    if (!await ensureAdminProtection({ silent: false })) return;
+    const editingId = state.team.editingId;
+    if (editingId !== null) {
+        const member = state.team.members.find((item) => String(item.user_id) === String(editingId));
+        if (!member || member.protected || !member.can_manage) { setTeamError('This member’s access cannot be changed.'); return; }
+    }
+    setTeamSaving(true);
+    try {
+        const response = await adminFetch(`${API_BASE}/api/admin/team${editingId === null ? '' : `/${encodeURIComponent(editingId)}`}`, {
+            method: editingId === null ? 'POST' : 'PATCH', headers: buildAuthHeaders({ 'Content-Type': 'application/json' }), credentials: 'same-origin', body: JSON.stringify(payload)
+        });
+        const result = await response.json().catch(() => ({}));
+        if (!response.ok) { setTeamError(normalizeErrorMessage(result, 'Could not save team access.')); return; }
+        resetTeamForm();
+        if (await refreshCurrentAdminUser({ silent: true })) {
+            if (canAccessSection('team')) await loadTeam(); else await loadActiveTab();
+        } else showAuth();
+        showFlash(editingId === null ? 'Console access added for the existing account.' : 'Team access updated.', 'success');
+    } catch { setTeamError('Could not save team access. Please retry.'); }
+    finally { clearTeamPasswordFields(); setTeamSaving(false); }
+}
+
+async function revokeTeamMember(userId) {
+    if (!requireAdminPermission('team', 'delete') || state.team.saving) return;
+    const member = state.team.members.find((item) => String(item.user_id) === String(userId));
+    if (!member || member.protected || !member.can_manage) { setTeamError('This member’s access cannot be revoked by your account.'); return; }
+    if (!await confirmDialog(`${member.email} will lose admin console access. Their Rilono account and data remain available.`, { title: 'Revoke console access?', okText: 'Revoke access' })) return;
+    if (!await ensureAdminProtection({ silent: false })) return;
+    setTeamError(); setTeamSaving(true);
+    try {
+        const response = await adminFetch(`${API_BASE}/api/admin/team/${encodeURIComponent(userId)}`, { method: 'DELETE', headers: buildAuthHeaders(), credentials: 'same-origin' });
+        const payload = await response.json().catch(() => ({}));
+        if (!response.ok) { setTeamError(normalizeErrorMessage(payload, 'Could not revoke console access.')); return; }
+        resetTeamForm();
+        if (await refreshCurrentAdminUser({ silent: true })) {
+            if (canAccessSection('team')) await loadTeam(); else await loadActiveTab();
+        } else showAuth();
+        showFlash('Console access revoked. The Rilono account was not deleted.', 'success');
+    } catch { setTeamError('Could not revoke access. Please retry.'); }
+    finally { setTeamSaving(false); }
+}
+
+function handleTeamAction(event) {
+    const button = event.target.closest('[data-team-action]');
+    if (!button || button.disabled) return;
+    if (button.dataset.teamAction === 'edit') editTeamMember(button.dataset.userId);
+    if (button.dataset.teamAction === 'revoke') void revokeTeamMember(button.dataset.userId);
+}
+
 function setDateColumnTimeZoneLabels() {
     if (refs.createdHeader) refs.createdHeader.textContent = `Created (${ADMIN_TIME_ZONE_LABEL})`;
     if (refs.lastLoginHeader) refs.lastLoginHeader.textContent = `Last Login (${ADMIN_TIME_ZONE_LABEL})`;
@@ -244,6 +606,26 @@ function setDateColumnTimeZoneLabels() {
 
 function bindEvents() {
     bindAdminNavigation();
+    refs.teamTabBtn?.addEventListener('click', () => selectAdminTab('team'));
+    refs.teamForm?.addEventListener('submit', saveTeamMember);
+    refs.teamRole?.addEventListener('change', () => renderTeamSections(selectedTeamSections()));
+    refs.teamCancel?.addEventListener('click', () => resetTeamForm());
+    refs.teamTableBody?.addEventListener('click', handleTeamAction);
+    document.addEventListener('visibilitychange', async () => {
+        if (document.visibilityState !== 'visible' || !state.currentUser || state.team.saving) return;
+        const revision = state.accessRevision;
+        const allowed = await refreshCurrentAdminUser({ silent: true });
+        if (!allowed) showAuth();
+        else if (revision !== state.accessRevision) await loadActiveTab();
+    });
+    // Dynamic account, refund, and ledger controls receive the same permission rules.
+    if (typeof MutationObserver !== 'undefined') {
+        const observer = new MutationObserver(() => applyAdminPermissions());
+        observer.observe(refs.consolePanel, { childList: true, subtree: true });
+        if (refs.couponModal) observer.observe(refs.couponModal, { childList: true, subtree: true });
+        const detail = document.getElementById('adminAccountDetail');
+        if (detail) observer.observe(detail, { childList: true, subtree: true });
+    }
     refs.loginForm?.addEventListener('submit', handleLoginSubmit);
     refs.logoutBtn?.addEventListener('click', handleLogout);
     document.getElementById('adminGrowthRunBtn')?.addEventListener('click', runGrowthAnalysis);
@@ -301,6 +683,7 @@ function bindEvents() {
     refs.aiProfilesPrevBtn?.addEventListener('click', () => changeAiProfilesPage(-1));
     refs.aiProfilesNextBtn?.addEventListener('click', () => changeAiProfilesPage(1));
     refs.aiProfilesExportBtn?.addEventListener('click', exportAiProfiles);
+    refs.aiAccountsExportBtn?.addEventListener('click', exportAiAccounts);
     refs.aiProfilesTableBody?.addEventListener('click', (event) => {
         const button = event.target.closest('[data-ai-profile-id]');
         if (button) void loadAiProfileDetail(button.dataset.aiProfileId);
@@ -314,7 +697,7 @@ function bindEvents() {
 }
 
 function adminTabButtons() {
-    return [refs.usersTabBtn, refs.enterpriseTabBtn, refs.analyticsTabBtn, refs.financeTabBtn, refs.aiTabBtn].filter(Boolean);
+    return ADMIN_SECTIONS.map((key) => refs[`${key}TabBtn`]).filter((button) => button && !button.hidden);
 }
 
 function updateSidebarAccessibility() {
@@ -422,11 +805,7 @@ async function bootstrap() {
 }
 
 function buildAuthHeaders(extraHeaders = {}) {
-    const headers = { ...extraHeaders };
-    if (state.authToken && state.authToken !== COOKIE_AUTH_SENTINEL) {
-        headers.Authorization = `Bearer ${state.authToken}`;
-    }
-    return headers;
+    return { ...extraHeaders, 'X-Admin-Console-Session': 'required' };
 }
 
 function showFlash(message, type = 'info') {
@@ -454,7 +833,7 @@ function confirmDialog(message, opts) {
     const okBg = danger ? 'linear-gradient(135deg,#ef4444,#dc2626)' : 'linear-gradient(135deg,#4f46e5,#7c3aed)';
     return new Promise((resolve) => {
         const existing = document.getElementById('adminConfirmOverlay');
-        if (existing) existing.remove();
+        if (existing) { existing.dismiss?.(); existing.remove(); }
         const overlay = document.createElement('div');
         overlay.id = 'adminConfirmOverlay';
         overlay.style.cssText = 'position:fixed;inset:0;z-index:100010;background:rgba(15,23,42,0.55);display:flex;align-items:center;justify-content:center;padding:20px;font-family:inherit;';
@@ -477,6 +856,7 @@ function confirmDialog(message, opts) {
             overlay.remove();
             resolve(val);
         };
+        overlay.dismiss = () => done(false);
         function onKey(e) {
             if (e.key === 'Escape') { e.stopPropagation(); done(false); }
             else if (e.key === 'Enter') { e.preventDefault(); done(true); }
@@ -498,7 +878,7 @@ function promptDialog(message, opts) {
     const inputType = opts.type || 'text';
     return new Promise((resolve) => {
         const existing = document.getElementById('adminPromptOverlay');
-        if (existing) existing.remove();
+        if (existing) { existing.dismiss?.(); existing.remove(); }
         const overlay = document.createElement('div');
         overlay.id = 'adminPromptOverlay';
         overlay.style.cssText = 'position:fixed;inset:0;z-index:100010;background:rgba(15,23,42,0.55);display:flex;align-items:center;justify-content:center;padding:20px;font-family:inherit;';
@@ -522,6 +902,7 @@ function promptDialog(message, opts) {
             overlay.remove();
             resolve(val);
         };
+        overlay.dismiss = () => done(null);
         function onKey(e) { if (e.key === 'Escape') { e.stopPropagation(); done(null); } }
         overlay.querySelector('#adminPromptForm').onsubmit = (e) => { e.preventDefault(); done(overlay.querySelector('#adminPromptInput').value); };
         overlay.querySelector('#adminPromptCancel').onclick = () => done(null);
@@ -532,6 +913,8 @@ function promptDialog(message, opts) {
 }
 
 function showAuth() {
+    state.currentUser = null; state.access = null;
+    clearPrivilegedState();
     setSidebarOpen(false);
     document.body.classList.remove('admin-authenticated');
     if (refs.sidebar) refs.sidebar.hidden = true;
@@ -561,55 +944,29 @@ function showConsole() {
 }
 
 function renderActiveTab() {
-    const isUsersTab = state.activeTab === 'users';
-    const isEnterpriseTab = state.activeTab === 'enterprise';
-    const isAnalyticsTab = state.activeTab === 'analytics';
-    const isFinanceTab = state.activeTab === 'finance';
-    const isAiTab = state.activeTab === 'ai';
-
-    if (refs.usersTabBtn) {
-        refs.usersTabBtn.classList.toggle('active', isUsersTab);
-        refs.usersTabBtn.setAttribute('aria-selected', String(isUsersTab));
-    }
-    if (refs.enterpriseTabBtn) {
-        refs.enterpriseTabBtn.classList.toggle('active', isEnterpriseTab);
-        refs.enterpriseTabBtn.setAttribute('aria-selected', String(isEnterpriseTab));
-    }
-    if (refs.analyticsTabBtn) {
-        refs.analyticsTabBtn.classList.toggle('active', isAnalyticsTab);
-        refs.analyticsTabBtn.setAttribute('aria-selected', String(isAnalyticsTab));
-    }
-    if (refs.financeTabBtn) {
-        refs.financeTabBtn.classList.toggle('active', isFinanceTab);
-        refs.financeTabBtn.setAttribute('aria-selected', String(isFinanceTab));
-    }
-    if (refs.usersTabPanel) {
-        refs.usersTabPanel.hidden = !isUsersTab;
-    }
-    if (refs.enterpriseTabPanel) {
-        refs.enterpriseTabPanel.hidden = !isEnterpriseTab;
-    }
-    if (refs.analyticsTabPanel) {
-        refs.analyticsTabPanel.hidden = !isAnalyticsTab;
-    }
-    if (refs.financeTabPanel) {
-        refs.financeTabPanel.hidden = !isFinanceTab;
-    }
-    if (refs.aiTabBtn) {
-        refs.aiTabBtn.classList.toggle('active', isAiTab);
-        refs.aiTabBtn.setAttribute('aria-selected', String(isAiTab));
-    }
-    if (refs.aiTabPanel) {
-        refs.aiTabPanel.hidden = !isAiTab;
-    }
-    adminTabButtons().forEach((button) => {
-        button.tabIndex = button.dataset.tab === state.activeTab ? 0 : -1;
+    if (!canAccessSection(state.activeTab)) state.activeTab = ADMIN_SECTIONS.find(canAccessSection) || null;
+    ADMIN_SECTIONS.forEach((key) => {
+        const allowed = canAccessSection(key);
+        const selected = allowed && state.activeTab === key;
+        const button = refs[`${key}TabBtn`];
+        const panel = refs[`${key}TabPanel`];
+        if (button) {
+            button.hidden = !allowed;
+            button.classList.toggle('active', selected);
+            button.setAttribute('aria-selected', String(selected));
+            button.tabIndex = selected ? 0 : -1;
+        }
+        if (panel) panel.hidden = !selected;
     });
+    document.querySelectorAll?.('.nav-group-label[data-admin-group]').forEach((label) => {
+        label.hidden = !label.dataset.adminGroup.split(' ').some(canAccessSection);
+    });
+    applyAdminPermissions();
 }
 
 async function handleTabSwitch(tabName) {
     const normalized = String(tabName || '').trim().toLowerCase();
-    if (!['users', 'enterprise', 'analytics', 'finance', 'ai'].includes(normalized)) return;
+    if (!ADMIN_SECTIONS.includes(normalized) || !canAccessSection(normalized)) return;
     if (state.activeTab === normalized) return;
 
     state.activeTab = normalized;
@@ -621,6 +978,8 @@ async function handleTabSwitch(tabName) {
 }
 
 async function loadActiveTab({ resetPage = false } = {}) {
+    if (!canAccessSection(state.activeTab)) return;
+    if (state.activeTab === 'team') { await loadTeam(); return; }
     if (state.activeTab === 'enterprise') {
         await loadEnterpriseAccounts({ resetPage });
         return;
@@ -647,7 +1006,7 @@ function updateSessionBadge() {
         refs.sessionBadge.hidden = true;
         return;
     }
-    const role = user.is_developer ? 'Developer' : 'Admin';
+    const role = state.access?.role ? state.access.role[0].toUpperCase() + state.access.role.slice(1) : 'Member';
     const label = user.full_name || user.username || user.email || 'Admin User';
     refs.sessionBadge.textContent = `${role}: ${label}`;
     refs.sessionBadge.hidden = false;
@@ -671,55 +1030,48 @@ function normalizeErrorMessage(payload, fallbackMessage) {
     return fallbackMessage;
 }
 
+let adminAccessRefreshPromise = null;
 async function handleAdminAuthOrProtectionError(responseStatus, payload) {
     if (responseStatus !== 401 && responseStatus !== 403) return;
-
     const detail = String(payload?.detail || '').toLowerCase();
     if (detail.includes('cloudflare verification')) {
         state.adminProtectionVerified = false;
         updateProtectionUi();
+        return;
     }
-
-    const stillAdmin = await refreshCurrentAdminUser({ silent: true });
-    if (!stillAdmin) {
+    const revision = state.accessRevision;
+    if (!adminAccessRefreshPromise) {
+        adminAccessRefreshPromise = refreshCurrentAdminUser({ silent: true })
+            .finally(() => { adminAccessRefreshPromise = null; });
+    }
+    if (!await adminAccessRefreshPromise) {
         showAuth();
+        showFlash(responseStatus === 401 ? 'Your session expired. Please sign in again.' : 'This account no longer has console access.', 'error');
+    } else if (revision !== state.accessRevision) {
+        await loadActiveTab();
     }
 }
 
 async function refreshCurrentAdminUser({ silent = false } = {}) {
+    const requestId = ++state.accessRequestId;
     try {
-        const response = await fetch(`${API_BASE}/api/auth/me`, {
-            headers: buildAuthHeaders(),
-            credentials: 'same-origin'
+        const response = await fetch(`${API_BASE}/api/admin/access`, {
+            headers: buildAuthHeaders(), credentials: 'same-origin'
         });
-
-        if (!response.ok) {
-            state.currentUser = null;
-            if (!silent && response.status !== 401) {
-                showFlash('Session expired. Please login again.', 'error');
-            }
+        const payload = response.ok ? await response.json() : null;
+        if (requestId !== state.accessRequestId) return Boolean(state.access);
+        if (!response.ok || !applyAdminAccess(payload)) {
+            state.currentUser = null; state.access = null;
+            clearPrivilegedState(); renderActiveTab();
+            if (!silent) showFlash(response.status === 403 ? 'This account does not have console access.' : 'Session expired. Please sign in again.', 'error');
             return false;
         }
-
-        const user = await response.json();
-        const isAdmin = Boolean(user && (user.is_admin || user.is_developer));
-        if (!isAdmin) {
-            state.currentUser = null;
-            if (!silent) {
-                showFlash('This account does not have admin access.', 'error');
-            }
-            return false;
-        }
-
-        state.currentUser = user;
-        updateSessionBadge();
         return true;
     } catch (error) {
-        console.error('Failed to check admin session:', error);
-        state.currentUser = null;
-        if (!silent) {
-            showFlash('Could not verify session. Please retry.', 'error');
-        }
+        if (requestId !== state.accessRequestId) return Boolean(state.access);
+        state.currentUser = null; state.access = null;
+        clearPrivilegedState(); renderActiveTab();
+        if (!silent) showFlash('Could not verify console access. Please retry.', 'error');
         return false;
     }
 }
@@ -737,7 +1089,7 @@ async function waitForTurnstile(timeoutMs = 10000) {
 
 async function initializeTurnstile() {
     try {
-        const response = await fetch(`${API_BASE}/api/auth/turnstile-site-key`, { credentials: 'same-origin' });
+        const response = await fetch(`${API_BASE}/api/auth/turnstile-site-key`, { headers: buildAuthHeaders(), credentials: 'same-origin' });
         if (!response.ok) return;
 
         const payload = await response.json();
@@ -930,19 +1282,12 @@ async function handleLoginSubmit(event) {
     refs.loginBtn.textContent = 'Signing in...';
 
     try {
-        const formData = new URLSearchParams();
-        formData.append('username', email);
-        formData.append('password', password);
-        if (turnstileToken) {
-            formData.append('cf_turnstile_token', turnstileToken);
-        }
-
-        const response = await fetch(`${API_BASE}/api/auth/login`, {
+        const loginPayload = { email, password };
+        if (turnstileToken) loginPayload.cf_turnstile_token = turnstileToken;
+        const response = await fetch(`${API_BASE}/api/admin-auth/login`, {
             method: 'POST',
-            headers: {
-                'Content-Type': 'application/x-www-form-urlencoded'
-            },
-            body: formData,
+            headers: buildAuthHeaders({ 'Content-Type': 'application/json' }),
+            body: JSON.stringify(loginPayload),
             credentials: 'same-origin'
         });
 
@@ -954,11 +1299,7 @@ async function handleLoginSubmit(event) {
         }
 
         state.authToken = COOKIE_AUTH_SENTINEL;
-        let canAccess = await refreshCurrentAdminUser({ silent: true });
-        if (!canAccess && payload?.access_token) {
-            state.authToken = payload.access_token;
-            canAccess = await refreshCurrentAdminUser({ silent: true });
-        }
+        const canAccess = await refreshCurrentAdminUser({ silent: true });
 
         if (!canAccess) {
             showFlash('Logged in, but this account does not have admin access.', 'error');
@@ -978,68 +1319,26 @@ async function handleLoginSubmit(event) {
             showFlash('Login successful. Complete Cloudflare check to continue.', 'info');
         }
     } catch (error) {
-        console.error('Admin login failed:', error);
         showFlash('Could not sign in right now. Please try again.', 'error');
     } finally {
+        if (refs.loginPassword) refs.loginPassword.value = '';
         refs.loginBtn.disabled = false;
         refs.loginBtn.textContent = 'Sign In to Admin Console';
     }
 }
 
 async function handleLogout() {
-    if (state.currentUser) {
-        try {
-            await fetch(`${API_BASE}/api/admin/turnstile/clear`, {
-                method: 'POST',
-                headers: buildAuthHeaders(),
-                credentials: 'same-origin'
-            });
-        } catch {
-            // no-op
-        }
-    }
-
-    try {
-        await fetch(`${API_BASE}/api/auth/logout`, {
-            method: 'POST',
-            headers: buildAuthHeaders(),
-            credentials: 'same-origin'
-        });
-    } catch {
-        // no-op
-    }
-
+    const headers = buildAuthHeaders();
+    const hadUser = Boolean(state.currentUser);
+    state.accessRequestId += 1;
     state.authToken = null;
-    state.currentUser = null;
-    state.adminProtectionVerified = false;
-    state.activeTab = 'users';
-    state.users = [];
-    state.total = 0;
-    state.metrics = { visa_pass_users: 0, free_users: 0 };
-    state.page = 1;
-    state.loading = false;
-    state.enterpriseAccounts = [];
-    state.enterpriseTotal = 0;
-    state.enterpriseMetrics = { active_members: 0, active_admins: 0 };
-    state.enterprisePage = 1;
-    state.enterpriseLoading = false;
-    state.enterpriseFilters = { search: '' };
-    state.financeAnalytics = null;
-    state.financeLoading = false;
-    resetTurnstileWidget();
-    resetActionTurnstileWidget();
     showAuth();
-    showFlash('Logged out. Login with an admin account to continue.', 'info');
-    renderUsersTableMessage('No users loaded yet.');
-    renderUsersSummary();
-    renderPagination();
-    renderMetrics();
-    renderEnterpriseTableMessage('No enterprise accounts loaded yet.');
-    renderEnterpriseSummary();
-    renderEnterprisePagination();
-    renderEnterpriseMetrics();
-    clearEnterpriseCredentialResult();
-    renderFinanceEmptyState('No finance data loaded yet.');
+    resetTurnstileWidget(); resetActionTurnstileWidget();
+    if (hadUser) {
+        try { await fetch(`${API_BASE}/api/admin/turnstile/clear`, { method: 'POST', headers, credentials: 'same-origin' }); } catch { /* session may already be gone */ }
+    }
+    try { await fetch(`${API_BASE}/api/admin-auth/logout`, { method: 'POST', headers, credentials: 'same-origin' }); } catch { /* clear local access regardless */ }
+    showFlash('Logged out. Sign in to continue.', 'info');
 }
 
 function getRoleLabel(user) {
@@ -1355,8 +1654,8 @@ function renderFinanceLedger(ledger) {
         const isReturn = amount >= 0;
         const fid = financeLedgerEntryId(item);
         const actions = fid
-            ? `<button type="button" class="table-btn" data-finance-edit="${escapeHtml(fid)}">Edit</button>
-               <button type="button" class="table-btn danger" data-finance-delete="${escapeHtml(fid)}">Delete</button>`
+            ? `<button type="button" class="table-btn" data-admin-write="finance" data-finance-edit="${escapeHtml(fid)}">Edit</button>
+               <button type="button" class="table-btn danger" data-admin-delete="finance" data-finance-delete="${escapeHtml(fid)}">Delete</button>`
             : '<span class="finance-source">Auto</span>';
         // Payment rows carry what the customer was actually charged. A foreign row with no
         // INR settlement figure is shown at zero and marked — never dropped (a missing row
@@ -1391,6 +1690,7 @@ function renderFinanceLedger(ledger) {
     refs.financeTableBody.querySelectorAll('[data-finance-delete]').forEach((btn) => {
         btn.addEventListener('click', () => deleteFinanceEntry(btn.getAttribute('data-finance-delete')));
     });
+    applyAdminPermissions();
 }
 
 function filenameFromDisposition(header, fallback) {
@@ -1399,6 +1699,7 @@ function filenameFromDisposition(header, fallback) {
 }
 
 async function exportFinanceLedger() {
+    if (!requireAdminPermission('finance')) return;
     const btn = refs.financeExportBtn;
     if (!await ensureAdminProtection({ silent: false })) return;
 
@@ -1409,7 +1710,7 @@ async function exportFinanceLedger() {
     }
 
     try {
-        const response = await fetch(`${API_BASE}/api/admin/company-finance/export?format=xlsx`, {
+        const response = await adminFetch(`${API_BASE}/api/admin/company-finance/export?format=xlsx`, {
             headers: buildAuthHeaders(),
             credentials: 'same-origin'
         });
@@ -1417,7 +1718,7 @@ async function exportFinanceLedger() {
         if (!response.ok) {
             const payload = await response.json().catch(() => ({}));
             const message = normalizeErrorMessage(payload, 'Failed to export the finance ledger.');
-            await handleAdminAuthOrProtectionError(response.status, payload);
+
             showFlash(message, 'error');
             return;
         }
@@ -1460,6 +1761,7 @@ function setFinanceFormError(message) {
 }
 
 function openFinanceEntryForm(item, fid) {
+    if (!requireAdminPermission('finance', 'write')) return;
     const form = refs.financeEntryForm;
     if (!form) return;
     form.hidden = false;
@@ -1480,6 +1782,8 @@ function openFinanceEntryForm(item, fid) {
 }
 
 async function submitFinanceEntry(event) {
+    event.preventDefault();
+    if (!requireAdminPermission('finance', 'write')) return;
     if (event) event.preventDefault();
     if (!await ensureAdminProtection({ silent: false })) return;
     const g = (id) => document.getElementById(id);
@@ -1504,7 +1808,7 @@ async function submitFinanceEntry(event) {
         const url = isEdit
             ? `${API_BASE}/api/admin/company-finance/entries/${encodeURIComponent(fid)}`
             : `${API_BASE}/api/admin/company-finance/entries`;
-        const response = await fetch(url, {
+        const response = await adminFetch(url, {
             method: isEdit ? 'PATCH' : 'POST',
             headers: buildAuthHeaders({ 'Content-Type': 'application/json' }),
             credentials: 'same-origin',
@@ -1512,7 +1816,7 @@ async function submitFinanceEntry(event) {
         });
         const payload = await response.json().catch(() => ({}));
         if (!response.ok) {
-            await handleAdminAuthOrProtectionError(response.status, payload);
+
             setFinanceFormError(normalizeErrorMessage(payload, 'Could not save the entry.'));
             return;
         }
@@ -1528,19 +1832,20 @@ async function submitFinanceEntry(event) {
 }
 
 async function deleteFinanceEntry(fid) {
+    if (!requireAdminPermission('finance', 'delete')) return;
     if (!await ensureAdminProtection({ silent: false })) return;
     const item = financeLedgerItemByEntryId(fid);
     const label = item ? `${item.vendor} · ${formatUsd(Number(item.amount_usd) || 0)}` : `entry #${fid}`;
     if (!(await confirmDialog(`This finance entry (${label}) will be permanently removed from the ledger and analytics.`, { title: 'Delete finance entry?', okText: 'Delete' }))) return;
     try {
-        const response = await fetch(`${API_BASE}/api/admin/company-finance/entries/${encodeURIComponent(fid)}`, {
+        const response = await adminFetch(`${API_BASE}/api/admin/company-finance/entries/${encodeURIComponent(fid)}`, {
             method: 'DELETE',
             headers: buildAuthHeaders(),
             credentials: 'same-origin',
         });
         const payload = await response.json().catch(() => ({}));
         if (!response.ok) {
-            await handleAdminAuthOrProtectionError(response.status, payload);
+
             showFlash(normalizeErrorMessage(payload, 'Could not delete the entry.'), 'error');
             return;
         }
@@ -1703,6 +2008,7 @@ function renderUsersExportControls() {
 }
 
 async function exportUsers(format) {
+    if (!requireAdminPermission('users')) return;
     if (!['csv', 'xlsx'].includes(format) || state.loading || state.usersExportFormat || state.total <= 0) return;
 
     // Export the filters used to load the table, including every matching page.
@@ -1715,7 +2021,7 @@ async function exportUsers(format) {
 
         const params = new URLSearchParams({ format, plan: filters.plan, role: filters.role });
         if (filters.search) params.set('search', filters.search);
-        const response = await fetch(`${API_BASE}/api/admin/users/export?${params.toString()}`, {
+        const response = await adminFetch(`${API_BASE}/api/admin/users/export?${params.toString()}`, {
             headers: buildAuthHeaders(),
             credentials: 'same-origin'
         });
@@ -1723,7 +2029,7 @@ async function exportUsers(format) {
         if (!response.ok) {
             const payload = await response.json().catch(() => ({}));
             const message = normalizeErrorMessage(payload, 'Failed to export student accounts.');
-            await handleAdminAuthOrProtectionError(response.status, payload);
+
             showFlash(message, 'error');
             return;
         }
@@ -1889,6 +2195,8 @@ function renderEnterpriseCredentialResult(payload) {
 }
 
 async function handleCredentialResultClick(event) {
+    event.preventDefault();
+    if (!canAccessSection('enterprise')) return;
     const button = event.target.closest('[data-action="copy-credential"]');
     if (!button) return;
     const password = String(button.dataset.password || '').trim();
@@ -1910,9 +2218,11 @@ function setRowActionsDisabled(disabled) {
     document.querySelectorAll('[data-action]').forEach((button) => {
         button.disabled = disabled;
     });
+    applyAdminPermissions();
 }
 
 async function loadUsers({ resetPage = false } = {}) {
+    if (!canAccessSection('users')) return;
     if (!state.currentUser) {
         const canAccess = await refreshCurrentAdminUser({ silent: true });
         if (!canAccess) {
@@ -1948,7 +2258,7 @@ async function loadUsers({ resetPage = false } = {}) {
             params.set('search', state.filters.search);
         }
 
-        const response = await fetch(`${API_BASE}/api/admin/users?${params.toString()}`, {
+        const response = await adminFetch(`${API_BASE}/api/admin/users?${params.toString()}`, {
             headers: buildAuthHeaders(),
             credentials: 'same-origin'
         });
@@ -1962,7 +2272,7 @@ async function loadUsers({ resetPage = false } = {}) {
             renderUsersTableMessage(message);
             renderUsersSummary();
             renderMetrics();
-            await handleAdminAuthOrProtectionError(response.status, payload);
+
             showFlash(message, 'error');
             return;
         }
@@ -2024,6 +2334,7 @@ function changePage(delta) {
 }
 
 async function loadEnterpriseAccounts({ resetPage = false } = {}) {
+    if (!canAccessSection('enterprise')) return;
     if (!state.currentUser) {
         const canAccess = await refreshCurrentAdminUser({ silent: true });
         if (!canAccess) {
@@ -2055,7 +2366,7 @@ async function loadEnterpriseAccounts({ resetPage = false } = {}) {
             params.set('search', state.enterpriseFilters.search);
         }
 
-        const response = await fetch(`${API_BASE}/api/admin/enterprise/accounts?${params.toString()}`, {
+        const response = await adminFetch(`${API_BASE}/api/admin/enterprise/accounts?${params.toString()}`, {
             headers: buildAuthHeaders(),
             credentials: 'same-origin'
         });
@@ -2069,7 +2380,7 @@ async function loadEnterpriseAccounts({ resetPage = false } = {}) {
             renderEnterpriseTableMessage(message);
             renderEnterpriseSummary();
             renderEnterpriseMetrics();
-            await handleAdminAuthOrProtectionError(response.status, payload);
+
             showFlash(message, 'error');
             return;
         }
@@ -2108,6 +2419,7 @@ async function loadEnterpriseAccounts({ resetPage = false } = {}) {
 }
 
 async function loadFinanceAnalytics() {
+    if (!canAccessSection('finance')) return;
     if (!state.currentUser) {
         const canAccess = await refreshCurrentAdminUser({ silent: true });
         if (!canAccess) {
@@ -2125,7 +2437,7 @@ async function loadFinanceAnalytics() {
     renderFinanceEmptyState('Loading finance analytics...');
 
     try {
-        const response = await fetch(`${API_BASE}/api/admin/company-finance/analytics`, {
+        const response = await adminFetch(`${API_BASE}/api/admin/company-finance/analytics`, {
             headers: buildAuthHeaders(),
             credentials: 'same-origin'
         });
@@ -2135,7 +2447,7 @@ async function loadFinanceAnalytics() {
             const message = normalizeErrorMessage(payload, 'Failed to load finance analytics.');
             state.financeAnalytics = null;
             renderFinanceEmptyState(message);
-            await handleAdminAuthOrProtectionError(response.status, payload);
+
             showFlash(message, 'error');
             return;
         }
@@ -2291,6 +2603,7 @@ function resetAiRange() {
 }
 
 async function loadAiUsage(options = {}) {
+    if (!canAccessSection('ai')) return;
     const requestId = ++state.aiUsageRequestId;
     invalidateAiAccounting();
     const chartsOnly = !!options.chartsOnly;   // a filter change shouldn't refetch revenue panels
@@ -2307,7 +2620,7 @@ async function loadAiUsage(options = {}) {
         if (state.aiRange.start) params.set('start', state.aiRange.start);
         if (state.aiRange.end) params.set('end', state.aiRange.end);
         const query = params.toString();
-        const response = await fetch(`${API_BASE}/api/admin/ai-usage/analytics${query ? `?${query}` : ''}`, {
+        const response = await adminFetch(`${API_BASE}/api/admin/ai-usage/analytics${query ? `?${query}` : ''}`, {
             headers: buildAuthHeaders(),
             credentials: 'same-origin'
         });
@@ -2317,13 +2630,13 @@ async function loadAiUsage(options = {}) {
             const message = normalizeErrorMessage(payload, 'Failed to load AI usage.');
             aiUsageEmptyState(message);
             aiAccountingUnavailable(message);
-            await handleAdminAuthOrProtectionError(response.status, payload);
+
             showFlash(message, 'error');
             return;
         }
         renderAiUsage(payload);
         clearFlash();
-        await Promise.all([loadAiProfiles({ resetPage: true }), loadAiReconciliation()]);
+        await Promise.all([loadAiProfiles({ resetPage: true }), loadAiReconciliation(), loadAiAccounts()]);
     } catch (error) {
         if (requestId !== state.aiUsageRequestId) return;
         console.error('Failed to load AI usage:', error);
@@ -2339,21 +2652,23 @@ async function loadAiUsage(options = {}) {
 }
 
 async function loadB2cRevenue() {
+    if (!canAccessSection('finance')) return;
     if (!refs.b2cRevenuePanel || refs.b2cRevenuePanel.hidden) return;
     try {
-        const response = await fetch(`${API_BASE}/api/admin/b2c/revenue`, { headers: buildAuthHeaders(), credentials: 'same-origin' });
+        const response = await adminFetch(`${API_BASE}/api/admin/b2c/revenue`, { headers: buildAuthHeaders(), credentials: 'same-origin' });
         const payload = await response.json().catch(() => ({}));
-        if (!response.ok) { await handleAdminAuthOrProtectionError(response.status, payload); return; }
+        if (!response.ok) return;
         renderB2cRevenue(payload);
     } catch (error) { console.error('Failed to load B2C revenue:', error); }
 }
 
 async function loadAcquisitionBreakdown() {
+    if (!canAccessSection('analytics')) return;
     const el = document.getElementById('adminAcquisitionBreakdown');
     const metaEl = document.getElementById('adminAcquisitionMeta');
     if (!el) return;
     try {
-        const response = await fetch(`${API_BASE}/api/admin/acquisition/analytics`, { headers: buildAuthHeaders(), credentials: 'same-origin' });
+        const response = await adminFetch(`${API_BASE}/api/admin/acquisition/analytics`, { headers: buildAuthHeaders(), credentials: 'same-origin' });
         const data = await response.json().catch(() => ({}));
         if (!response.ok) { el.innerHTML = '<div class="table-empty">Could not load traffic sources.</div>'; return; }
         const channels = (data && data.channels) || [];
@@ -2452,13 +2767,14 @@ function renderGrowthRecommendations(data) {
 }
 
 async function runGrowthAnalysis() {
+    if (!requireAdminPermission('analytics', 'write')) return;
     const btn = document.getElementById('adminGrowthRunBtn');
     const el = document.getElementById('adminGrowthResults');
     if (!el) return;
     if (btn) { btn.disabled = true; btn.textContent = 'Analyzing…'; }
     el.innerHTML = '<div class="table-empty">The agent is scoring accounts and drafting conversion plays… this can take a few seconds.</div>';
     try {
-        const response = await fetch(`${API_BASE}/api/admin/growth/conversion-analysis?limit=30`, {
+        const response = await adminFetch(`${API_BASE}/api/admin/growth/conversion-analysis?limit=30`, {
             method: 'POST', headers: buildAuthHeaders(), credentials: 'same-origin',
         });
         const data = await response.json().catch(() => ({}));
@@ -2477,13 +2793,14 @@ async function runGrowthAnalysis() {
 
 /* ===================== Activation funnel + approval rate ===================== */
 async function loadGrowthInsights() {
+    if (!canAccessSection('analytics')) return;
     const funnelEl = document.getElementById('adminFunnelBody');
     const outcomesEl = document.getElementById('adminOutcomesBody');
     if (!funnelEl && !outcomesEl) return;
     try {
         const [fRes, oRes] = await Promise.all([
-            fetch(`${API_BASE}/api/admin/growth/funnel`, { headers: buildAuthHeaders(), credentials: 'same-origin' }),
-            fetch(`${API_BASE}/api/admin/growth/outcomes`, { headers: buildAuthHeaders(), credentials: 'same-origin' }),
+            adminFetch(`${API_BASE}/api/admin/growth/funnel`, { headers: buildAuthHeaders(), credentials: 'same-origin' }),
+            adminFetch(`${API_BASE}/api/admin/growth/outcomes`, { headers: buildAuthHeaders(), credentials: 'same-origin' }),
         ]);
         if (fRes.ok) { renderFunnel(await fRes.json().catch(() => ({}))); }
         else if (funnelEl) { funnelEl.innerHTML = '<div class="table-empty">Could not load the funnel.</div>'; }
@@ -2554,6 +2871,7 @@ function acctFmt(dt) { return dt ? formatDateTime(dt) : '—'; }
 function acctMoney(minor, currency) { return (minor == null) ? '—' : formatMinor(minor, currency); }
 
 async function openAccountDetail(userId) {
+    if (!canAccessSection('users')) return;
     const overlay = document.getElementById('adminAccountDetail');
     const body = document.getElementById('adminAccountBody');
     const title = document.getElementById('adminAccountTitle');
@@ -2564,7 +2882,7 @@ async function openAccountDetail(userId) {
     document.getElementById('adminAccountActions').innerHTML = '';
     body.innerHTML = '<div class="table-empty">Loading account…</div>';
     try {
-        const response = await fetch(`${API_BASE}/api/admin/users/${userId}/detail`, {
+        const response = await adminFetch(`${API_BASE}/api/admin/users/${userId}/detail`, {
             headers: buildAuthHeaders(), credentials: 'same-origin',
         });
         const data = await response.json().catch(() => ({}));
@@ -2595,8 +2913,8 @@ function renderAccountDetail(userId, data) {
     const isSelf = Number(userId) === Number(state.currentUser && state.currentUser.id);
     const canManage = !isSelf && ((a.role === 'student') || (state.currentUser && state.currentUser.is_developer));
     document.getElementById('adminAccountActions').innerHTML = canManage
-        ? `<button class="table-btn" id="acctToggleBtn">${active ? 'Deactivate' : 'Activate'}</button>
-           <button class="table-btn danger" id="acctDeleteBtn">Delete</button>`
+        ? `<button class="table-btn" id="acctToggleBtn" data-admin-write="users">${active ? 'Deactivate' : 'Activate'}</button>
+           <button class="table-btn danger" id="acctDeleteBtn" data-admin-delete="users">Delete</button>`
         : '<span class="acct-chip grey">View only</span>';
 
     let lastUsageGroup = null;
@@ -2646,7 +2964,7 @@ function renderAccountDetail(userId, data) {
               · used ${c.verified_uses}${c.max_uses_per_user != null ? ` / ${c.max_uses_per_user}` : ' (no cap)'}
             </span>
             <span style="display:inline-flex;align-items:center;gap:8px;color:#64748b">${c.created_at ? escapeHtml(acctFmt(c.created_at)) : ''}
-              <button type="button" class="table-btn danger" data-coupon-delete="${escapeHtml(c.code)}">Delete</button></span>
+              <button type="button" class="table-btn danger" data-admin-delete="users" data-coupon-delete="${escapeHtml(c.code)}">Delete</button></span>
           </div>`).join('')
         : '<div class="acct-empty">No coupon codes issued for this account yet.</div>';
     const suggestedCode = `${String((a.name || 'SAVE').split(' ')[0] || 'SAVE').toUpperCase().replace(/[^A-Z0-9]/g, '').slice(0, 12) || 'SAVE'}20`;
@@ -2676,14 +2994,14 @@ function renderAccountDetail(userId, data) {
           <div class="acct-card acct-reco-card"><h3>🎯 Rilono AI — Conversion play</h3>
             <div id="acctRecoBody">
               <p style="font-size:13px;color:#64748b;margin:0 0 10px">Intent score <strong>${intent.score != null ? intent.score : '—'}</strong>${intent.hit_any_limit ? ' · <span class="acct-chip amber">hit a free limit</span>' : ''}. Run the agent for a tailored coupon/promotion + outreach message for this account.</p>
-              <button class="primary-btn small-btn" id="acctRecoBtn">Get AI recommendation</button>
+              <button class="primary-btn small-btn" id="acctRecoBtn" data-admin-write="users">Get AI recommendation</button>
             </div>
           </div>
           <div class="acct-card"><h3>Coupon codes for this account</h3>
             <p style="font-size:12px;color:#94a3b8;margin:0 0 10px">Only this account can redeem these codes — at the
               Visa Success Pass checkout. Deleting a code stops future use; past payments keep their discount.</p>
             <div id="acctCouponList">${offersHtml}</div>
-            <form id="acctCouponForm" class="coupon-form" style="margin-top:12px">
+            <form id="acctCouponForm" data-admin-write="users" class="coupon-form" style="margin-top:12px">
               <div class="coupon-form-grid">
                 <label class="coupon-field">
                   <span>Code</span>
@@ -2707,11 +3025,11 @@ function renderAccountDetail(userId, data) {
                 ? `<span class="acct-chip ${vdChipClass}">${escapeHtml(String(vd.decision).toUpperCase())}</span> <span style="color:#94a3b8;font-size:12px">${vd.decision_at ? acctFmt(vd.decision_at) : ''}${vd.source ? ' · ' + escapeHtml(vd.source) : ''}</span>`
                 : '<span class="acct-empty">No decision recorded yet.</span>'}</div>
               <div class="acct-decision-set">
-                <button type="button" class="table-btn" data-decision="approved">Approved</button>
-                <button type="button" class="table-btn" data-decision="refused">Refused</button>
-                <button type="button" class="table-btn" data-decision="withdrawn">Withdrawn</button>
-                <button type="button" class="table-btn" data-decision="deferred">Deferred</button>
-                ${vd.decision ? '<button type="button" class="table-btn danger" data-decision="clear">Clear</button>' : ''}
+                <button type="button" class="table-btn" data-admin-write="users" data-decision="approved">Approved</button>
+                <button type="button" class="table-btn" data-admin-write="users" data-decision="refused">Refused</button>
+                <button type="button" class="table-btn" data-admin-write="users" data-decision="withdrawn">Withdrawn</button>
+                <button type="button" class="table-btn" data-admin-write="users" data-decision="deferred">Deferred</button>
+                ${vd.decision ? '<button type="button" class="table-btn danger" data-admin-write="users" data-decision="clear">Clear</button>' : ''}
               </div>
             </div>
           </div>
@@ -2750,11 +3068,13 @@ function renderAccountDetail(userId, data) {
     document.querySelectorAll('#acctCouponList [data-coupon-delete]').forEach((btn) => {
         btn.addEventListener('click', () => deleteAccountCoupon(userId, btn.getAttribute('data-coupon-delete')));
     });
+    applyAdminPermissions();
 }
 
 // Create a coupon code restricted to this account (the actionable half of the
 // growth agent's "offer them a tailored coupon" recommendation).
 async function createAccountCoupon(userId) {
+    if (!requireAdminPermission('users', 'write')) return;
     if (!await ensureAdminProtection({ silent: false })) return;
     const codeInput = document.getElementById('acctCouponCode');
     const pctInput = document.getElementById('acctCouponPct');
@@ -2772,7 +3092,7 @@ async function createAccountCoupon(userId) {
 
     if (createBtn) { createBtn.disabled = true; createBtn.textContent = 'Creating…'; }
     try {
-        const response = await fetch(`${API_BASE}/api/admin/coupons`, {
+        const response = await adminFetch(`${API_BASE}/api/admin/coupons`, {
             method: 'POST',
             headers: buildAuthHeaders({ 'Content-Type': 'application/json' }),
             credentials: 'same-origin',
@@ -2780,7 +3100,7 @@ async function createAccountCoupon(userId) {
         });
         const payload = await response.json().catch(() => ({}));
         if (!response.ok) {
-            await handleAdminAuthOrProtectionError(response.status, payload);
+
             showFlash(normalizeErrorMessage(payload, 'Failed to create the coupon.'), 'error');
             return;
         }
@@ -2795,17 +3115,18 @@ async function createAccountCoupon(userId) {
 }
 
 async function deleteAccountCoupon(userId, code) {
+    if (!requireAdminPermission('users', 'delete')) return;
     if (!await ensureAdminProtection({ silent: false })) return;
     if (!(await confirmDialog(`Students will no longer be able to apply "${code}". Past payments keep their discount.`, { title: 'Delete coupon?', okText: 'Delete' }))) return;
     try {
-        const response = await fetch(`${API_BASE}/api/admin/coupons/${encodeURIComponent(code)}`, {
+        const response = await adminFetch(`${API_BASE}/api/admin/coupons/${encodeURIComponent(code)}`, {
             method: 'DELETE',
             headers: buildAuthHeaders(),
             credentials: 'same-origin',
         });
         const payload = await response.json().catch(() => ({}));
         if (!response.ok) {
-            await handleAdminAuthOrProtectionError(response.status, payload);
+
             showFlash(normalizeErrorMessage(payload, 'Failed to delete the coupon.'), 'error');
             return;
         }
@@ -2818,10 +3139,11 @@ async function deleteAccountCoupon(userId, code) {
 }
 
 async function setAccountVisaDecision(userId, decision) {
+    if (!requireAdminPermission('users', 'write')) return;
     const body = document.getElementById('acctDecisionBody');
     if (!body) return;
     try {
-        const response = await fetch(`${API_BASE}/api/admin/users/${userId}/visa-decision`, {
+        const response = await adminFetch(`${API_BASE}/api/admin/users/${userId}/visa-decision`, {
             method: 'POST', headers: buildAuthHeaders({ 'Content-Type': 'application/json' }),
             credentials: 'same-origin', body: JSON.stringify({ decision }),
         });
@@ -2835,11 +3157,12 @@ async function setAccountVisaDecision(userId, decision) {
 }
 
 async function runAccountReco(userId) {
+    if (!requireAdminPermission('users', 'write')) return;
     const body = document.getElementById('acctRecoBody');
     if (!body) return;
     body.innerHTML = '<div class="acct-empty">Rilono AI is analyzing this account and drafting a play…</div>';
     try {
-        const response = await fetch(`${API_BASE}/api/admin/users/${userId}/conversion-reco`, {
+        const response = await adminFetch(`${API_BASE}/api/admin/users/${userId}/conversion-reco`, {
             method: 'POST', headers: buildAuthHeaders(), credentials: 'same-origin',
         });
         const data = await response.json().catch(() => ({}));
@@ -2862,7 +3185,7 @@ async function runAccountReco(userId) {
              <button type="button" class="ghost-btn small-btn" style="margin-left:8px;padding:2px 10px;font-size:11px" id="acctRecoCopy">Copy</button></div>` : ''}
           <div style="margin-top:10px;display:flex;gap:8px;align-items:center">
             ${reco.channel ? `<span class="acct-chip grey">channel: ${escapeHtml(reco.channel)}</span>` : ''}
-            <button class="ghost-btn small-btn" id="acctRecoRerun" style="margin-left:auto">Re-run</button>
+            <button class="ghost-btn small-btn" id="acctRecoRerun" data-admin-write="users" style="margin-left:auto">Re-run</button>
           </div>`;
         const copyBtn = document.getElementById('acctRecoCopy');
         if (copyBtn) copyBtn.addEventListener('click', function () {
@@ -3052,8 +3375,13 @@ function invalidateAiAccounting() {
     if (refs.aiProfilesTableBody) refs.aiProfilesTableBody.innerHTML = '<tr><td colspan="6" class="table-empty">Loading profile usage…</td></tr>';
     if (refs.aiCoverage) refs.aiCoverage.textContent = 'Checking available records and coverage…';
     if (refs.aiReconciliation) refs.aiReconciliation.innerHTML = `${aiBillingMetrics()}<p class="ai-accounting-note">Loading imported billing…</p>`;
+    state.aiAccounts.requestId += 1;
+    state.aiAccounts.loading = true;
+    state.aiAccounts.data = null;
+    resetAiAccountsView('Loading usage by account…');
     renderAiProfilesControls();
     renderAiBillingControls();
+    renderAiAccountsControls();
 }
 
 function aiAccountingUnavailable(message) {
@@ -3061,6 +3389,9 @@ function aiAccountingUnavailable(message) {
     state.aiBilling.loading = false;
     if (refs.aiProfilesTableBody) refs.aiProfilesTableBody.innerHTML = `<tr><td colspan="6" class="table-empty">${escapeHtml(message)}</td></tr>`;
     if (refs.aiCoverage) refs.aiCoverage.textContent = 'Coverage could not be checked.';
+    state.aiAccounts.loading = false;
+    resetAiAccountsView(message);
+    renderAiAccountsControls();
     if (refs.aiReconciliation) refs.aiReconciliation.innerHTML = `${aiBillingMetrics()}<p class="ai-accounting-note">${escapeHtml(message)} No imported amount is available for this view.</p>`;
     renderAiProfilesControls();
     renderAiBillingControls();
@@ -3095,6 +3426,13 @@ function renderAiCoverage(coverage = {}, health = {}) {
         ${healthNotes.map((message) => `<p><strong>Tracking needs attention.</strong> ${escapeHtml(message)}</p>`).join('')}`;
 }
 
+function aiProfilesEmptyMessage() {
+    // The table follows the date filter: a profile without recorded usage in the selected dates is not listed.
+    return state.aiProfiles.search
+        ? 'No profiles match this search with recorded AI usage in the selected dates. Try another name or email, or widen the dates.'
+        : 'No profiles with recorded AI usage in the selected dates.';
+}
+
 function renderAiProfiles(data) {
     const profiles = Array.isArray(data.profiles) ? data.profiles : [];
     state.aiProfiles.data = data;
@@ -3109,19 +3447,20 @@ function renderAiProfiles(data) {
             <td><strong>${escapeHtml(aiRecordedValue(selected, 'total_tokens'))}</strong><div class="user-meta">${escapeHtml(aiExactCount(selected.calls))} calls${Number(selected.unknown_calls) > 0 ? ' · partial usage' : ''}</div></td>
             <td>${aiCalculatedCell(selected)}</td>
             <td><strong>${escapeHtml(aiRecordedValue(lifetime, 'total_tokens'))}</strong><div class="user-meta">${escapeHtml(aiExactCount(lifetime.calls))} calls</div></td>
-            <td>${aiCalculatedCell(lifetime)}</td><td>${aiCoverageChips(lifetime)}</td></tr>`;
-    }).join('') : '<tr><td colspan="6" class="table-empty">No profiles match this search.</td></tr>';
+            <td>${aiCalculatedCell(lifetime)}</td><td>${aiCoverageChips(selected)}</td></tr>`;
+    }).join('') : `<tr><td colspan="6" class="table-empty">${escapeHtml(aiProfilesEmptyMessage())}</td></tr>`;
     if (refs.aiProfilesSummary) {
         const first = state.aiProfiles.total ? (state.aiProfiles.page - 1) * state.aiProfiles.pageSize + 1 : 0;
         refs.aiProfilesSummary.textContent = state.aiProfiles.total
-            ? `Showing ${first}–${first + profiles.length - 1} of ${aiExactCount(state.aiProfiles.total)} profiles · ${aiRangeLabel(data.range)} (UTC)`
-            : 'No matching profiles. Try another name or email.';
+            ? `Showing ${first}–${first + profiles.length - 1} of ${aiExactCount(state.aiProfiles.total)} profiles with recorded usage · ${aiRangeLabel(data.range)} (UTC) · ordered by recorded tokens in these dates`
+            : aiProfilesEmptyMessage();
     }
     renderAiCoverage(data.coverage, data.metering_health);
     renderAiProfilesControls();
 }
 
 async function loadAiProfiles({ resetPage = false } = {}) {
+    if (!canAccessSection('ai')) return;
     const profiles = state.aiProfiles;
     const requestId = ++profiles.requestId;
     if (resetPage) profiles.page = 1;
@@ -3135,11 +3474,11 @@ async function loadAiProfiles({ resetPage = false } = {}) {
     if (refs.aiProfilesTableBody) refs.aiProfilesTableBody.innerHTML = '<tr><td colspan="6" class="table-empty">Loading profile usage…</td></tr>';
     try {
         if (!await ensureAdminProtection({ silent: false })) return;
-        const response = await fetch(`${API_BASE}/api/admin/ai-usage/profiles?${params}`, { headers: buildAuthHeaders(), credentials: 'same-origin' });
+        const response = await adminFetch(`${API_BASE}/api/admin/ai-usage/profiles?${params}`, { headers: buildAuthHeaders(), credentials: 'same-origin' });
         const payload = await response.json().catch(() => ({}));
         if (requestId !== profiles.requestId) return;
         if (!response.ok) {
-            await handleAdminAuthOrProtectionError(response.status, payload);
+
             throw new Error(normalizeErrorMessage(payload, 'Could not load profile usage.'));
         }
         renderAiProfiles(payload);
@@ -3191,6 +3530,7 @@ function renderAiProfileDetail(data) {
 }
 
 async function loadAiProfileDetail(userId) {
+    if (!canAccessSection('ai')) return;
     const requestId = ++state.aiProfileRequestId;
     state.aiProfileId = String(userId);
     const params = aiAccountingParams();
@@ -3200,11 +3540,11 @@ async function loadAiProfileDetail(userId) {
     if (refs.aiProfileDetailBody) refs.aiProfileDetailBody.innerHTML = '<p class="ai-accounting-note">Loading feature breakdown…</p>';
     try {
         if (!await ensureAdminProtection({ silent: false })) return;
-        const response = await fetch(`${API_BASE}/api/admin/ai-usage/profiles/${encodeURIComponent(userId)}?${params}`, { headers: buildAuthHeaders(), credentials: 'same-origin' });
+        const response = await adminFetch(`${API_BASE}/api/admin/ai-usage/profiles/${encodeURIComponent(userId)}?${params}`, { headers: buildAuthHeaders(), credentials: 'same-origin' });
         const payload = await response.json().catch(() => ({}));
         if (requestId !== state.aiProfileRequestId) return;
         if (!response.ok) {
-            await handleAdminAuthOrProtectionError(response.status, payload);
+
             throw new Error(normalizeErrorMessage(payload, 'Could not load this profile.'));
         }
         renderAiProfileDetail(payload);
@@ -3216,7 +3556,154 @@ async function loadAiProfileDetail(userId) {
     }
 }
 
+function resetAiAccountsView(message) {
+    if (refs.aiAccountsSummary) refs.aiAccountsSummary.innerHTML = `<p class="ai-accounting-note">${escapeHtml(message)}</p>`;
+    [refs.aiOrgsTableBody, refs.aiUnlistedTableBody, refs.aiSharedTableBody, refs.aiUnattributedTableBody].forEach((body) => {
+        if (body) body.innerHTML = `<tr><td colspan="6" class="table-empty">${escapeHtml(message)}</td></tr>`;
+    });
+}
+
+function renderAiAccountsControls() {
+    const accounts = state.aiAccounts;
+    if (!refs.aiAccountsExportBtn) return;
+    const calls = Number(accounts.data?.ledger?.range?.calls || 0);
+    refs.aiAccountsExportBtn.disabled = accounts.loading || accounts.exporting || !calls;
+    refs.aiAccountsExportBtn.textContent = accounts.exporting ? 'Preparing CSV…' : 'Export usage by account';
+}
+
+function aiAccountRow(label, meta, row = {}) {
+    const selected = row.range || {};
+    const lifetime = row.lifetime || {};
+    return `<tr><td><strong>${escapeHtml(label)}</strong>${meta ? `<div class="user-meta">${escapeHtml(meta)}</div>` : ''}</td>
+        <td><strong>${escapeHtml(aiRecordedValue(selected, 'total_tokens'))}</strong><div class="user-meta">${escapeHtml(aiExactCount(selected.calls))} calls</div></td>
+        <td>${aiCalculatedCell(selected)}</td>
+        <td><strong>${escapeHtml(aiRecordedValue(lifetime, 'total_tokens'))}</strong><div class="user-meta">${escapeHtml(aiExactCount(lifetime.calls))} calls</div></td>
+        <td>${aiCalculatedCell(lifetime)}</td><td>${aiCoverageChips(selected)}</td></tr>`;
+}
+
+function aiAccountsReconcileLine(data = {}) {
+    // The ledger total (all four buckets) is the number to hold against Google's project-wide charge.
+    const ledger = data.ledger?.range || {};
+    const ledgerText = aiRecordedCost(ledger);
+    const google = data.google || {};
+    if (!google.available) {
+        return `Ledger total ${ledgerText} across all four buckets for these dates. ${google.message || 'No imported Google charge is available for these dates.'}`;
+    }
+    const googleCost = Number(google.cost_before_credits_usd || 0);
+    const gap = Number(ledger.calculated_cost_usd || 0) - googleCost;
+    const gapText = Math.abs(gap) < 0.000001 ? 'they match'
+        : `ledger ${gap > 0 ? 'higher' : 'lower'} by ${aiBillingMoney(Math.abs(gap).toFixed(6), 'USD')}`;
+    const source = google.derived && google.source_range ? ` The Google figure is taken from the import covering ${aiRangeLabel(google.source_range)}.` : '';
+    const firstDay = google.first_usage_date && data.range?.start && google.first_usage_date > data.range.start
+        ? ` Google's import only has rows from ${formatAiDate(google.first_usage_date)}; ledger calls before that day are not in it.` : '';
+    return `Ledger total ${ledgerText} across all four buckets vs Google cost before credits ${aiBillingMoney(String(google.cost_before_credits_usd ?? 0), 'USD')} for the same dates: ${gapText}.${source}${firstDay} Google bills the project as a whole; the split above comes from the app ledger.`;
+}
+
+function renderAiAccounts(data = {}) {
+    const accounts = state.aiAccounts;
+    accounts.data = data;
+    accounts.loading = false;
+    const buckets = Array.isArray(data.buckets) ? data.buckets : [];
+    const ledgerCost = Number(data.ledger?.range?.calculated_cost_usd || 0);
+    const share = (bucket) => {
+        const value = Number(bucket.range?.calculated_cost_usd || 0);
+        return ledgerCost > 0 ? `${(value / ledgerCost * 100).toFixed(1)}% of the ledger total` : 'no calculated cost in these dates';
+    };
+    const unlistedTotal = data.b2c_unlisted_total?.range || {};
+    const unlistedNote = (bucket) => bucket.key === 'b2c' && Number(unlistedTotal.calls || 0)
+        ? ` · includes ${aiRecordedCost(unlistedTotal)} (${aiExactCount(unlistedTotal.calls)} calls) not listed in the profile table` : '';
+    const cards = buckets.map((bucket) => `<article class="metric-card ai-range-metric" title="${escapeHtml(bucket.description || '')}"><span>${escapeHtml(bucket.label || bucket.key || 'Bucket')}</span><strong>${escapeHtml(aiRecordedCost(bucket.range))}</strong><div class="metric-subtext">${escapeHtml(aiRecordedValue(bucket.range, 'total_tokens'))} tokens · ${escapeHtml(aiExactCount(bucket.range?.calls))} calls · ${escapeHtml(share(bucket))}${escapeHtml(unlistedNote(bucket))}</div></article>`).join('');
+    if (refs.aiAccountsSummary) {
+        refs.aiAccountsSummary.innerHTML = buckets.length
+            ? `<div class="metrics-grid finance-metrics-grid ai-range-metrics">${cards}</div><p class="ai-accounting-note"><strong>${escapeHtml(aiAccountsReconcileLine(data))}</strong></p><p class="ai-detail-help">${escapeHtml(data.note || '')}</p>`
+            : '<p class="ai-accounting-note">Usage by account is not available.</p>';
+    }
+    const empty = (message) => `<tr><td colspan="6" class="table-empty">${escapeHtml(message)}</td></tr>`;
+    const organizations = Array.isArray(data.organizations) ? data.organizations : [];
+    if (refs.aiOrgsTableBody) refs.aiOrgsTableBody.innerHTML = organizations.length
+        ? organizations.map((org) => aiAccountRow(org.name || `Organisation ${org.organization_id}`,
+            org.organization_id ? `${org.subdomain ? `${org.subdomain} · ` : ''}organisation id ${org.organization_id}` : 'organisation id not recorded on these calls', org)).join('')
+        : empty('No enterprise organisation used AI in the selected dates.');
+    const unlisted = Array.isArray(data.b2c_unlisted) ? data.b2c_unlisted : [];
+    if (refs.aiUnlistedTableBody) refs.aiUnlistedTableBody.innerHTML = unlisted.length
+        ? unlisted.map((row) => aiAccountRow(row.name || 'Profile', row.user_id
+            ? `${row.email ? `${row.email} · ` : ''}enterprise-origin account, cannot sign in to the B2C app`
+            : 'calls recorded without a profile id', row)).join('')
+        : empty('Every B2C call in the selected dates belongs to a profile listed above.');
+    const shared = Array.isArray(data.shared) ? data.shared : [];
+    if (refs.aiSharedTableBody) refs.aiSharedTableBody.innerHTML = shared.length
+        ? shared.map((row) => aiAccountRow(row.source || 'Unknown feature', 'Rilono background job', row)).join('')
+        : empty('No shared platform AI work in the selected dates.');
+    const unattributed = Array.isArray(data.unattributed) ? data.unattributed : [];
+    if (refs.aiUnattributedTableBody) refs.aiUnattributedTableBody.innerHTML = unattributed.length
+        ? unattributed.map((row) => aiAccountRow(row.source || 'Unknown feature', 'no account or product recorded', row)).join('')
+        : empty('Every call in the selected dates is attributed.');
+    renderAiAccountsControls();
+}
+
+async function loadAiAccounts() {
+    if (typeof canAccessSection === 'function' && !canAccessSection('ai')) return;
+    const accounts = state.aiAccounts;
+    const requestId = ++accounts.requestId;
+    const params = aiAccountingParams();
+    accounts.loading = true;
+    renderAiAccountsControls();
+    const doFetch = typeof adminFetch === 'function' ? adminFetch : fetch;
+    try {
+        if (!await ensureAdminProtection({ silent: false })) return;
+        const response = await doFetch(`${API_BASE}/api/admin/ai-usage/accounts?${params}`, { headers: buildAuthHeaders(), credentials: 'same-origin' });
+        const payload = await response.json().catch(() => ({}));
+        if (requestId !== accounts.requestId) return;
+        if (!response.ok) {
+            await handleAdminAuthOrProtectionError(response.status, payload);
+            throw new Error(normalizeErrorMessage(payload, 'Could not load usage by account.'));
+        }
+        renderAiAccounts(payload);
+    } catch (error) {
+        if (requestId !== accounts.requestId) return;
+        accounts.data = null;
+        accounts.loading = false;
+        resetAiAccountsView(error.message || 'Could not load usage by account. Please retry.');
+        renderAiAccountsControls();
+    }
+}
+
+async function exportAiAccounts() {
+    if (typeof requireAdminPermission === 'function' && !requireAdminPermission('ai')) return;
+    const accounts = state.aiAccounts;
+    if (accounts.loading || accounts.exporting || !Number(accounts.data?.ledger?.range?.calls || 0)) return;
+    const params = aiAccountingParams();
+    accounts.exporting = true;
+    renderAiAccountsControls();
+    const doFetch = typeof adminFetch === 'function' ? adminFetch : fetch;
+    try {
+        if (!await ensureAdminProtection({ silent: false })) return;
+        const response = await doFetch(`${API_BASE}/api/admin/ai-usage/accounts/export?${params}`, { headers: buildAuthHeaders(), credentials: 'same-origin' });
+        if (!response.ok) {
+            const payload = await response.json().catch(() => ({}));
+            throw new Error(normalizeErrorMessage(payload, 'Could not export usage by account.'));
+        }
+        const blob = await response.blob();
+        const filename = (response.headers.get('Content-Disposition') || '').match(/filename="([^"]+)"/i)?.[1] || 'rilono-ai-usage-by-account.csv';
+        const url = URL.createObjectURL(blob);
+        const link = document.createElement('a');
+        link.href = url;
+        link.download = filename;
+        document.body.appendChild(link);
+        link.click();
+        link.remove();
+        setTimeout(() => URL.revokeObjectURL(url), 2000);
+        showFlash(`Downloaded ${filename}`, 'success');
+    } catch (error) {
+        showFlash(error.message || 'Could not export usage by account. Please retry.', 'error');
+    } finally {
+        accounts.exporting = false;
+        renderAiAccountsControls();
+    }
+}
+
 async function exportAiProfiles() {
+    if (!requireAdminPermission('ai')) return;
     const profiles = state.aiProfiles;
     if (profiles.loading || profiles.exporting || !profiles.total) return;
     const params = aiAccountingParams();
@@ -3225,10 +3712,10 @@ async function exportAiProfiles() {
     renderAiProfilesControls();
     try {
         if (!await ensureAdminProtection({ silent: false })) return;
-        const response = await fetch(`${API_BASE}/api/admin/ai-usage/profiles/export?${params}`, { headers: buildAuthHeaders(), credentials: 'same-origin' });
+        const response = await adminFetch(`${API_BASE}/api/admin/ai-usage/profiles/export?${params}`, { headers: buildAuthHeaders(), credentials: 'same-origin' });
         if (!response.ok) {
             const payload = await response.json().catch(() => ({}));
-            await handleAdminAuthOrProtectionError(response.status, payload);
+
             throw new Error(normalizeErrorMessage(payload, 'Could not export profile usage.'));
         }
         const blob = await response.blob();
@@ -3316,7 +3803,9 @@ function renderAiReconciliation(data = {}) {
     const totals = available ? data.totals : [];
     const note = data.scope_note || 'Billing covers the configured Google AI project, including B2B, shared and unattributed activity. Project charges cannot establish a profile-level billed cost.';
     const lastSync = data.last_synced_at ? formatDateTime(data.last_synced_at) + ' (UTC)' : 'Not synced yet';
-    const meta = `<div class="ai-billing-meta"><span>Project: ${escapeHtml(data.project_id || 'Not configured')}</span><span>Last sync: ${escapeHtml(lastSync)}</span><span>${escapeHtml(aiRangeLabel(data.range))} (UTC)</span></div>`;
+    // Dates inside a wider import are served from it; say which import so the figures are traceable.
+    const importedWindow = data.derived && data.source_range ? `<span>Imported window: ${escapeHtml(aiRangeLabel(data.source_range))} (UTC)</span>` : '';
+    const meta = `<div class="ai-billing-meta"><span>Project: ${escapeHtml(data.project_id || 'Not configured')}</span><span>Last sync: ${escapeHtml(lastSync)}</span><span>${escapeHtml(aiRangeLabel(data.range))} (UTC)</span>${importedWindow}</div>`;
     const awaitingExport = data.sync_status === 'awaiting_export' || data.billing_status === 'awaiting_export' || data.status === 'awaiting_export';
     const status = awaitingExport ? (available ? 'Awaiting Google export · Previous import retained' : 'Awaiting Google billing export')
         : available ? 'Imported Google billing records'
@@ -3338,6 +3827,7 @@ function renderAiReconciliation(data = {}) {
 }
 
 async function loadAiReconciliation() {
+    if (!canAccessSection('ai')) return;
     const billing = state.aiBilling;
     const requestId = ++billing.requestId;
     const params = aiAccountingParams();
@@ -3345,11 +3835,11 @@ async function loadAiReconciliation() {
     renderAiBillingControls();
     try {
         if (!await ensureAdminProtection({ silent: false })) return;
-        const response = await fetch(`${API_BASE}/api/admin/ai-usage/reconciliation?${params}`, { headers: buildAuthHeaders(), credentials: 'same-origin' });
+        const response = await adminFetch(`${API_BASE}/api/admin/ai-usage/reconciliation?${params}`, { headers: buildAuthHeaders(), credentials: 'same-origin' });
         const payload = await response.json().catch(() => ({}));
         if (requestId !== billing.requestId) return;
         if (!response.ok) {
-            await handleAdminAuthOrProtectionError(response.status, payload);
+
             throw new Error(normalizeErrorMessage(payload, 'Could not load imported billing.'));
         }
         renderAiReconciliation(payload);
@@ -3366,6 +3856,7 @@ async function loadAiReconciliation() {
 }
 
 async function syncAiBilling() {
+    if (!requireAdminPermission('ai', 'write')) return;
     const billing = state.aiBilling;
     if (billing.loading || billing.syncing || !billing.data?.configured) return;
     const range = { start: state.aiRange.start, end: state.aiRange.end };
@@ -3374,11 +3865,11 @@ async function syncAiBilling() {
     renderAiBillingControls();
     try {
         if (!await ensureAdminProtection({ silent: false })) return;
-        const response = await fetch(`${API_BASE}/api/admin/ai-usage/reconciliation/sync`, { method: 'POST', headers: buildAuthHeaders({ 'Content-Type': 'application/json' }), credentials: 'same-origin', body: JSON.stringify(range) });
+        const response = await adminFetch(`${API_BASE}/api/admin/ai-usage/reconciliation/sync`, { method: 'POST', headers: buildAuthHeaders({ 'Content-Type': 'application/json' }), credentials: 'same-origin', body: JSON.stringify(range) });
         const payload = await response.json().catch(() => ({}));
         if (requestId !== billing.requestId) return;
         if (!response.ok) {
-            await handleAdminAuthOrProtectionError(response.status, payload);
+
             throw new Error(normalizeErrorMessage(payload, 'Could not sync billing.'));
         }
         const awaitingExport = response.status === 202 || payload.sync_status === 'awaiting_export' || payload.status === 'awaiting_export';
@@ -3433,6 +3924,7 @@ function aiExportSections(kind, data) {
 }
 
 function exportAiCsv(kind, btn) {
+    if (!requireAdminPermission('ai')) return;
     const data = state.aiUsageData;
     if (!data || !data.range) { showFlash('Load the AI usage data before exporting.', 'error'); return; }
     const range = data.range;
@@ -3791,6 +4283,8 @@ function changeEnterprisePage(delta) {
 
 async function handleEnterpriseCredentialSubmit(event) {
     event.preventDefault();
+    if (!canProvisionEnterprise()) { showFlash('Only platform administrators can provision enterprise credentials.', 'error'); return; }
+    event.preventDefault();
     if (!await ensureAdminProtection({ silent: false })) return;
 
     const fullName = (refs.enterpriseCredentialName?.value || '').trim();
@@ -3806,7 +4300,7 @@ async function handleEnterpriseCredentialSubmit(event) {
     }
 
     try {
-        const response = await fetch(`${API_BASE}/api/admin/enterprise/credentials`, {
+        const response = await adminFetch(`${API_BASE}/api/admin/enterprise/credentials`, {
             method: 'POST',
             headers: buildAuthHeaders({ 'Content-Type': 'application/json' }),
             credentials: 'same-origin',
@@ -3818,7 +4312,7 @@ async function handleEnterpriseCredentialSubmit(event) {
         const payload = await response.json().catch(() => ({}));
 
         if (!response.ok) {
-            await handleAdminAuthOrProtectionError(response.status, payload);
+
             showFlash(normalizeErrorMessage(payload, 'Failed to create enterprise credentials.'), 'error');
             return;
         }
@@ -3867,6 +4361,7 @@ function setCouponFormError(message) {
 }
 
 async function openCouponModal(orgId, company) {
+    if (!canAccessSection('enterprise')) return;
     state.couponOrg = { id: orgId, company };
     state.couponList = [];
     if (refs.couponModalTitle) refs.couponModalTitle.textContent = 'Manage account';
@@ -3883,19 +4378,20 @@ async function openCouponModal(orgId, company) {
 }
 
 async function loadAccountDetails() {
+    if (!canAccessSection('enterprise')) return;
     if (!state.couponOrg || !refs.accountDetails) return;
     if (!await ensureAdminProtection({ silent: true })) {
         refs.accountDetails.innerHTML = '<p class="account-details-status">Verify the security check above to load account details.</p>';
         return;
     }
     try {
-        const response = await fetch(`${API_BASE}/api/admin/enterprise/accounts/${state.couponOrg.id}/details`, {
+        const response = await adminFetch(`${API_BASE}/api/admin/enterprise/accounts/${state.couponOrg.id}/details`, {
             headers: buildAuthHeaders(),
             credentials: 'same-origin'
         });
         const payload = await response.json().catch(() => ({}));
         if (!response.ok) {
-            await handleAdminAuthOrProtectionError(response.status, payload);
+
             refs.accountDetails.innerHTML = `<p class="account-details-status">${escapeHtml(normalizeErrorMessage(payload, 'Failed to load account details.'))}</p>`;
             return;
         }
@@ -4052,6 +4548,7 @@ function renderAccountDetails(data) {
         metrics + purchasesBlock + refundFormBlock + refundsBlock + activityBlock;
 
     wireRefundForm(data);
+    applyAdminPermissions();
 }
 
 function buildRefundsHistoryBlock(data) {
@@ -4085,6 +4582,7 @@ function buildRefundsHistoryBlock(data) {
 }
 
 function buildRefundFormBlock(data) {
+    if (!canDeleteSection('enterprise')) return '';
     // `is_refundable` already accounts for Razorpay's 6-month window, so a payment past it
     // never reaches the picker; the purchases table above says why it's missing.
     const refundable = (data.purchases || []).filter((p) => p.is_refundable);
@@ -4243,13 +4741,14 @@ function wireRefundForm(data) {
 }
 
 async function issueRefund(button, body) {
+    if (!requireAdminPermission('enterprise', 'delete')) return;
     if (!state.couponOrg) return;
     if (!await ensureAdminProtection({ silent: false })) return;
     const originalLabel = button.textContent;
     button.disabled = true;
     button.textContent = 'Processing…';
     try {
-        const response = await fetch(`${API_BASE}/api/admin/enterprise/accounts/${state.couponOrg.id}/refunds`, {
+        const response = await adminFetch(`${API_BASE}/api/admin/enterprise/accounts/${state.couponOrg.id}/refunds`, {
             method: 'POST',
             headers: buildAuthHeaders({ 'Content-Type': 'application/json' }),
             credentials: 'same-origin',
@@ -4257,7 +4756,7 @@ async function issueRefund(button, body) {
         });
         const payload = await response.json().catch(() => ({}));
         if (!response.ok) {
-            await handleAdminAuthOrProtectionError(response.status, payload);
+
             setRefundError(normalizeErrorMessage(payload, 'Refund failed.'));
             return;
         }
@@ -4311,30 +4810,32 @@ function renderCouponTable() {
                 <td>${escapeHtml(String(used))} / ${cap}</td>
                 <td>${statusChip}</td>
                 <td>
-                    <button type="button" class="table-btn" data-coupon-action="email"
+                    <button type="button" class="table-btn" data-admin-write="enterprise" data-coupon-action="email"
                         data-coupon-id="${escapeHtml(String(c.id))}" data-coupon-code="${escapeHtml(c.code)}">Email</button>
-                    <button type="button" class="table-btn" data-coupon-action="toggle"
+                    <button type="button" class="table-btn" data-admin-write="enterprise" data-coupon-action="toggle"
                         data-coupon-id="${escapeHtml(String(c.id))}" data-next-active="${c.is_active ? 'false' : 'true'}">${toggleLabel}</button>
-                    <button type="button" class="table-btn danger" data-coupon-action="delete"
+                    <button type="button" class="table-btn danger" data-admin-delete="enterprise" data-coupon-action="delete"
                         data-coupon-id="${escapeHtml(String(c.id))}" data-coupon-code="${escapeHtml(c.code)}">Delete</button>
                 </td>
             </tr>
         `;
     }).join('');
+    applyAdminPermissions();
 }
 
 async function loadCoupons() {
+    if (!canAccessSection('enterprise')) return;
     if (!state.couponOrg) return;
     if (!await ensureAdminProtection({ silent: false })) return;
     state.couponLoading = true;
     try {
-        const response = await fetch(`${API_BASE}/api/admin/enterprise/accounts/${state.couponOrg.id}/coupons`, {
+        const response = await adminFetch(`${API_BASE}/api/admin/enterprise/accounts/${state.couponOrg.id}/coupons`, {
             headers: buildAuthHeaders(),
             credentials: 'same-origin'
         });
         const payload = await response.json().catch(() => ({}));
         if (!response.ok) {
-            await handleAdminAuthOrProtectionError(response.status, payload);
+
             renderCouponTableMessage(normalizeErrorMessage(payload, 'Failed to load discount codes.'));
             return;
         }
@@ -4352,6 +4853,8 @@ async function loadCoupons() {
 }
 
 async function handleCouponCreateSubmit(event) {
+    event.preventDefault();
+    if (!requireAdminPermission('enterprise', 'write')) return;
     event.preventDefault();
     if (!state.couponOrg) return;
     if (!await ensureAdminProtection({ silent: false })) return;
@@ -4381,7 +4884,7 @@ async function handleCouponCreateSubmit(event) {
 
     if (refs.couponCreateBtn) { refs.couponCreateBtn.disabled = true; refs.couponCreateBtn.textContent = 'Adding...'; }
     try {
-        const response = await fetch(`${API_BASE}/api/admin/enterprise/accounts/${state.couponOrg.id}/coupons`, {
+        const response = await adminFetch(`${API_BASE}/api/admin/enterprise/accounts/${state.couponOrg.id}/coupons`, {
             method: 'POST',
             headers: buildAuthHeaders({ 'Content-Type': 'application/json' }),
             credentials: 'same-origin',
@@ -4389,7 +4892,7 @@ async function handleCouponCreateSubmit(event) {
         });
         const payload = await response.json().catch(() => ({}));
         if (!response.ok) {
-            await handleAdminAuthOrProtectionError(response.status, payload);
+
             setCouponFormError(normalizeErrorMessage(payload, 'Failed to add discount code.'));
             return;
         }
@@ -4424,6 +4927,7 @@ async function handleCouponTableActionClick(event) {
 }
 
 async function sendCouponEmail(couponId, code, button) {
+    if (!requireAdminPermission('enterprise', 'write')) return;
     if (!state.couponOrg) return;
     const company = state.couponOrg.company || 'this account';
     if (!(await confirmDialog(`The "${code}" discount will be emailed to ${company}'s team.`, { title: 'Send discount email?', okText: 'Send email', danger: false }))) return;
@@ -4431,7 +4935,7 @@ async function sendCouponEmail(couponId, code, button) {
     const original = button ? button.textContent : '';
     if (button) { button.disabled = true; button.textContent = 'Sending...'; }
     try {
-        const response = await fetch(`${API_BASE}/api/admin/enterprise/accounts/${state.couponOrg.id}/coupons/${couponId}/send-email`, {
+        const response = await adminFetch(`${API_BASE}/api/admin/enterprise/accounts/${state.couponOrg.id}/coupons/${couponId}/send-email`, {
             method: 'POST',
             headers: buildAuthHeaders({ 'Content-Type': 'application/json' }),
             credentials: 'same-origin',
@@ -4439,7 +4943,7 @@ async function sendCouponEmail(couponId, code, button) {
         });
         const payload = await response.json().catch(() => ({}));
         if (!response.ok) {
-            await handleAdminAuthOrProtectionError(response.status, payload);
+
             showFlash(normalizeErrorMessage(payload, 'Failed to send the promotion email.'), 'error');
             return;
         }
@@ -4453,10 +4957,11 @@ async function sendCouponEmail(couponId, code, button) {
 }
 
 async function updateCoupon(couponId, patch) {
+    if (!requireAdminPermission('enterprise', 'write')) return;
     if (!state.couponOrg) return;
     if (!await ensureAdminProtection({ silent: false })) return;
     try {
-        const response = await fetch(`${API_BASE}/api/admin/enterprise/accounts/${state.couponOrg.id}/coupons/${couponId}`, {
+        const response = await adminFetch(`${API_BASE}/api/admin/enterprise/accounts/${state.couponOrg.id}/coupons/${couponId}`, {
             method: 'PATCH',
             headers: buildAuthHeaders({ 'Content-Type': 'application/json' }),
             credentials: 'same-origin',
@@ -4464,7 +4969,7 @@ async function updateCoupon(couponId, patch) {
         });
         const payload = await response.json().catch(() => ({}));
         if (!response.ok) {
-            await handleAdminAuthOrProtectionError(response.status, payload);
+
             showFlash(normalizeErrorMessage(payload, 'Failed to update discount code.'), 'error');
             return;
         }
@@ -4477,17 +4982,18 @@ async function updateCoupon(couponId, patch) {
 }
 
 async function deleteCoupon(couponId, code) {
+    if (!requireAdminPermission('enterprise', 'delete')) return;
     if (!state.couponOrg) return;
     if (!await ensureAdminProtection({ silent: false })) return;
     try {
-        const response = await fetch(`${API_BASE}/api/admin/enterprise/accounts/${state.couponOrg.id}/coupons/${couponId}`, {
+        const response = await adminFetch(`${API_BASE}/api/admin/enterprise/accounts/${state.couponOrg.id}/coupons/${couponId}`, {
             method: 'DELETE',
             headers: buildAuthHeaders(),
             credentials: 'same-origin'
         });
         const payload = await response.json().catch(() => ({}));
         if (!response.ok) {
-            await handleAdminAuthOrProtectionError(response.status, payload);
+
             showFlash(normalizeErrorMessage(payload, 'Failed to delete discount code.'), 'error');
             return;
         }
@@ -4526,6 +5032,7 @@ async function handleTableActionClick(event) {
 }
 
 async function updateUserStatus(userId, nextIsActive, userLabel = '') {
+    if (!requireAdminPermission('users', 'write')) return;
     if (!await ensureAdminProtection({ silent: false })) return false;
 
     // Secondary confirmation — activating/deactivating is an account state change
@@ -4543,7 +5050,7 @@ async function updateUserStatus(userId, nextIsActive, userLabel = '') {
 
     setRowActionsDisabled(true);
     try {
-        const response = await fetch(`${API_BASE}/api/admin/users/${userId}/status`, {
+        const response = await adminFetch(`${API_BASE}/api/admin/users/${userId}/status`, {
             method: 'PATCH',
             headers: buildAuthHeaders({ 'Content-Type': 'application/json' }),
             body: JSON.stringify({ is_active: Boolean(nextIsActive) }),
@@ -4552,7 +5059,7 @@ async function updateUserStatus(userId, nextIsActive, userLabel = '') {
 
         const payload = await response.json().catch(() => ({}));
         if (!response.ok) {
-            await handleAdminAuthOrProtectionError(response.status, payload);
+
             showFlash(normalizeErrorMessage(payload, 'Failed to update user status.'), 'error');
             return;
         }
@@ -4570,6 +5077,7 @@ async function updateUserStatus(userId, nextIsActive, userLabel = '') {
 }
 
 async function deleteUser(userId, userEmail, userName) {
+    if (!requireAdminPermission('users', 'delete')) return;
     if (!await ensureAdminProtection({ silent: false })) return;
 
     const expectedName = (userName || '').trim();
@@ -4590,7 +5098,7 @@ async function deleteUser(userId, userEmail, userName) {
 
     setRowActionsDisabled(true);
     try {
-        const response = await fetch(`${API_BASE}/api/admin/users/${userId}`, {
+        const response = await adminFetch(`${API_BASE}/api/admin/users/${userId}`, {
             method: 'DELETE',
             headers: buildAuthHeaders(),
             credentials: 'same-origin'
@@ -4598,7 +5106,7 @@ async function deleteUser(userId, userEmail, userName) {
 
         const payload = await response.json().catch(() => ({}));
         if (!response.ok) {
-            await handleAdminAuthOrProtectionError(response.status, payload);
+
             showFlash(normalizeErrorMessage(payload, 'Failed to delete user.'), 'error');
             return;
         }

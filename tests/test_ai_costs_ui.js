@@ -57,9 +57,15 @@ function setup(fetchImpl = async () => okJson(profilePayload())) {
         fetch: async (url, options) => { requests.push({ url, options }); return fetchImpl(url, options); },
         console: { error() {} }
     });
-    vm.runInContext(`${source}\n;globalThis.ui = { state, refs, renderAiProfiles, renderAiProfileDetail, renderAiReconciliation, loadAiProfiles, loadAiProfileDetail, closeAiProfileDetail, invalidateAiAccounting, loadAiReconciliation, syncAiBilling, exportAiProfiles, renderAiProfilesControls, aiRecordedValue, aiRecordedCost, formatTokens, aiActivitySummary, renderAiBreakdown, aiExportSections, renderAiUsage, renderB2cRevenue, exportAiCsv, aiUsageEmptyState, loadB2cRevenue, aiBillingMoney };`, context);
+    vm.runInContext(`${source}\n;globalThis.ui = { state, refs, renderAiProfiles, renderAiProfileDetail, renderAiReconciliation, loadAiProfiles, loadAiProfileDetail, closeAiProfileDetail, invalidateAiAccounting, loadAiReconciliation, syncAiBilling, exportAiProfiles, renderAiProfilesControls, aiRecordedValue, aiRecordedCost, formatTokens, aiActivitySummary, renderAiBreakdown, aiExportSections, renderAiUsage, renderB2cRevenue, exportAiCsv, aiUsageEmptyState, loadB2cRevenue, aiBillingMoney, renderAiAccounts, loadAiAccounts, exportAiAccounts };`, context);
     const ui = context.ui;
     ui.state.authToken = 'test-admin-token';
+    ui.state.access = {
+        role: 'admin', sections: ['users', 'enterprise', 'analytics', 'finance', 'ai', 'team'],
+        can_manage_team: true, can_provision_enterprise: true,
+        can_write_sections: ['users', 'enterprise', 'analytics', 'finance', 'ai', 'team'],
+        can_delete_sections: ['users', 'enterprise', 'analytics', 'finance', 'ai', 'team']
+    };
     ui.state.aiRange = { start: '2026-09-01', end: '2026-09-06', preset: 'custom' };
     return { ...ui, elements, requests, downloads, urls, revoked, timers };
 }
@@ -82,6 +88,97 @@ test('profiles preserve exact token counts, separate selected and lifetime, and 
     assert.equal(app.refs.aiProfilesNextBtn.disabled, false);
 });
 
+test('profile table follows the selected dates in its summary and empty states', () => {
+    const app = setup();
+    const data = profilePayload();
+    app.renderAiProfiles(data);
+    assert.match(app.refs.aiProfilesSummary.textContent, /Showing 1–1 of 30 profiles with recorded usage · Sep 1, 2026 – Sep 6, 2026 \(UTC\)/);
+    assert.match(app.refs.aiProfilesSummary.textContent, /ordered by recorded tokens in these dates/);
+    app.renderAiProfiles({ ...data, profiles: [], total: 0 });
+    assert.match(app.refs.aiProfilesTableBody.innerHTML, /No profiles with recorded AI usage in the selected dates/);
+    assert.equal(app.refs.aiProfilesSummary.textContent, 'No profiles with recorded AI usage in the selected dates.');
+    app.state.aiProfiles.search = 'nobody';
+    app.renderAiProfiles({ ...data, profiles: [], total: 0 });
+    assert.match(app.refs.aiProfilesTableBody.innerHTML, /No profiles match this search with recorded AI usage in the selected dates/);
+});
+
+function accountsPayload() {
+    const range = (calls, tokens, cost) => ({ ...stats({ calls, total_tokens: tokens }), calculated_cost_usd: cost, calculated_cost_status: 'complete', calculated_cost_available: true });
+    return { range: { start: '2026-09-07', end: '2026-09-14' },
+        buckets: [
+            { key: 'b2c', label: 'B2C profiles', description: 'Students', range: range(199, 1000000, '5.30'), lifetime: range(500, 3000000, '20') },
+            { key: 'b2b', label: 'Enterprise organisations', description: 'Consultancies', range: range(9, 5000, '0.0127'), lifetime: range(9, 5000, '0.0127') },
+            { key: 'shared', label: 'Shared platform work', description: 'Jobs', range: range(150, 14766, '0.1643'), lifetime: range(150, 14766, '0.1643') },
+            { key: 'unattributed', label: 'Unattributed calls', description: 'Unknown', range: range(52, 300000, '1.85'), lifetime: range(52, 300000, '1.85') }],
+        ledger: { range: range(410, 1319766, '7.3287'), lifetime: range(711, 3319766, '22.027') },
+        google: { available: true, cost_before_credits_usd: 7.3307, credits_usd: -7.3307, net_cost_usd: 0, derived: true, source_range: { start: '2026-08-16', end: '2026-09-14' }, first_usage_date: '2026-09-06' },
+        organizations: [{ organization_id: 7, name: '<Brembo> overseas', subdomain: 'brembo', range: range(9, 5000, '0.0127'), lifetime: range(9, 5000, '0.0127') }],
+        b2c_unlisted: [{ user_id: 12, name: 'Owner <Test>', email: 'owner@example.test', reason: 'enterprise_origin_account', range: range(5, 40000, '1.20'), lifetime: range(5, 40000, '1.20') }, { user_id: null, name: 'No profile id recorded', email: null, reason: 'no_profile_id', range: range(3, 9000, '0.07'), lifetime: range(3, 9000, '0.07') }],
+        b2c_unlisted_total: { range: range(8, 49000, '1.27'), lifetime: range(8, 49000, '1.27') },
+        shared: [{ source: 'news.ingestion.au', range: range(20, 9000, '0.12'), lifetime: range(20, 9000, '0.12') }],
+        unattributed: [{ source: 'daily_ai_notifier', range: range(52, 300000, '1.85'), lifetime: range(52, 300000, '1.85') }],
+        note: 'Every recorded call is counted once.' };
+}
+
+test('usage by account shows all four buckets, holds the ledger against Google and escapes names', () => {
+    const app = setup();
+    app.renderAiAccounts(accountsPayload());
+    const summary = app.refs.aiAccountsSummary.innerHTML;
+    for (const label of ['B2C profiles', 'Enterprise organisations', 'Shared platform work', 'Unattributed calls']) assert.match(summary, new RegExp(label));
+    assert.match(summary, /\$5\.30/);
+    assert.match(summary, /72\.3% of the ledger total/);
+    assert.match(summary, /Ledger total \$7\.3287 across all four buckets vs Google cost before credits \$7\.3307/);
+    assert.match(summary, /ledger lower by \$0\.002/);
+    assert.match(summary, /import covering Aug 16, 2026 – Sep 14, 2026/);
+    assert.doesNotMatch(summary, /only has rows from/);
+    const early = accountsPayload();
+    early.range = { start: '2026-08-16', end: '2026-09-14' };
+    app.renderAiAccounts(early);
+    assert.match(app.refs.aiAccountsSummary.innerHTML, /only has rows from Sep 6, 2026; ledger calls before that day are not in it/);
+    app.renderAiAccounts(accountsPayload());
+    assert.doesNotMatch(summary, /estimate|margin|profit|savings/i);
+    assert.match(app.refs.aiOrgsTableBody.innerHTML, /&lt;Brembo&gt; overseas/);
+    assert.doesNotMatch(app.refs.aiOrgsTableBody.innerHTML, /<Brembo>/);
+    assert.match(app.refs.aiOrgsTableBody.innerHTML, /brembo · organisation id 7/);
+    assert.match(summary, /includes \$1\.27 \(8 calls\) not listed in the profile table/);
+    assert.match(app.refs.aiUnlistedTableBody.innerHTML, /Owner &lt;Test&gt;/);
+    assert.match(app.refs.aiUnlistedTableBody.innerHTML, /owner@example\.test · enterprise-origin account, cannot sign in to the B2C app/);
+    assert.match(app.refs.aiUnlistedTableBody.innerHTML, /No profile id recorded/);
+    assert.match(app.refs.aiSharedTableBody.innerHTML, /news\.ingestion\.au/);
+    assert.match(app.refs.aiUnattributedTableBody.innerHTML, /daily_ai_notifier/);
+    assert.equal(app.refs.aiAccountsExportBtn.disabled, false);
+    // Empty buckets say so; a missing Google import is stated instead of shown as zero.
+    const quiet = accountsPayload();
+    quiet.organizations = []; quiet.shared = []; quiet.unattributed = []; quiet.b2c_unlisted = []; quiet.b2c_unlisted_total = { range: { calls: 0, calculated_cost_usd: '0' } };
+    quiet.google = { available: false, message: 'No Google billing import covers these dates yet.' };
+    app.renderAiAccounts(quiet);
+    assert.match(app.refs.aiOrgsTableBody.innerHTML, /No enterprise organisation used AI in the selected dates/);
+    assert.match(app.refs.aiUnattributedTableBody.innerHTML, /Every call in the selected dates is attributed/);
+    assert.match(app.refs.aiUnlistedTableBody.innerHTML, /belongs to a profile listed above/);
+    assert.doesNotMatch(app.refs.aiAccountsSummary.innerHTML, /not listed in the profile table/);
+    assert.match(app.refs.aiAccountsSummary.innerHTML, /No Google billing import covers these dates yet/);
+    assert.doesNotMatch(app.refs.aiAccountsSummary.innerHTML, /vs Google cost before credits/);
+});
+
+test('usage by account requests and exports follow the selected dates', async () => {
+    const app = setup(async (url) => url.includes('/accounts/export')
+        ? { ok: true, headers: { get: () => 'attachment; filename="rilono-ai-usage-by-account.csv"' }, blob: async () => new Blob(['Section']) }
+        : okJson(accountsPayload()));
+    await app.loadAiAccounts();
+    const url = new URL(app.requests[0].url, 'https://example.test');
+    assert.equal(url.pathname, '/api/admin/ai-usage/accounts');
+    assert.equal(url.searchParams.get('start'), '2026-09-01');
+    assert.equal(url.searchParams.get('end'), '2026-09-06');
+    assert.equal(app.state.aiAccounts.loading, false);
+    await app.exportAiAccounts();
+    assert.match(app.requests[1].url, /\/api\/admin\/ai-usage\/accounts\/export\?start=2026-09-01&end=2026-09-06/);
+    assert.equal(app.downloads[0].filename, 'rilono-ai-usage-by-account.csv');
+    app.invalidateAiAccounting();
+    assert.equal(app.state.aiAccounts.data, null);
+    assert.match(app.refs.aiOrgsTableBody.innerHTML, /Loading usage by account/);
+    assert.equal(app.refs.aiAccountsExportBtn.disabled, true);
+});
+
 test('quoted dynamic data cannot break out of profile attributes', () => {
     const app = setup();
     const data = profilePayload();
@@ -94,14 +191,16 @@ test('quoted dynamic data cannot break out of profile attributes', () => {
 test('missing records display numeric zero with explicit coverage and calculation availability', () => {
     const app = setup();
     const data = profilePayload();
-    data.profiles[0].range = stats({ calls: 0, total_tokens: 0 });
-    data.profiles[0].lifetime = stats({ calls: 1, unknown_calls: 1, total_tokens: 0 });
+    data.profiles[0].range = stats({ calls: 1, unknown_calls: 1, total_tokens: 0 });
+    data.profiles[0].lifetime = stats({ calls: 3, unknown_calls: 2, legacy_calls: 2, total_tokens: 0 });
     app.renderAiProfiles(data);
     const html = app.refs.aiProfilesTableBody.innerHTML;
     assert.match(html, /<strong>0<\/strong>/);
     assert.match(html, /\$0\.00/);
     assert.match(html, /Cost unavailable/);
+    // Coverage chips describe the selected dates, not the lifetime history.
     assert.match(html, /1 missing usage/);
+    assert.doesNotMatch(html, /2 missing usage|2 legacy/);
     assert.doesNotMatch(html, /<strong>—<\/strong>|Unpriced|Partial estimate/);
     assert.equal(app.aiRecordedValue(null, 'total_tokens'), '0');
     assert.equal(app.aiRecordedCost(null), '$0.00');
@@ -169,7 +268,8 @@ test('profile requests use selected dates, applied search, pagination and admin 
     const url = new URL(req.url, 'https://example.test');
     assert.equal(url.pathname, '/api/admin/ai-usage/profiles');
     assert.deepEqual(Object.fromEntries(url.searchParams), { start: '2026-09-01', end: '2026-09-06', page: '2', page_size: '25', search: 'A & B' });
-    assert.equal(req.options.headers.Authorization, 'Bearer test-admin-token');
+    assert.equal(req.options.headers.Authorization, undefined);
+    assert.equal(req.options.headers['X-Admin-Console-Session'], 'required');
     assert.equal(req.options.credentials, 'same-origin');
     assert.equal(app.state.aiProfiles.loading, false);
 });
@@ -212,7 +312,8 @@ test('CSV exports all matching profiles with applied filters, never a single tab
     const url = new URL(app.requests[0].url, 'https://example.test');
     assert.equal(url.pathname, '/api/admin/ai-usage/profiles/export');
     assert.deepEqual(Object.fromEntries(url.searchParams), { start: '2026-09-01', end: '2026-09-06', search: 'Applied search' });
-    assert.equal(app.requests[0].options.headers.Authorization, 'Bearer test-admin-token');
+    assert.equal(app.requests[0].options.headers.Authorization, undefined);
+    assert.equal(app.requests[0].options.headers['X-Admin-Console-Session'], 'required');
     assert.equal(app.downloads[0].filename, 'all-profiles.csv');
     assert.equal(await app.urls[0].blob.text(), 'all rows');
     assert.equal(app.state.aiProfiles.exporting, false);
@@ -294,6 +395,18 @@ test('an actual zero billing record remains distinguishable from missing imports
     assert.equal(app.refs.aiHeroNote.textContent, '');
 });
 
+test('dates served from a wider import name that import in the meta line', () => {
+    const app = setup();
+    app.renderAiReconciliation({ configured: true, status: 'available', derived: true, last_synced_at: '2026-09-14T00:02:42',
+        range: { start: '2026-09-07', end: '2026-09-14' }, source_range: { start: '2026-08-16', end: '2026-09-14' },
+        totals: [{ currency: 'USD', cost: '4.69', credits: '-4.69', net_cost: '0' }] });
+    assert.match(app.refs.aiReconciliation.innerHTML, /Imported window: Aug 16, 2026 – Sep 14, 2026 \(UTC\)/);
+    assert.equal(app.refs.aiMonthHero.textContent, '$4.69');
+    app.renderAiReconciliation({ configured: true, status: 'available', derived: false, range: { start: '2026-08-16', end: '2026-09-14' },
+        source_range: { start: '2026-08-16', end: '2026-09-14' }, totals: [{ currency: 'USD', cost: '7', credits: '-7', net_cost: '0' }] });
+    assert.doesNotMatch(app.refs.aiReconciliation.innerHTML, /Imported window/);
+});
+
 test('fully credited usage keeps the charge before credits as the tracked figure and lists credits by name', () => {
     const app = setup();
     app.renderAiReconciliation({ configured: true, status: 'available', range: {}, credits_applied: true, credit_breakdown_available: true,
@@ -342,7 +455,8 @@ test('billing sync snapshots selected dates and requires admin protection', asyn
     assert.equal(req.url, '/api/admin/ai-usage/reconciliation/sync');
     assert.equal(req.options.method, 'POST');
     assert.equal(req.options.credentials, 'same-origin');
-    assert.equal(req.options.headers.Authorization, 'Bearer test-admin-token');
+    assert.equal(req.options.headers.Authorization, undefined);
+    assert.equal(req.options.headers['X-Admin-Console-Session'], 'required');
     assert.equal(req.options.headers['Content-Type'], 'application/json');
     assert.deepEqual(JSON.parse(req.options.body), { start: '2026-09-01', end: '2026-09-06' });
     assert.equal(app.state.aiBilling.syncing, false);

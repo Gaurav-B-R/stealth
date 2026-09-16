@@ -42,6 +42,7 @@ logger = logging.getLogger(__name__)
 # the user link is nulled so the row survives de-identified. Every column here is
 # nullable in both the models and prod.
 _DELINK_USER_COLUMNS = [
+    (models.AdminConsoleAccess, "updated_by_user_id"),
     (models.SubscriptionPayment, "user_id"),  # financial records kept for accounting/tax
     (models.GeminiUsageEvent, "user_id"),  # AI cost metering stays for spend analysis
     (models.EnterpriseOrganization, "dpa_accepted_by_user_id"),
@@ -86,6 +87,9 @@ _DELINK_USER_COLUMNS = [
 # references them), except the AI threads which are special-cased in purge because
 # enterprise_ai_messages must go before their conversations (NO ACTION FK).
 _DELETE_USER_ROWS = [
+    (models.AdminConsoleSession, "user_id"),
+    (models.AdminConsoleCredential, "user_id"),
+    (models.AdminConsoleAccess, "user_id"),
     (models.EnterpriseStepUpOtp, "user_id"),
     (models.EnterpriseNotification, "recipient_user_id"),
     (models.RilonoAiChatUploadEvent, "user_id"),

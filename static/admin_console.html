@@ -7,7 +7,7 @@
     <title>Rilono Admin Console</title>
     <meta name="robots" content="noindex,nofollow">
     <link rel="icon" type="image/png" href="/static/logo.png">
-    <link rel="stylesheet" href="/static/admin_console.css?v=20260911a">
+    <link rel="stylesheet" href="/static/admin_console.css?v=20260913c">
     <script src="https://challenges.cloudflare.com/turnstile/v0/api.js?render=explicit" async defer></script>
 </head>
 
@@ -22,7 +22,7 @@
                 </button>
             </div>
             <div class="tab-row" role="tablist" aria-label="Admin data views" aria-orientation="vertical">
-                <span class="nav-group-label" role="presentation">Accounts</span>
+                <span class="nav-group-label" data-admin-group="users enterprise" role="presentation">Accounts</span>
                 <button id="adminUsersTabBtn" type="button" class="tab-btn active" data-tab="users" role="tab" aria-controls="adminUsersTabPanel" aria-selected="true">
                     <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2m20 0v-2a4 4 0 0 0-3-3.87M16 3.13a4 4 0 0 1 0 7.75"/><circle cx="9" cy="7" r="4"/></svg>
                     <span class="nav-label">Student Accounts</span>
@@ -31,7 +31,7 @@
                     <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="4" y="3" width="16" height="18" rx="2"/><path d="M9 21v-4h6v4M8 7h1m6 0h1M8 11h1m6 0h1"/></svg>
                     <span class="nav-label">Enterprise Accounts</span>
                 </button>
-                <span class="nav-group-label" role="presentation">Intelligence</span>
+                <span class="nav-group-label" data-admin-group="analytics finance ai" role="presentation">Intelligence</span>
                 <button id="adminAnalyticsTabBtn" type="button" class="tab-btn" data-tab="analytics" role="tab" aria-controls="adminAnalyticsTabPanel" aria-selected="false" tabindex="-1">
                     <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 3v17h17M8 15v-4m5 4V7m5 8V4"/></svg>
                     <span class="nav-label">Analytics &amp; Agent</span>
@@ -43,6 +43,11 @@
                 <button id="adminAiTabBtn" type="button" class="tab-btn" data-tab="ai" role="tab" aria-controls="adminAiTabPanel" aria-selected="false" tabindex="-1">
                     <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="5" y="5" width="14" height="14" rx="3"/><path d="M9 1v4m6-4v4M9 19v4m6-4v4M1 9h4m-4 6h4m14-6h4m-4 6h4"/><rect x="9" y="9" width="6" height="6" rx="1"/></svg>
                     <span class="nav-label">AI Costs</span>
+                </button>
+                <span class="nav-group-label" data-admin-group="team" role="presentation">Rilono Employees</span>
+                <button id="adminTeamTabBtn" type="button" class="tab-btn" data-tab="team" role="tab" aria-controls="adminTeamTabPanel" aria-selected="false" tabindex="-1" hidden>
+                    <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="9" cy="7" r="3"/><path d="M3 21v-3a6 6 0 0 1 12 0v3m3-12v6m-3-3h6"/></svg>
+                    <span class="nav-label">Team</span>
                 </button>
             </div>
             <div class="sidebar-footer"><span class="sidebar-footer-label">Admin workspace</span><p>Accounts, insights and operations.</p></div>
@@ -68,12 +73,12 @@
 
             <section id="adminAuthPanel" class="panel auth-panel">
                 <h2>Separate Admin Login</h2>
-                <p class="auth-copy">Use your admin or developer account credentials to access account controls.</p>
+                <p class="auth-copy">Use your console password if one has been set. Otherwise, use your existing Rilono password. Your account must have console access.</p>
                 <form id="adminLoginForm" autocomplete="on">
                     <label for="adminLoginEmail">Email</label>
                     <input id="adminLoginEmail" type="email" required autocomplete="username">
 
-                    <label for="adminLoginPassword">Password</label>
+                    <label for="adminLoginPassword">Console sign-in password</label>
                     <input id="adminLoginPassword" type="password" required autocomplete="current-password">
 
                     <div id="adminTurnstileWrap" class="turnstile-wrap" hidden>
@@ -222,7 +227,7 @@
                                 </h3>
                                 <p>Which free accounts to promote the Visa Success Pass to, and how — scored on real usage, strategy by Rilono AI.</p>
                             </div>
-                            <button id="adminGrowthRunBtn" type="button" class="primary-btn small-btn">Run analysis</button>
+                            <button id="adminGrowthRunBtn" data-admin-write="analytics" type="button" class="primary-btn small-btn">Run analysis</button>
                         </div>
                         <div id="adminGrowthMeta" style="font-size:12.5px;color:#64748b;margin:2px 0 8px;"></div>
                         <div id="adminGrowthResults">
@@ -257,7 +262,7 @@
                             <h3>Create Enterprise Credentials</h3>
                             <p>Create enterprise access using name and email. Existing main-platform emails keep the same password.</p>
                         </div>
-                        <form id="adminEnterpriseCredentialForm" class="enterprise-credential-form">
+                        <form id="adminEnterpriseCredentialForm" data-admin-provision class="enterprise-credential-form">
                             <input type="text" id="adminEnterpriseCredentialName" aria-label="Client full name" placeholder="Client full name" required>
                             <input type="email" id="adminEnterpriseCredentialEmail" aria-label="Client email address" placeholder="client@company.com" required>
                             <button id="adminEnterpriseCredentialCreateBtn" type="submit" class="primary-btn small-btn">Create Credentials</button>
@@ -298,6 +303,43 @@
                         <span id="adminEnterprisePageInfo">Page 1 of 1</span>
                         <button id="adminEnterpriseNextBtn" type="button" class="ghost-btn small-btn" disabled>Next</button>
                     </div>
+                </section>
+
+                <section id="adminTeamTabPanel" class="tab-panel" role="tabpanel" aria-labelledby="adminTeamTabBtn" tabindex="-1" hidden>
+                    <div class="page-heading">
+                        <span class="page-eyebrow">Rilono Employees</span>
+                        <h2>Team</h2>
+                        <p>Give existing Rilono accounts access to the sections they need.</p>
+                    </div>
+                    <div class="team-role-guide" aria-label="Console roles">
+                        <p><strong>Admin</strong> can manage assigned sections, including deletions.</p>
+                        <p><strong>Editor</strong> can make changes. Deletions and refunds require an Admin.</p>
+                        <p><strong>Viewer</strong> is read-only. Filters and exports remain available.</p>
+                    </div>
+                    <section class="team-form-card" data-admin-write="team">
+                        <h3 id="adminTeamFormTitle">Add a team member</h3>
+                        <p id="adminTeamFormHint" class="team-hint">Use an existing Rilono account email. Team access does not create an account or send an invitation.</p>
+                        <form id="adminTeamForm" aria-describedby="adminTeamFormHint" aria-busy="false">
+                            <div class="team-fields">
+                                <label for="adminTeamEmail">Account email<input id="adminTeamEmail" type="email" autocomplete="off" required placeholder="name@company.com"></label>
+                                <label for="adminTeamRole">Console role<select id="adminTeamRole"><option value="viewer">Viewer</option><option value="editor">Editor</option><option value="admin">Admin</option></select></label>
+                            </div>
+                            <fieldset class="team-password-fieldset">
+                                <legend>Console password (optional)</legend>
+                                <p id="adminTeamPasswordHint" class="team-hint">Set or replace a password for this console only. Your member’s personal Rilono password stays the same. Leave both fields blank to keep their current sign-in method. Use a strong password with uppercase and lowercase letters, a number, and a symbol.</p>
+                                <div class="team-fields team-password-fields">
+                                    <label for="adminTeamPassword">New console password<input id="adminTeamPassword" type="password" autocomplete="new-password" autocapitalize="none" spellcheck="false" aria-describedby="adminTeamPasswordHint"></label>
+                                    <label for="adminTeamPasswordConfirm">Confirm console password<input id="adminTeamPasswordConfirm" type="password" autocomplete="new-password" autocapitalize="none" spellcheck="false" aria-describedby="adminTeamPasswordHint"></label>
+                                </div>
+                            </fieldset>
+                            <fieldset class="team-sections-fieldset"><legend>Allowed sections</legend><p class="team-hint">You can assign sections available to you. Team management requires Admin and Team access.</p><div id="adminTeamSections" class="team-sections"></div></fieldset>
+                            <p id="adminTeamError" class="coupon-form-error" role="alert" hidden></p>
+                            <div class="team-form-actions"><button id="adminTeamSave" class="primary-btn small-btn" type="submit">Add member</button><button id="adminTeamCancel" class="ghost-btn small-btn" type="button">Reset</button></div>
+                        </form>
+                    </section>
+                    <div class="users-table-toolbar"><div id="adminTeamSummary" class="users-summary" aria-live="polite">No team members loaded.</div></div>
+                    <div class="table-wrap"><table class="users-table team-table"><thead><tr><th>Member</th><th>Role</th><th>Sections</th><th>Access</th></tr></thead><tbody id="adminTeamTableBody"><tr><td colspan="4" class="table-empty">No team members loaded.</td></tr></tbody></table></div>
+                    <p class="team-hint team-footer-note">Protected platform administrators are locked. Revoking console access keeps the member’s Rilono account and data.</p>
                 </section>
 
                 <section id="adminFinanceTabPanel" class="tab-panel" role="tabpanel" aria-labelledby="adminFinanceTabBtn" tabindex="-1" hidden>
@@ -382,11 +424,11 @@
                         </div>
                         <div class="finance-ledger-actions">
                             <button type="button" id="adminFinanceExportBtn" class="table-btn">⬇ Export to Excel</button>
-                            <button type="button" id="adminFinanceAddBtn" class="table-btn primary">+ Add entry</button>
+                            <button type="button" id="adminFinanceAddBtn" data-admin-write="finance" class="table-btn primary">+ Add entry</button>
                         </div>
                     </div>
 
-                    <form id="adminFinanceEntryForm" class="finance-entry-form" hidden>
+                    <form id="adminFinanceEntryForm" data-admin-write="finance" class="finance-entry-form" hidden>
                         <input type="hidden" id="adminFinanceEntryId">
                         <div class="finance-form-grid">
                             <label class="finance-field"><span>Date</span>
@@ -463,7 +505,7 @@
                         </div>
                     </div>
 
-                    <nav class="section-nav" aria-label="AI usage sections"><a href="#adminAiBillingSection">Google billing</a><a href="#adminAiProfilesSection">Profiles</a><a href="#adminAiActivitySection">Activity</a><a href="#adminAiDailySection">Usage by date</a></nav>
+                    <nav class="section-nav" aria-label="AI usage sections"><a href="#adminAiBillingSection">Google billing</a><a href="#adminAiProfilesSection">Profiles</a><a href="#adminAiAccountsSection">All accounts</a><a href="#adminAiActivitySection">Activity</a><a href="#adminAiDailySection">Usage by date</a></nav>
                     <section class="ai-range-card">
                         <div class="ai-range-head">
                             <div>
@@ -500,7 +542,7 @@
                                 <h3 id="adminAiReconciliationTitle">Actual Google billing</h3>
                                 <p>Imported charges, credits and net cost for the selected projects, services and dates. Billing can arrive later than usage.</p>
                             </div>
-                            <button type="button" id="adminAiBillingSyncBtn" class="table-btn" disabled>Sync billing</button>
+                            <button type="button" id="adminAiBillingSyncBtn" data-admin-write="ai" class="table-btn" disabled>Sync billing</button>
                         </div>
                         <div id="adminAiReconciliation" class="ai-reconciliation-content" aria-live="polite">
                             <p class="ai-accounting-note">Billing connection status has not been loaded.</p>
@@ -527,7 +569,7 @@
                         </form>
                         <div class="table-wrap ai-profiles-table-wrap">
                             <table class="users-table ai-profiles-table">
-                                <caption class="ai-table-caption">Selected dates and lifetime totals are separate. Calculated USD includes supported recorded components; partial costs have coverage details in the profile breakdown.</caption>
+                                <caption class="ai-table-caption">Lists only profiles with recorded AI usage in the selected dates, ordered by recorded tokens in those dates; the lifetime columns show each listed profile's full retained history. Calculated USD includes supported recorded components; partial costs have coverage details in the profile breakdown.</caption>
                                 <thead>
                                     <tr><th scope="col">Profile</th><th scope="col">Selected range<br><span>Recorded tokens</span></th><th scope="col">Selected range<br><span>Calculated USD</span></th><th scope="col">Lifetime recorded<br><span>Tokens</span></th><th scope="col">Lifetime recorded<br><span>Calculated USD</span></th><th scope="col">Coverage</th></tr>
                                 </thead>
@@ -542,6 +584,50 @@
                             <div class="ai-accounting-head"><div><h4 id="adminAiProfileDetailTitle" tabindex="-1">Profile usage</h4><p id="adminAiProfileDetailSubtitle"></p></div><button type="button" id="adminAiProfileCloseBtn" class="table-btn">Close breakdown</button></div>
                             <div id="adminAiProfileDetailBody" aria-live="polite"></div>
                         </section>
+                    </section>
+
+                    <section id="adminAiAccountsSection" class="ai-accounting-card" aria-labelledby="adminAiAccountsTitle">
+                        <div class="ai-accounting-head">
+                            <div>
+                                <span class="ai-section-eyebrow">All accounts</span>
+                                <h3 id="adminAiAccountsTitle">Where AI usage and cost go</h3>
+                                <p>Every recorded call in the selected dates, split into B2C profiles, enterprise organisations, shared platform work and unattributed calls, and held against the imported Google charge for the same dates.</p>
+                            </div>
+                            <button type="button" id="adminAiAccountsExportBtn" class="table-btn" disabled>Export usage by account</button>
+                        </div>
+                        <div id="adminAiAccountsSummary" class="ai-accounts-summary" aria-live="polite"><p class="ai-accounting-note">Usage by account has not been loaded.</p></div>
+                        <h4 class="ai-accounts-subtitle">Enterprise organisations</h4>
+                        <div class="table-wrap">
+                            <table class="users-table ai-accounts-table">
+                                <caption class="ai-table-caption">Organisations with recorded AI usage in the selected dates, ordered by recorded tokens in those dates. Includes their clients' Copilot, Deep Scan, Course Finder and Writing Studio work.</caption>
+                                <thead><tr><th scope="col">Organisation</th><th scope="col">Selected range<br><span>Recorded tokens</span></th><th scope="col">Selected range<br><span>Calculated USD</span></th><th scope="col">Lifetime recorded<br><span>Tokens</span></th><th scope="col">Lifetime recorded<br><span>Calculated USD</span></th><th scope="col">Coverage</th></tr></thead>
+                                <tbody id="adminAiOrgsTableBody"><tr><td colspan="6" class="table-empty">Usage by organisation has not been loaded.</td></tr></tbody>
+                            </table>
+                        </div>
+                        <h4 class="ai-accounts-subtitle">B2C usage not listed in the profile table</h4>
+                        <div class="table-wrap">
+                            <table class="users-table ai-accounts-table">
+                                <caption class="ai-table-caption">B2C calls the profile table cannot show: accounts flagged as enterprise-origin (they cannot sign in to the B2C app, but background AI such as the daily notifier can still run for them) and calls with no profile id. Counted in the B2C card above.</caption>
+                                <thead><tr><th scope="col">Account</th><th scope="col">Selected range<br><span>Recorded tokens</span></th><th scope="col">Selected range<br><span>Calculated USD</span></th><th scope="col">Lifetime recorded<br><span>Tokens</span></th><th scope="col">Lifetime recorded<br><span>Calculated USD</span></th><th scope="col">Coverage</th></tr></thead>
+                                <tbody id="adminAiUnlistedTableBody"><tr><td colspan="6" class="table-empty">Not loaded.</td></tr></tbody>
+                            </table>
+                        </div>
+                        <h4 class="ai-accounts-subtitle">Shared platform work</h4>
+                        <div class="table-wrap">
+                            <table class="users-table ai-accounts-table">
+                                <caption class="ai-table-caption">Rilono's own background AI jobs in the selected dates, by feature. Not tied to any student or organisation.</caption>
+                                <thead><tr><th scope="col">Feature</th><th scope="col">Selected range<br><span>Recorded tokens</span></th><th scope="col">Selected range<br><span>Calculated USD</span></th><th scope="col">Lifetime recorded<br><span>Tokens</span></th><th scope="col">Lifetime recorded<br><span>Calculated USD</span></th><th scope="col">Coverage</th></tr></thead>
+                                <tbody id="adminAiSharedTableBody"><tr><td colspan="6" class="table-empty">Shared work has not been loaded.</td></tr></tbody>
+                            </table>
+                        </div>
+                        <h4 class="ai-accounts-subtitle">Unattributed calls</h4>
+                        <div class="table-wrap">
+                            <table class="users-table ai-accounts-table">
+                                <caption class="ai-table-caption">Calls recorded without an account or product classification, by feature. Mostly older records; new calls should not appear here.</caption>
+                                <thead><tr><th scope="col">Feature</th><th scope="col">Selected range<br><span>Recorded tokens</span></th><th scope="col">Selected range<br><span>Calculated USD</span></th><th scope="col">Lifetime recorded<br><span>Tokens</span></th><th scope="col">Lifetime recorded<br><span>Calculated USD</span></th><th scope="col">Coverage</th></tr></thead>
+                                <tbody id="adminAiUnattributedTableBody"><tr><td colspan="6" class="table-empty">Unattributed calls have not been loaded.</td></tr></tbody>
+                            </table>
+                        </div>
                     </section>
 
                     <p id="adminAiActivitySection" class="ai-fixed-caption">All recorded AI activity · B2C, B2B and shared work · Selected range · Missing values display 0 with coverage notes.</p>
@@ -670,7 +756,7 @@
                 </div>
 
                 <h4 class="account-section-title">Discount codes</h4>
-                <form id="adminCouponForm" class="coupon-form">
+                <form id="adminCouponForm" data-admin-write="enterprise" class="coupon-form">
                     <div class="coupon-form-grid">
                         <label class="coupon-field">
                             <span>Code</span>
@@ -736,7 +822,7 @@
         </div>
     </div>
 
-    <script src="/static/admin_console.js?v=20260911a"></script>
+    <script src="/static/admin_console.js?v=20260913d"></script>
 </body>
 
 </html>

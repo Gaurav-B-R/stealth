@@ -133,6 +133,40 @@ class User(Base):
     subscription_payments = relationship("SubscriptionPayment", back_populates="user", cascade="save-update, merge")
     notifications = relationship("UserNotification", back_populates="user", cascade="all, delete-orphan")
 
+class AdminConsoleAccess(Base):
+    """Delegated platform-console access; separate from global and Enterprise roles."""
+    __tablename__ = "admin_console_access"
+
+    user_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), primary_key=True)
+    role = Column(String(16), nullable=False)
+    sections = Column(Text, nullable=False)  # JSON array of explicit section keys
+    created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+    updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False)
+    updated_by_user_id = Column(Integer, ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
+
+
+class AdminConsoleCredential(Base):
+    """Optional console-only password; removed together with delegated access."""
+    __tablename__ = "admin_console_credentials"
+
+    user_id = Column(Integer, ForeignKey("admin_console_access.user_id", ondelete="CASCADE"), primary_key=True)
+    password_hash = Column(String, nullable=False)
+    created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+    updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False)
+
+
+class AdminConsoleSession(Base):
+    """Opaque console sessions. Raw tokens never persist in the database."""
+    __tablename__ = "admin_console_sessions"
+
+    token_hash = Column(String(64), primary_key=True)
+    user_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
+    auth_source = Column(String(16), nullable=False)  # console | personal
+    auth_fingerprint = Column(String(64), nullable=False)
+    expires_at = Column(DateTime(timezone=True), nullable=False, index=True)
+    created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+
+
 class USUniversity(Base):
     __tablename__ = "us_universities"
     

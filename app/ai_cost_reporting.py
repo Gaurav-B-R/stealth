@@ -197,9 +197,23 @@ def summarize(db, *conditions):
     return stats_dict(db.query(*stat_columns()).filter(*conditions).one())
 
 
-def profile_query(db, search=""):
+def profile_activity(db, start, end):
+    """Per-profile B2C usage inside the selected dates.
+
+    The profile table follows the date filter: only profiles with recorded usage in the range are
+    listed, ordered by what they used in that range. Lifetime figures stay per listed profile.
+    """
+    E = models.GeminiUsageEvent
+    return (db.query(E.user_id.label("user_id"), *stat_columns())
+            .filter(b2c_filter(), range_filter(start, end), E.user_id.isnot(None))
+            .group_by(E.user_id).subquery())
+
+
+def profile_query(db, search="", *, activity=None):
     U = models.User
     q = db.query(U).filter(U.is_enterprise_account.is_(False))
+    if activity is not None:
+        q = q.join(activity, activity.c.user_id == U.id)
     search = str(search or "").strip()[:200]
     if search:
         # Escape LIKE wildcards: a search is literal, never a SQL pattern.
@@ -251,9 +265,11 @@ def coverage(db, start, end):
 def build_profiles(db, *, start=None, end=None, search="", page=1, page_size=25):
     start, end = resolve_range(start, end)
     page, page_size = max(1, int(page)), max(1, min(100, int(page_size)))
-    q = profile_query(db, search)
+    activity = profile_activity(db, start, end)
+    q = profile_query(db, search, activity=activity)
     total = q.count()
-    users = q.order_by(models.User.id).offset((page - 1) * page_size).limit(page_size).all()
+    users = (q.order_by(activity.c.total_tokens.desc(), activity.c.calls.desc(), models.User.id)
+             .offset((page - 1) * page_size).limit(page_size).all())
     return {"range": {"start": start.isoformat(), "end": end.isoformat()},
             "page": page, "page_size": page_size, "total": total,
             "profiles": profile_rows(db, users, start, end), "coverage": coverage(db, start, end),
@@ -296,34 +312,208 @@ def build_profile_detail(db, user_id, *, start=None, end=None):
                          for src in sorted(lifetime)], "daily": daily, "coverage_note": COVERAGE_NOTE}
 
 
+EXPORT_FIELDS = ["calls", "input_tokens", "output_tokens", "thinking_tokens", "cached_tokens",
+                 "tool_tokens", "total_tokens", "tts_characters", "calculated_cost_usd",
+                 "calculated_cost_status", "priced_calls", "unpriced_calls", "partially_priced_calls",
+                 "calculated_token_cost_usd", "calculated_voice_cost_usd", "calculated_other_cost_usd",
+                 "rate_basis", "rate_versions", "rates_verified_at", "rate_coverage_reasons",
+                 "calculation_assumptions", "historical_prices_verified", "cost_exclusions", "billed_cost_usd",
+                 "billed_cost_available", "billed_cost_status", "unknown_calls", "legacy_calls"]
+
+
+def _csv_safe(value):
+    text = str(value or "")
+    return "'" + text if text.lstrip().startswith(("=", "+", "-", "@")) else text
+
+
+def _csv_field(value):
+    return "; ".join(value) if isinstance(value, list) else value
+
+
 def profiles_csv(db, *, start=None, end=None, search=""):
     """Export every matching profile in bounded pages, independent of UI pagination."""
     start, end = resolve_range(start, end)
     output = StringIO()
     writer = csv.writer(output)
-    fields = ["calls", "input_tokens", "output_tokens", "thinking_tokens", "cached_tokens",
-              "tool_tokens", "total_tokens", "tts_characters", "calculated_cost_usd",
-              "calculated_cost_status", "priced_calls", "unpriced_calls", "partially_priced_calls",
-              "calculated_token_cost_usd", "calculated_voice_cost_usd", "calculated_other_cost_usd",
-              "rate_basis", "rate_versions", "rates_verified_at", "rate_coverage_reasons",
-              "calculation_assumptions", "historical_prices_verified", "cost_exclusions", "billed_cost_usd",
-              "billed_cost_available", "billed_cost_status", "unknown_calls", "legacy_calls"]
+    fields = EXPORT_FIELDS
     writer.writerow(["Profile ID", "Name", "Email", "From UTC", "To UTC"] +
                     [f"{scope} {key}" for scope in ("Range", "Lifetime recorded") for key in fields])
-    def safe(value):
-        text = str(value or "")
-        return "'" + text if text.lstrip().startswith(("=", "+", "-", "@")) else text
-    def field_value(value):
-        return "; ".join(value) if isinstance(value, list) else value
+    safe, field_value = _csv_safe, _csv_field
+    activity = profile_activity(db, start, end)
     last_id = 0
     while True:
-        users = profile_query(db, search).filter(models.User.id > last_id).order_by(models.User.id).limit(250).all()
+        users = (profile_query(db, search, activity=activity).filter(models.User.id > last_id)
+                 .order_by(models.User.id).limit(250).all())
         if not users:
             break
         for row in profile_rows(db, users, start, end):
             writer.writerow([row["user_id"], safe(row["name"]), safe(row["email"]), start, end] +
                             [field_value(row[scope][key]) for scope in ("range", "lifetime") for key in fields])
         last_id = users[-1].id
+    return "\ufeff" + output.getvalue()
+
+
+# Every recorded call lands in exactly one of these buckets; together they are the whole ledger,
+# which is what the imported Google charge for the same dates should be compared with.
+ACCOUNT_BUCKETS = (
+    ("b2c", "B2C profiles", "Students on the individual product, including AI run for them in the background."),
+    ("b2b", "Enterprise organisations", "Consultancy workspaces and their clients: Copilot, Deep Scan, Course Finder, Writing Studio."),
+    ("shared", "Shared platform work", "Rilono's own background jobs such as news ingestion and catalog refresh, tied to no account."),
+    ("unattributed", "Unattributed calls", "Calls recorded without an account or product classification, mostly older records."),
+)
+ACCOUNTS_NOTE = ("Every recorded call is counted once, in one bucket. Google bills the project as a whole and never names an "
+                 "account, so the split comes from the app ledger; the ledger total is what the imported Google charge for "
+                 "the same dates should be compared with. Calls before 2026-09-07 ran on a different Google account.")
+UNKNOWN_ORGANIZATION = "Enterprise (organisation not recorded)"
+
+
+def _bucket_expr():
+    E = models.GeminiUsageEvent
+    return case((or_(E.organization_id.isnot(None), E.product == "b2b"), "b2b"),
+                (b2c_filter(), "b2c"),
+                (E.product == "shared", "shared"),
+                else_="unattributed")
+
+
+def event_bucket(event):
+    """Python twin of _bucket_expr(); keep the two in step."""
+    from app.visa_pass import B2C_COST_SOURCES
+    if event.organization_id is not None or event.product == "b2b":
+        return "b2b"
+    legacy = (event.metering_version if event.metering_version is not None else 1) < 2
+    if event.product == "b2c" or (legacy and event.source in B2C_COST_SOURCES):
+        return "b2c"
+    if event.product == "shared":
+        return "shared"
+    return "unattributed"
+
+
+def _google_for_range(db, start, end):
+    from app import ai_billing
+    try:
+        rec = ai_billing.build_reconciliation(db, start=start, end=end)
+    except ai_billing.BillingConfigurationError as exc:
+        return {"available": False, "status": "not_configured", "message": str(exc)}
+    return {"available": bool(rec.get("google_cost_available")), "status": rec.get("status"),
+            "billing_status": rec.get("billing_status"), "message": rec.get("message"),
+            "cost_before_credits_usd": rec.get("google_cost_usd"), "credits_usd": rec.get("google_credits_usd"),
+            "net_cost_usd": rec.get("google_net_cost_usd"), "totals": rec.get("totals") or [],
+            "last_synced_at": rec.get("last_synced_at"), "derived": bool(rec.get("derived")),
+            "source_range": rec.get("source_range"),
+            # Ledger calls before this day cannot be in the import (for example, the old Google account).
+            "first_usage_date": min((row.get("usage_date") or "" for row in rec.get("usage_rows") or []), default=None) or None}
+
+
+def build_usage_by_account(db, *, start=None, end=None):
+    """All recorded AI usage for the dates, split by bucket, organisation and feature, plus Google."""
+    start, end = resolve_range(start, end)
+    E = models.GeminiUsageEvent
+    period = range_filter(start, end)
+    bucket = _bucket_expr()
+    org_key = func.coalesce(E.organization_id, 0)
+
+    def grouped(key, *conditions):
+        rows = db.query(key.label("key"), *stat_columns()).filter(*conditions).group_by(key).all()
+        return {row[0]: stats_dict(row[1:]) for row in rows}
+    bucket_life, bucket_range = grouped(bucket), grouped(bucket, period)
+    org_life, org_range = grouped(org_key, bucket == "b2b"), grouped(org_key, bucket == "b2b", period)
+    feature_life = {key: grouped(E.source, bucket == key) for key in ("shared", "unattributed")}
+    feature_range = {key: grouped(E.source, bucket == key, period) for key in ("shared", "unattributed")}
+
+    # B2C calls the profile table cannot list: accounts flagged enterprise-origin (they cannot sign in to
+    # the B2C app, yet background AI can still run for them) and calls with no profile id at all.
+    U = models.User
+    flagged_ids = {row[0] for row in db.query(U.id).filter(U.is_enterprise_account.is_(True)).all()}
+    unlisted = and_(bucket == "b2c", or_(E.user_id.is_(None), E.user_id.in_(sorted(flagged_ids)) if flagged_ids else False))
+    user_key = func.coalesce(E.user_id, 0)
+    unlisted_life, unlisted_range = grouped(user_key, unlisted), grouped(user_key, unlisted, period)
+
+    costs = {scope: {"bucket": defaultdict(CalculatedCosts), "org": defaultdict(CalculatedCosts),
+                     "shared": defaultdict(CalculatedCosts), "unattributed": defaultdict(CalculatedCosts),
+                     "unlisted": defaultdict(CalculatedCosts)}
+             for scope in ("lifetime", "range")}
+    # One streamed scan prices every retained request once; aggregation never re-prices tokens.
+    for event in db.query(E).yield_per(1000):
+        calculation = ai_cost_calculation.calculate_event(event)
+        key = event_bucket(event)
+        day = _event_day(event)
+        scopes = ("lifetime", "range") if day is not None and start <= day <= end else ("lifetime",)
+        for scope in scopes:
+            costs[scope]["bucket"][key].add(calculation)
+            if key == "b2b":
+                costs[scope]["org"][event.organization_id or 0].add(calculation)
+            elif key in ("shared", "unattributed"):
+                costs[scope][key][event.source].add(calculation)
+            elif event.user_id is None or event.user_id in flagged_ids:
+                costs[scope]["unlisted"][event.user_id or 0].add(calculation)
+
+    def both(stats_range, stats_life, cost_range, cost_life):
+        return {"range": calculated_stats(stats_range, cost_range), "lifetime": calculated_stats(stats_life, cost_life)}
+    buckets = [{"key": key, "label": label, "description": description,
+                **both(bucket_range.get(key), bucket_life.get(key), costs["range"]["bucket"].get(key), costs["lifetime"]["bucket"].get(key))}
+               for key, label, description in ACCOUNT_BUCKETS]
+    ledger_costs = {}
+    for scope in ("lifetime", "range"):
+        merged = CalculatedCosts()
+        for part in costs[scope]["bucket"].values():
+            merged.merge(part)
+        ledger_costs[scope] = merged
+    ledger = both(summarize(db, period), summarize(db), ledger_costs["range"], ledger_costs["lifetime"])
+
+    org_ids = [key for key in org_range if key]
+    names = {row.id: row for row in db.query(models.EnterpriseOrganization).filter(models.EnterpriseOrganization.id.in_(org_ids)).all()} if org_ids else {}
+    organizations = [{"organization_id": key or None,
+                      "name": (getattr(names.get(key), "company_name", None) or f"Organisation {key}") if key else UNKNOWN_ORGANIZATION,
+                      "subdomain": getattr(names.get(key), "subdomain_slug", None) if key else None,
+                      **both(org_range.get(key), org_life.get(key), costs["range"]["org"].get(key), costs["lifetime"]["org"].get(key))}
+                     for key in org_range]
+    features = {key: [{"source": source, **both(feature_range[key].get(source), feature_life[key].get(source),
+                                                 costs["range"][key].get(source), costs["lifetime"][key].get(source))}
+                      for source in feature_range[key]] for key in ("shared", "unattributed")}
+    unlisted_users = {row.id: row for row in db.query(U).filter(U.id.in_([k for k in unlisted_range if k])).all()} if any(unlisted_range) else {}
+    b2c_unlisted = [{"user_id": key or None,
+                     "name": (getattr(unlisted_users.get(key), "full_name", None) or getattr(unlisted_users.get(key), "email", None) or f"Profile {key}") if key else "No profile id recorded",
+                     "email": getattr(unlisted_users.get(key), "email", None) if key else None,
+                     "reason": "enterprise_origin_account" if key else "no_profile_id",
+                     **both(unlisted_range.get(key), unlisted_life.get(key), costs["range"]["unlisted"].get(key), costs["lifetime"]["unlisted"].get(key))}
+                    for key in unlisted_range]
+    unlisted_costs = {}
+    for scope in ("lifetime", "range"):
+        merged = CalculatedCosts()
+        for part in costs[scope]["unlisted"].values():
+            merged.merge(part)
+        unlisted_costs[scope] = merged
+    b2c_unlisted_total = both(summarize(db, unlisted, period), summarize(db, unlisted), unlisted_costs["range"], unlisted_costs["lifetime"])
+    by_range_usage = lambda row: (-int(row["range"]["total_tokens"] or 0), -int(row["range"]["calls"] or 0))
+    return {"range": {"start": start.isoformat(), "end": end.isoformat()},
+            "buckets": buckets, "ledger": ledger, "google": _google_for_range(db, start, end),
+            "b2c_unlisted": sorted(b2c_unlisted, key=by_range_usage), "b2c_unlisted_total": b2c_unlisted_total,
+            "organizations": sorted(organizations, key=by_range_usage),
+            "shared": sorted(features["shared"], key=by_range_usage),
+            "unattributed": sorted(features["unattributed"], key=by_range_usage),
+            "note": ACCOUNTS_NOTE}
+
+
+def usage_by_account_csv(db, *, start=None, end=None):
+    start, end = resolve_range(start, end)
+    data = build_usage_by_account(db, start=start, end=end)
+    output = StringIO()
+    writer = csv.writer(output)
+    writer.writerow(["Section", "Name", "Identifier", "From UTC", "To UTC"] +
+                    [f"{scope} {key}" for scope in ("Range", "Lifetime recorded") for key in EXPORT_FIELDS])
+    def emit(section, name, identifier, row):
+        writer.writerow([section, _csv_safe(name), _csv_safe(identifier), start, end] +
+                        [_csv_field(row[scope][key]) for scope in ("range", "lifetime") for key in EXPORT_FIELDS])
+    emit("Ledger total", "All recorded AI usage", "", data["ledger"])
+    for bucket in data["buckets"]:
+        emit("Bucket", bucket["label"], bucket["key"], bucket)
+    for row in data["b2c_unlisted"]:
+        emit("B2C usage not in the profile table", row["name"], row["email"] or row["reason"], row)
+    for org in data["organizations"]:
+        emit("Enterprise organisation", org["name"], org["organization_id"] or "", org)
+    for key, section in (("shared", "Shared platform work"), ("unattributed", "Unattributed calls")):
+        for row in data[key]:
+            emit(section, row["source"], "", row)
     return "\ufeff" + output.getvalue()
 
 

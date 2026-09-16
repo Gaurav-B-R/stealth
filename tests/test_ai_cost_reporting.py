@@ -15,7 +15,7 @@ from sqlalchemy.pool import StaticPool
 
 from app import ai_billing, ai_cost_reporting as reports, ai_usage, models, visa_pass
 from app.database import Base, get_db
-from app.auth import get_current_user
+from app.admin_sessions import get_current_console_user
 from app.routers import admin
 from app.services import ai_billing_sync
 
@@ -48,7 +48,7 @@ def credit_breakdown_stub(monkeypatch):
 
 
 def credit_row(**changes):
-    data = {"currency": "USD", "credit_type": "PROMOTION", "credit_name": "FreeTrial:Credit-1",
+    data = {"usage_date": "2026-08-03", "currency": "USD", "credit_type": "PROMOTION", "credit_name": "FreeTrial:Credit-1",
             "credit_id": "FreeTrial:Credit-1", "credit_full_name": "Free Trial", "amount": "-0.5"}
     data.update(changes)
     return data
@@ -74,7 +74,8 @@ def test_profile_range_lifetime_feature_and_product_scope(db):
     event(db, source="course_catalog_refresh", user_id=None, product="shared", total_tokens=400)
     event(db, source="unknown", user_id=None, product="unknown", total_tokens=500)
     data = reports.build_profiles(db, start=START, end=END)
-    assert data["total"] == 2  # enterprise-origin profile excluded
+    # Profile 2 has no usage in the selected dates and the enterprise-origin profile is excluded.
+    assert data["total"] == 1
     row = data["profiles"][0]
     assert row["range"]["total_tokens"] == 150
     assert row["lifetime"]["total_tokens"] == 450
@@ -95,7 +96,8 @@ def test_legacy_ambiguous_profile_usage_stays_unclassified(db):
     event(db, source="document_ai", product="unknown", organization_id=None,
           metering_version=1, usage_state="legacy")
     data = reports.build_profiles(db, start=START, end=END)
-    assert data["profiles"][0]["lifetime"]["calls"] == 0
+    # Unclassified usage never puts a profile in the table; it only shows in coverage.
+    assert data["profiles"] == []
     assert data["coverage"]["unattributed"]["calls"] == 2
     assert data["coverage"]["first_recorded_at"] is None
 
@@ -122,6 +124,9 @@ def test_export_all_pages_literal_search_and_spreadsheet_safety(db):
     for uid in range(10, 277):
         db.add(models.User(id=uid, email=f"student{uid}@example.com", full_name="Student", hashed_password="test"))
     db.commit()
+    # Only profiles with usage in the selected dates are exported, so give every B2C profile one call.
+    for uid in [1, 2, *range(10, 277)]:
+        event(db, user_id=uid)
     assert reports.build_profiles(db, start=START, end=END, page_size=1)["total"] == 269
     rows = list(csv.DictReader(StringIO(reports.profiles_csv(db, start=START, end=END).lstrip("\ufeff"))))
     assert len(rows) == 269
@@ -256,9 +261,9 @@ def test_bigquery_query_is_bounded_parameterized_and_reads_all_result_pages(monk
 def test_admin_endpoints_enforce_access_validate_dates_and_do_not_cache(db, monkeypatch):
     application = FastAPI()
     application.include_router(admin.router)
-    actor = models.User(id=9000, email="admin@example.com", is_admin=True, is_active=True)
+    actor = models.User(id=9000, email="admin@example.com", is_admin=True, is_active=True, email_verified=True)
     application.dependency_overrides[get_db] = lambda: db
-    application.dependency_overrides[get_current_user] = lambda: actor
+    application.dependency_overrides[get_current_console_user] = lambda: actor
     monkeypatch.setattr(admin, "_is_admin_turnstile_required", lambda request: False)
     monkeypatch.setattr(admin, "check_ip_rate_limit", lambda **kwargs: (True, 0))
     with TestClient(application) as client:
@@ -272,6 +277,14 @@ def test_admin_endpoints_enforce_access_validate_dates_and_do_not_cache(db, monk
         assert "calculated_cost_usd" in usage.text
         assert "is_estimate" not in usage.text
         assert client.get("/api/admin/ai-usage/profiles/export").status_code == 200
+        accounts = client.get("/api/admin/ai-usage/accounts", params={"start": str(START), "end": str(END)})
+        assert accounts.status_code == 200, accounts.text
+        assert accounts.headers["cache-control"] == "no-store"
+        assert [b["key"] for b in accounts.json()["buckets"]] == ["b2c", "b2b", "shared", "unattributed"]
+        export = client.get("/api/admin/ai-usage/accounts/export", params={"start": str(START), "end": str(END)})
+        assert export.status_code == 200 and export.headers["content-type"].startswith("text/csv")
+        assert "Ledger total" in export.text
+        assert client.get("/api/admin/ai-usage/accounts?start=bad").status_code in (400, 422)
         assert client.get("/api/admin/ai-usage/profiles/3").status_code == 404
         assert client.get("/api/admin/ai-usage/profiles?start=bad").status_code in (400, 422)
         assert client.post("/api/admin/ai-usage/reconciliation/sync", json={"start": 9}).status_code == 422
@@ -396,9 +409,9 @@ def test_sync_endpoint_reports_pending_export_without_claiming_success(db, monke
     configured(monkeypatch)
     application = FastAPI()
     application.include_router(admin.router)
-    actor = models.User(id=9000, email="admin@example.com", is_admin=True, is_active=True)
+    actor = models.User(id=9000, email="admin@example.com", is_admin=True, is_active=True, email_verified=True)
     application.dependency_overrides[get_db] = lambda: db
-    application.dependency_overrides[get_current_user] = lambda: actor
+    application.dependency_overrides[get_current_console_user] = lambda: actor
     monkeypatch.setattr(admin, "_is_admin_turnstile_required", lambda request: False)
     monkeypatch.setattr(admin, "check_ip_rate_limit", lambda **kwargs: (True, 0))
     def not_yet_exported(*args, **kwargs):
@@ -492,8 +505,10 @@ def test_calculated_costs_do_not_round_or_hide_incomplete_records_and_export_bas
     assert (value["priced_calls"], value["unpriced_calls"], value["partially_priced_calls"]) == (1, 2, 1)
     assert value["cost_exclusions"] == ["grounding", "missing_usage"]
     assert value["rate_versions"] == ["test-v1"]
-    assert data["profiles"][1]["range"]["calculated_cost_status"] == "no_usage"
-    assert data["profiles"][1]["range"]["calculated_cost_usd"] == "0"
+    # Profile 2 has no usage in the selected dates, so the table omits it; its detail still says so.
+    assert [row["user_id"] for row in data["profiles"]] == [1]
+    assert reports.build_profile_detail(db, 2, start=START, end=END)["range_totals"]["calculated_cost_status"] == "no_usage"
+    assert reports.build_profile_detail(db, 2, start=START, end=END)["range_totals"]["calculated_cost_usd"] == "0"
     detail = reports.build_profile_detail(db, 1, start=START, end=END)
     assert detail["daily"][1]["calculated_cost_status"] == "unavailable"
     assert detail["daily"][1]["calculated_cost_usd"] == "0"
@@ -671,3 +686,126 @@ def test_credit_query_failure_after_rows_keeps_previous_snapshot(db, monkeypatch
         ai_billing.sync_billing(db, start=fresh_start, end=fresh_end)
     assert db.query(ai_billing.AiBillingSnapshot).filter_by(start_date=fresh_start).count() == 0
     assert db.query(ai_billing.AiBillingCreditSnapshot).filter_by(start_date=fresh_start).count() == 0
+
+
+def test_profiles_table_follows_selected_dates_and_orders_by_range_usage(db):
+    db.add(models.User(id=4, email="student4@example.com", full_name="Student 4", hashed_password="test"))
+    db.commit()
+    event(db, user_id=1, total_tokens=150)
+    event(db, user_id=2, total_tokens=5000, created_at=datetime(2026, 8, 20))
+    event(db, user_id=2, total_tokens=90000, created_at=datetime(2026, 6, 15))   # outside the selected dates
+    event(db, user_id=4, total_tokens=70000, created_at=datetime(2026, 7, 4))    # only outside the selected dates
+    data = reports.build_profiles(db, start=START, end=END)
+    assert data["total"] == 2
+    assert [row["user_id"] for row in data["profiles"]] == [2, 1]   # ordered by tokens in the range, not by id
+    assert data["profiles"][0]["range"]["total_tokens"] == 5000
+    assert data["profiles"][0]["lifetime"]["total_tokens"] == 95000  # lifetime stays per listed profile
+    july = reports.build_profiles(db, start=date(2026, 7, 1), end=date(2026, 7, 31))
+    assert [row["user_id"] for row in july["profiles"]] == [4]
+    exported = list(csv.DictReader(StringIO(reports.profiles_csv(db, start=START, end=END).lstrip("\ufeff"))))
+    assert sorted(int(row["Profile ID"]) for row in exported) == [1, 2]
+    assert reports.build_profiles(db, search="student4", start=START, end=END)["total"] == 0
+
+
+def test_dates_inside_an_import_are_served_from_the_freshest_covering_import(db, monkeypatch):
+    configured(monkeypatch)
+    rows = [google_row(currency="USD", currency_conversion_rate="1", cost="1", credits="-1", usage_date="2026-08-05"),
+            google_row(currency="USD", currency_conversion_rate="1", cost="2", credits="-2", usage_date="2026-08-20")]
+    credits = [credit_row(amount="-1", usage_date="2026-08-05"), credit_row(amount="-2", usage_date="2026-08-20")]
+    monkeypatch.setattr(ai_billing, "query_export", lambda *a, **k: rows)
+    monkeypatch.setattr(ai_billing, "query_credit_breakdown", lambda *a, **k: credits)
+    month = ai_billing.sync_billing(db, start=START, end=END)   # August, the worker's window
+    assert month["derived"] is False and month["credit_breakdown"][0]["amount"] == "-3"
+    # A custom range inside that import is answered from it, per usage day, without a manual sync.
+    sub = ai_billing.build_reconciliation(db, start=date(2026, 8, 15), end=date(2026, 8, 25))
+    assert sub["status"] == "available" and sub["derived"] is True
+    assert sub["source_range"] == {"start": "2026-08-01", "end": "2026-08-31"}
+    assert sub["last_synced_at"] == month["last_synced_at"]
+    assert sub["totals"] == [{"currency": "USD", "cost": "2", "credits": "-2", "net_cost": "0"}]
+    assert sub["google_cost_usd"] == 2
+    assert [c["amount"] for c in sub["credit_breakdown"]] == ["-2"] and sub["credit_breakdown_available"] is True
+    assert [r["usage_date"] for r in sub["usage_rows"]] == ["2026-08-20"]
+    assert "import covering 2026-08-01 to 2026-08-31" in sub["message"]
+    empty = ai_billing.build_reconciliation(db, start=date(2026, 8, 10), end=date(2026, 8, 12))
+    assert empty["derived"] is True and empty["totals"] == [] and empty["billing_status"] == "no_records"
+    # Dates not fully covered by any import still need a sync.
+    wide = ai_billing.build_reconciliation(db, start=date(2026, 7, 1), end=END)
+    assert wide["status"] == "no_data" and "Sync billing" in wide["message"]
+    # A later exact sync is fresher, so it wins over the wider import.
+    monkeypatch.setattr(ai_billing, "query_export", lambda *a, **k: [
+        google_row(currency="USD", currency_conversion_rate="1", cost="5", credits="0", usage_date="2026-08-20")])
+    monkeypatch.setattr(ai_billing, "query_credit_breakdown", lambda *a, **k: [])
+    exact = ai_billing.sync_billing(db, start=date(2026, 8, 15), end=date(2026, 8, 25))
+    assert exact["derived"] is False and exact["google_cost_usd"] == 5
+    # Credits imported before per-day grouping existed cannot be split by date.
+    legacy = db.query(ai_billing.AiBillingCreditSnapshot).filter_by(start_date=START, end_date=END).one()
+    legacy.payload_json = json.dumps([{k: v for k, v in credit_row(amount="-3").items() if k != "usage_date"}])
+    db.commit()
+    assert ai_billing.build_reconciliation(db, start=date(2026, 8, 3), end=date(2026, 8, 6))["credit_breakdown_available"] is False
+    assert ai_billing.build_reconciliation(db, start=START, end=END)["credit_breakdown"][0]["amount"] == "-3"
+
+
+def test_usage_by_account_counts_every_call_once_and_holds_the_ledger_against_google(db, monkeypatch):
+    org = models.EnterpriseOrganization(id=7, company_name="Brembo overseas", subdomain_slug="brembo", created_by_user_id=3)
+    db.add(org)
+    db.commit()
+    event(db, user_id=1, total_tokens=1000)                                                   # b2c
+    event(db, user_id=None, organization_id=7, product="b2b", source="enterprise_copilot", total_tokens=2000)
+    event(db, user_id=None, organization_id=None, product="b2b", source="enterprise_deep_scan", total_tokens=300)  # b2b, org not recorded
+    event(db, user_id=None, product="shared", source="news.ingestion.au", total_tokens=400)
+    event(db, user_id=None, product="shared", source="course_catalog_refresh", total_tokens=50)
+    event(db, user_id=None, product="unknown", source="daily_ai_notifier", metering_version=2, total_tokens=600)
+    event(db, user_id=1, total_tokens=90000, created_at=datetime(2026, 6, 1))                # outside the dates
+    event(db, user_id=3, total_tokens=700, source="daily_ai_notifier")                          # enterprise-flagged account, B2C feature
+    event(db, user_id=None, product="b2c", source="daily_ai_notifier", total_tokens=80)        # b2c call with no profile id
+    data = reports.build_usage_by_account(db, start=START, end=END)
+    buckets = {b["key"]: b for b in data["buckets"]}
+    assert [b["key"] for b in data["buckets"]] == ["b2c", "b2b", "shared", "unattributed"]
+    # Every recorded call in the dates is in exactly one bucket, and the buckets add up to the ledger.
+    assert {k: b["range"]["calls"] for k, b in buckets.items()} == {"b2c": 3, "b2b": 2, "shared": 2, "unattributed": 1}
+    assert sum(b["range"]["total_tokens"] for b in buckets.values()) == data["ledger"]["range"]["total_tokens"] == 5130
+    assert data["ledger"]["range"]["calls"] == 8 and data["ledger"]["lifetime"]["calls"] == 9
+    # B2C calls the profile table cannot list are named, so the B2C card is fully traceable.
+    assert [(row["name"], row["user_id"], row["reason"], row["range"]["total_tokens"]) for row in data["b2c_unlisted"]] == [
+        ("Student 3", 3, "enterprise_origin_account", 700), ("No profile id recorded", None, "no_profile_id", 80)]
+    assert data["b2c_unlisted_total"]["range"]["calls"] == 2 and data["b2c_unlisted_total"]["range"]["total_tokens"] == 780
+    assert reports.build_profiles(db, start=START, end=END)["total"] == 1   # the profile table lists only user 1
+    assert Decimal(data["ledger"]["range"]["calculated_cost_usd"]) == sum(Decimal(b["range"]["calculated_cost_usd"]) for b in buckets.values())
+    assert buckets["b2c"]["lifetime"]["total_tokens"] == 91780   # 1000 + 90000 outside the dates + 700 + 80 unlisted
+    # Organisations, shared jobs and unattributed calls are broken down by name, ordered by usage in the dates.
+    assert [(o["name"], o["organization_id"], o["range"]["total_tokens"]) for o in data["organizations"]] == [
+        ("Brembo overseas", 7, 2000), (reports.UNKNOWN_ORGANIZATION, None, 300)]
+    assert data["organizations"][0]["subdomain"] == "brembo"
+    assert [(r["source"], r["range"]["total_tokens"]) for r in data["shared"]] == [("news.ingestion.au", 400), ("course_catalog_refresh", 50)]
+    assert [(r["source"], r["range"]["total_tokens"]) for r in data["unattributed"]] == [("daily_ai_notifier", 600)]
+    # Without a billing connection the Google side says so instead of showing a false zero.
+    assert data["google"]["available"] is False
+    # With an import covering the dates, the ledger is held against Google's charge before credits.
+    configured(monkeypatch)
+    monkeypatch.setattr(ai_billing, "query_export", lambda *a, **k: [
+        google_row(currency="USD", currency_conversion_rate="1", cost="3.5", credits="-3.5", usage_date="2026-08-03")])
+    ai_billing.sync_billing(db, start=START, end=END)
+    with_google = reports.build_usage_by_account(db, start=START, end=END)["google"]
+    assert with_google["available"] is True and with_google["cost_before_credits_usd"] == 3.5 and with_google["net_cost_usd"] == 0
+    assert with_google["first_usage_date"] == "2026-08-03"
+    output = reports.usage_by_account_csv(db, start=START, end=END)
+    rows = list(csv.DictReader(StringIO(output.lstrip("\ufeff"))))
+    assert [r["Section"] for r in rows][:5] == ["Ledger total", "Bucket", "Bucket", "Bucket", "Bucket"]
+    assert {r["Name"] for r in rows if r["Section"] == "Enterprise organisation"} == {"Brembo overseas", reports.UNKNOWN_ORGANIZATION}
+    assert {r["Name"] for r in rows if r["Section"] == "Shared platform work"} == {"news.ingestion.au", "course_catalog_refresh"}
+    assert int(rows[0]["Range total_tokens"]) == 5130
+    assert {r["Name"] for r in rows if r["Section"] == "B2C usage not in the profile table"} == {"Student 3", "No profile id recorded"}
+
+
+def test_event_bucket_matches_the_sql_bucket_expression(db):
+    event(db, user_id=1)                                                                       # b2c
+    event(db, user_id=1, product="unknown", metering_version=1, source="student_ai_chat")     # legacy b2c source
+    event(db, user_id=1, product="unknown", metering_version=1, source="enterprise_copilot")  # legacy, ambiguous
+    event(db, organization_id=9, product="b2c")                                               # org wins
+    event(db, user_id=None, product="shared", source="news.ingestion.us")
+    event(db, user_id=None, product="unknown", metering_version=2, source="daily_ai_notifier")
+    E = models.GeminiUsageEvent
+    sql = {row[0]: row[1] for row in db.query(E.id, reports._bucket_expr()).all()}
+    python = {e.id: reports.event_bucket(e) for e in db.query(E).all()}
+    assert sql == python
+    assert sorted(python.values()) == ["b2b", "b2c", "b2c", "shared", "unattributed", "unattributed"]

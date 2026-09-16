@@ -33,7 +33,7 @@ from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
 
 from app import models
-from app.auth import get_current_active_user, get_current_admin_user
+from app.auth import get_current_active_user
 from app.database import Base, get_db
 from app.routers import admin as admin_router
 from app.routers import profile as profile_router
@@ -65,6 +65,7 @@ def db_session():
 
 
 def _make_user(db, email, **extra) -> models.User:
+    extra.setdefault("email_verified", True)
     user = models.User(email=email, hashed_password="x", email_notifications_enabled=False, **extra)
     db.add(user)
     db.commit()
@@ -75,7 +76,7 @@ def _admin_client(db, admin_user) -> TestClient:
     app = FastAPI()
     app.include_router(admin_router.router)
     app.dependency_overrides[get_db] = lambda: db
-    app.dependency_overrides[get_current_admin_user] = lambda: admin_user
+    app.dependency_overrides[admin_router.get_current_admin_user] = lambda: admin_user
     app.dependency_overrides[admin_router.require_admin_turnstile_proof] = lambda: None
     return TestClient(app)
 
@@ -103,6 +104,43 @@ def test_admin_delete_bare_user_succeeds(db_session):
 
     assert response.status_code == 200
     assert db_session.query(models.User).filter_by(id=victim.id).first() is None
+
+
+def test_admin_delete_cleans_team_access_and_preserves_other_grants(db_session):
+    admin = _make_user(db_session, "admin@example.com", is_admin=True)
+    victim = _make_user(db_session, "teammate@example.com")
+    other = _make_user(db_session, "other@example.com")
+    db_session.add_all([
+        models.AdminConsoleAccess(user_id=victim.id, role="editor", sections='["users"]',
+                                  updated_by_user_id=admin.id),
+        models.AdminConsoleAccess(user_id=other.id, role="viewer", sections='["ai"]',
+                                  updated_by_user_id=victim.id),
+    ])
+    db_session.commit()
+
+    victim_id, other_id = victim.id, other.id
+    db_session.add_all([
+        models.AdminConsoleCredential(user_id=victim_id, password_hash="deleted-console-hash"),
+        models.AdminConsoleCredential(user_id=other_id, password_hash="retained-console-hash"),
+        models.AdminConsoleSession(token_hash="a" * 64, user_id=victim_id, auth_source="console",
+                                   auth_fingerprint="c" * 64, expires_at=datetime.utcnow() + timedelta(minutes=30)),
+        models.AdminConsoleSession(token_hash="b" * 64, user_id=other_id, auth_source="console",
+                                   auth_fingerprint="d" * 64, expires_at=datetime.utcnow() + timedelta(minutes=30)),
+    ])
+    db_session.commit()
+
+    response = _admin_client(db_session, admin).delete(f"/api/admin/users/{victim.id}")
+
+    assert response.status_code == 200, response.text
+    assert db_session.get(models.AdminConsoleAccess, victim.id) is None
+    db_session.expire_all()
+    other_grant = db_session.get(models.AdminConsoleAccess, other.id)
+    assert other_grant is not None and other_grant.updated_by_user_id is None
+    assert other_grant.role == "viewer" and other_grant.sections == '["ai"]'
+    assert db_session.get(models.AdminConsoleCredential, victim_id) is None
+    assert db_session.get(models.AdminConsoleSession, "a" * 64) is None
+    assert db_session.get(models.AdminConsoleCredential, other_id).password_hash == "retained-console-hash"
+    assert db_session.get(models.AdminConsoleSession, "b" * 64).user_id == other_id
 
 
 def test_admin_delete_student_with_related_rows(db_session):

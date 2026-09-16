@@ -4,6 +4,7 @@ from fastapi.responses import FileResponse, RedirectResponse, HTMLResponse, JSON
 from fastapi.middleware.cors import CORSMiddleware
 from app.database import engine, Base, SessionLocal
 from app.routers import auth, upload, profile, documents, ai_chat, pricing, subscription, news, notifications, admin, enterprise, visa_pass, onboarding, shortlist, courses, e2e, outcomes, sop, careers
+from app.routers import admin_auth
 from app import careers_catalog
 from app.subscriptions import backfill_missing_subscriptions
 from app.referrals import backfill_missing_referral_codes
@@ -271,6 +272,7 @@ app.include_router(subscription.router)
 app.include_router(news.router)
 app.include_router(notifications.router)
 app.include_router(admin.router)
+app.include_router(admin_auth.router)
 app.include_router(enterprise.router)
 app.include_router(visa_pass.router)
 app.include_router(e2e.router)

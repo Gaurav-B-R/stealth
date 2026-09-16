@@ -14,7 +14,7 @@ from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
 
 from app import models
-from app.auth import get_current_user
+from app.admin_sessions import get_current_console_user
 from app.database import Base, get_db
 from app.routers import admin
 from app.utils import user_export
@@ -25,13 +25,15 @@ def export_context(monkeypatch):
     engine = create_engine(
         "sqlite://", connect_args={"check_same_thread": False}, poolclass=StaticPool
     )
-    Base.metadata.create_all(engine, tables=[models.User.__table__, models.Subscription.__table__])
+    Base.metadata.create_all(engine, tables=[
+        models.User.__table__, models.Subscription.__table__, models.AdminConsoleAccess.__table__,
+    ])
     db = sessionmaker(bind=engine)()
-    actor = models.User(id=9999, email="admin@example.com", is_admin=True, is_active=True)
+    actor = models.User(id=9999, email="admin@example.com", is_admin=True, is_active=True, email_verified=True)
     app = FastAPI()
     app.include_router(admin.router)
     app.dependency_overrides[get_db] = lambda: db
-    app.dependency_overrides[get_current_user] = lambda: actor
+    app.dependency_overrides[get_current_console_user] = lambda: actor
     monkeypatch.setattr(admin, "_is_admin_turnstile_required", lambda request: False)
     monkeypatch.setattr(admin, "check_ip_rate_limit", lambda **kwargs: (True, 0))
     with TestClient(app) as client:
@@ -208,7 +210,7 @@ def test_export_requires_authenticated_admin(export_context):
     assert ctx.client.get("/api/admin/users/export").status_code == 403
     ctx.actor.is_developer = True
     assert ctx.client.get("/api/admin/users/export").status_code == 200
-    ctx.app.dependency_overrides.pop(get_current_user)
+    ctx.app.dependency_overrides.pop(get_current_console_user)
     assert ctx.client.get("/api/admin/users/export").status_code == 401
 
 

@@ -85,6 +85,55 @@ Admin-triggered daily notification run (authenticated admin session required):
 
 ## 4) Schema And Data Maintenance
 
+### Admin console Team access
+
+Use **Team** in the admin console to grant an existing personal Rilono account
+access by email. This does not create an account or send an invitation. Enterprise-only accounts keep
+their separate workspace login and cannot be added through this flow.
+
+When adding or editing a manageable Team member, an Admin with Team access can
+set a separate **Console password** and confirm it. Leaving the fields blank
+preserves the member's current sign-in method. Until a console password is set,
+the member signs in at `/admin_console` with their existing Rilono password.
+After setup, that page requires their email and console password. Share the
+password and console link directly with the member; no password email is sent.
+The account must be active and email-verified to sign in.
+
+Console passwords use the existing password-strength policy and are stored only
+as hashes. They are never returned in member lists or password-update responses.
+Setting a new console password invalidates the member's console sessions. It
+does not change their personal or Enterprise password, encrypted documents, or
+normal app sessions. Existing platform administrators remain protected from
+password changes through Team.
+
+| Role | Access within assigned sections |
+| --- | --- |
+| Admin | Read, make changes, and delete; manage Team when Team is assigned |
+| Editor | Read and make changes; no deletion, refunds, or Team management |
+| Viewer | Read and export; no changes |
+
+Section grants cover Student Accounts, Enterprise Accounts, Analytics & Agent,
+Investment Analytics, AI Costs, and Team. Each section includes the data already
+shown within that page and its exports. Team can be assigned only to an Admin;
+an Admin cannot grant sections they do not have, change their own access, or
+manage a teammate with broader access. Existing platform admins/developers retain
+their full access and are protected from changes through Team. Enterprise
+credential provisioning remains restricted to those existing platform accounts.
+
+Roles and sections are stored in `admin_console_access` in the application SQL
+database, separate from the legacy `users.is_admin` and `users.is_developer`
+flags. Every admin API request checks the stored grant; revocation takes effect
+on the next request. Removing Team access preserves the person's Rilono account.
+Credentials and sessions are stored separately in `admin_console_credentials`
+and `admin_console_sessions`. The console uses a dedicated HttpOnly cookie and
+stores session tokens only as hashes. Console login/logout do not sign the person
+into or out of the student or Enterprise app. Once a dedicated console password
+exists, a personal app session alone cannot enter that member's console.
+The normal startup table creation creates these new tables. No root migration
+script or manual role backfill is needed.
+
+### Existing schema maintenance
+
 Current startup behavior already runs:
 
 - schema patch helpers in `app/schema_patch.py`

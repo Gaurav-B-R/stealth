@@ -43,7 +43,6 @@ from sqlalchemy import inspect, text
 import uvicorn
 
 from app import ai_usage, models
-from app.auth import get_current_admin_user
 from app.database import Base, SessionLocal, engine, get_db
 from app.routers import admin
 
@@ -56,7 +55,7 @@ ai_usage.SessionLocal = SessionLocal
 review = FastAPI(title="Local AI Costs Review")
 # An in-memory access context, not a user profile or an inserted usage record.
 actor = models.User(id=0, email="", full_name="Local admin", is_admin=True, is_active=True)
-review.dependency_overrides[get_current_admin_user] = lambda: actor
+review.dependency_overrides[admin.get_current_admin_user] = lambda: actor
 review.dependency_overrides[admin.require_admin_turnstile_proof] = lambda: None
 admin.check_ip_rate_limit = lambda **kwargs: (True, 0)
 
@@ -64,7 +63,9 @@ admin.check_ip_rate_limit = lambda **kwargs: (True, 0)
 async def local_only(request: Request, call_next):
     if request.headers.get("host", "").split(":")[0] not in {"127.0.0.1", "localhost"}:
         return JSONResponse({"detail": "This review is available only on localhost."}, status_code=403)
-    if request.url.path.startswith("/api/admin/") and not request.url.path.startswith("/api/admin/ai-usage/"):
+    if (request.url.path.startswith("/api/admin/")
+            and request.url.path != "/api/admin/access"
+            and not request.url.path.startswith("/api/admin/ai-usage/")):
         return JSONResponse({"detail": "This local snapshot contains AI accounting records only."}, status_code=404)
     permitted_sync = request.method == "POST" and request.url.path == "/api/admin/ai-usage/reconciliation/sync"
     if request.method not in {"GET", "HEAD"} and not permitted_sync:
@@ -82,6 +83,13 @@ def me():
 @review.get("/api/auth/turnstile-site-key")
 def protection():
     return {"site_key": ""}
+
+@review.get("/api/admin/access")
+def access():
+    # This accounting-only review never grants access to account or Team controls.
+    return {"user": me(), "role": "admin", "sections": ["ai"],
+            "can_manage_team": False, "can_provision_enterprise": False,
+            "can_write_sections": ["ai"], "can_delete_sections": []}
 
 @review.get("/api/local-ai-review/status")
 def status():
@@ -103,7 +111,7 @@ def page():
     html = html.replace('<body>', '<body>' + banner)
     # Payment records are not part of this accounting snapshot.
     html = html.replace('<section id="adminB2cRevenuePanel">', '<section id="adminB2cRevenuePanel" hidden>')
-    html = html.replace('</head>', '<style>#adminUsersTabBtn,#adminEnterpriseTabBtn,#adminAnalyticsTabBtn,#adminFinanceTabBtn,#adminLogoutBtn,#adminUsersTabPanel,#adminEnterpriseTabPanel,#adminAnalyticsTabPanel,#adminFinanceTabPanel{display:none!important}</style></head>')
+    html = html.replace('</head>', '<style>#adminUsersTabBtn,#adminEnterpriseTabBtn,#adminAnalyticsTabBtn,#adminFinanceTabBtn,#adminTeamTabBtn,#adminLogoutBtn,#adminUsersTabPanel,#adminEnterpriseTabPanel,#adminAnalyticsTabPanel,#adminFinanceTabPanel,#adminTeamTabPanel{display:none!important}</style></head>')
     html = html.replace('</body>', '<script>state.activeTab = "ai";</script></body>')
     html = html.replace('<script src="https://challenges.cloudflare.com/turnstile/v0/api.js?render=explicit" async defer></script>', '')
     return HTMLResponse(html)

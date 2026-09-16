@@ -533,6 +533,22 @@ def get_or_create_org_subscription(
     return sub
 
 
+def subscription_snapshot(db: Session, organization_id: int) -> models.EnterpriseSubscription:
+    """Read the stored subscription, or return the unsaved defaults for a missing row."""
+    with db.no_autoflush:
+        sub = db.query(models.EnterpriseSubscription).filter(
+            models.EnterpriseSubscription.organization_id == int(organization_id)
+        ).first()
+    if sub is not None:
+        return sub
+    now = datetime.utcnow()
+    return models.EnterpriseSubscription(
+        organization_id=int(organization_id), plan=TRIAL_PLAN, status="trialing",
+        trial_ends_at=now + timedelta(days=DEFAULT_TRIAL_DAYS), created_at=now,
+        cancel_at_period_end=False,
+    )
+
+
 def _is_trial_expired(sub: models.EnterpriseSubscription) -> bool:
     """Whether the 14-day sandbox evaluation has run out.
 
@@ -609,10 +625,19 @@ def active_seat_count(db: Session, organization_id: int) -> int:
     )
 
 
-def build_subscription_state(db: Session, organization_id: int) -> dict:
+def build_subscription_state(db: Session, organization_id: int, *, read_only: bool = False) -> dict:
+    """Render subscription state; read-only callers never initialize billing rows."""
+    if read_only:
+        # Suppress implicit writes too: a SELECT must not flush unrelated pending work.
+        with db.no_autoflush:
+            return _build_subscription_state(db, organization_id, read_only=True)
+    return _build_subscription_state(db, organization_id)
+
+
+def _build_subscription_state(db: Session, organization_id: int, *, read_only: bool = False) -> dict:
     if ENTERPRISE_FREE:
         return _free_subscription_state(db, organization_id)
-    sub = get_or_create_org_subscription(db, organization_id)
+    sub = subscription_snapshot(db, organization_id) if read_only else get_or_create_org_subscription(db, organization_id)
     plan_key = effective_plan_key(sub)
     plan = PLANS[plan_key]
     clients_used = active_client_count(db, organization_id)
