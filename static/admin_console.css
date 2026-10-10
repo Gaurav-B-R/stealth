@@ -730,6 +730,33 @@ body {
     font-size: 0.8rem;
 }
 
+.finance-card-header.finance-card-header-action {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 14px;
+    flex-wrap: wrap;
+}
+
+.finance-card-header-action .table-btn {
+    flex: none;
+}
+
+.finance-level-status {
+    margin: 0;
+    padding: 0 22px 18px;
+    font-size: 0.8rem;
+    font-weight: 700;
+}
+
+.finance-level-status.is-owed {
+    color: #92400e;
+}
+
+.finance-level-status.is-level {
+    color: #047857;
+}
+
 .finance-timeline-chart {
     min-height: 260px;
     display: flex;
@@ -935,6 +962,16 @@ body {
     color: #065f46;
     background: #dcfce7;
     border: 1px solid #86efac;
+}
+
+.finance-kind.settlement {
+    color: #3730a3;
+    background: #e0e7ff;
+    border: 1px solid #a5b4fc;
+}
+
+.finance-amount.settlement {
+    color: #4338ca;
 }
 
 .finance-source {
@@ -2373,6 +2410,7 @@ input::placeholder {
     .filters-row input, .enterprise-filters-row input { grid-column: 1 / -1; }
     .enterprise-credential-card, .ai-range-card, .ai-accounting-card { padding: 18px 16px; }
     .finance-card-header { padding: 18px 16px; }
+    .finance-level-status { padding: 0 16px 16px; }
     .section-nav { gap: 10px 18px; padding-bottom: 16px; }
     .section-nav a { font-size: 0.75rem; }
     .ai-range-form .finance-field { min-width: 0; flex: 1 1 40%; }

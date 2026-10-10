@@ -225,6 +225,7 @@ class AdminCompanyFinanceSummary(BaseModel):
     break_even_gap_usd: float = 0
     investment_entry_count: int = 0
     return_entry_count: int = 0
+    founder_settlement_count: int = 0      # Level 50/50 rows (founder → founder, not company money)
     # Payments booked from `amount_paise` because they carry no INR settlement figure.
     estimated_settlement_count: int = 0
     usd_to_inr: float = 0                  # the live rate the USD column was built with
@@ -250,6 +251,7 @@ class AdminCompanyFinanceLedgerItem(BaseModel):
     category: str
     vendor: str
     paid_by: Optional[str] = None
+    paid_to: Optional[str] = None          # Settlement rows only: the founder who was paid
     description: Optional[str] = None
     amount_usd: float
     occurred_on: str
@@ -261,13 +263,40 @@ class AdminCompanyFinanceLedgerItem(BaseModel):
     settlement_estimated: bool = False
 
 
+class AdminCompanyFinanceFounderSpend(BaseModel):
+    label: str
+    amount_usd: float = 0                  # net spend now (investments ± settlements)
+    after_usd: float = 0                   # net spend once the pending transfer is recorded
+
+
+class AdminCompanyFinanceFounderBalance(BaseModel):
+    """What Level 50/50 would record: `payer` pays `payee` `transfer_usd`."""
+    founders: List[AdminCompanyFinanceFounderSpend] = []
+    total_usd: float = 0
+    is_level: bool = True
+    payer: Optional[str] = None
+    payee: Optional[str] = None
+    transfer_usd: float = 0
+    # Spend filed under any other paid_by name; Level is refused while this is non-empty.
+    other_contributors: List[AdminCompanyFinanceBreakdownItem] = []
+
+
 class AdminCompanyFinanceAnalyticsResponse(BaseModel):
     summary: AdminCompanyFinanceSummary
     monthly_series: List[AdminCompanyFinanceSeriesPoint]
     expense_breakdown: List[AdminCompanyFinanceBreakdownItem]
     contributor_breakdown: List[AdminCompanyFinanceBreakdownItem]
+    founder_balance: Optional[AdminCompanyFinanceFounderBalance] = None
     ledger: List[AdminCompanyFinanceLedgerItem]
     notes: List[str] = []
+
+
+class AdminCompanyFinanceLevelRequest(BaseModel):
+    """Level founder spend 50/50. `expected_*` is what the confirmation showed; the server
+    recomputes and refuses (409) if the balance moved, so it records only what was confirmed."""
+    expected_payer: str
+    expected_transfer_usd: float
+    occurred_on: Optional[str] = None      # YYYY-MM-DD in the clicker's timezone; default today (UTC)
 
 
 class AdminCompanyFinanceEntryCreateRequest(BaseModel):

@@ -7,7 +7,7 @@
   <meta name="description" content="The all-in-one platform for study-abroad consultancies to manage clients, track every case, and grow." />
   <meta name="robots" content="noindex" />
   <link rel="icon" href="/static/logo.png" />
-  <link rel="stylesheet" href="/static/enterprise.css?v=20260810a" />
+  <link rel="stylesheet" href="/static/enterprise.css?v=20260918a" />
   <script src="https://challenges.cloudflare.com/turnstile/v0/api.js?render=explicit" async defer></script>
 </head>
 <body>
@@ -62,6 +62,16 @@
           <div class="field">
             <label>Work email</label>
             <input type="email" name="email" placeholder="you@company.com" required />
+          </div>
+          <div class="field">
+            <label for="signupPhone">Phone number (optional)</label>
+            <div class="phone-input-group">
+              <select name="phone_cc" id="signupPhoneCc" autocomplete="tel-country-code"
+                      aria-label="Phone country code"></select>
+              <input type="tel" id="signupPhone" name="phone" autocomplete="tel-national"
+                     inputmode="tel" maxlength="20" placeholder="98765 43210" />
+            </div>
+            <div class="hint" id="signupPhoneHint">Pick your country, then enter the number without the country code.</div>
           </div>
           <div class="field">
             <label>Password</label>
@@ -319,6 +329,6 @@
 
   <script src="https://checkout.razorpay.com/v1/checkout.js"></script>
   <script src="/static/uk-maintenance-calc.js?v=20260807a"></script>
-  <script src="/static/enterprise.js?v=20260817e"></script>
+  <script src="/static/enterprise.js?v=20260918a"></script>
 </body>
 </html>

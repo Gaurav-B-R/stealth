@@ -46,6 +46,7 @@ const state = {
     },
     financeAnalytics: null,
     financeLoading: false,
+    financeLeveling: false,
     // AI Costs date filter. start/end are inclusive YYYY-MM-DD (UTC); null = server default.
     aiRange: { preset: '30d', start: null, end: null },
     aiUsageData: null,
@@ -168,6 +169,8 @@ const refs = {
     financeTimelineChart: document.getElementById('adminFinanceTimelineChart'),
     financeBreakdownChart: document.getElementById('adminFinanceBreakdownChart'),
     financeContributorChart: document.getElementById('adminFinanceContributorChart'),
+    financeLevelBtn: document.getElementById('adminFinanceLevelBtn'),
+    financeLevelStatus: document.getElementById('adminFinanceLevelStatus'),
     financeTableBody: document.getElementById('adminFinanceTableBody'),
     financeAddBtn: document.getElementById('adminFinanceAddBtn'),
     financeExportBtn: document.getElementById('adminFinanceExportBtn'),
@@ -389,6 +392,8 @@ function clearPrivilegedState() {
         'aiDailyTotalCalls', 'aiDailyTotalTokens', 'aiDailyTotalCost', 'aiDailyCalculatedTotal', 'aiDailyTotalShare',
         'b2cRevenue', 'b2cRevenueSub', 'b2cActive', 'b2cCost', 'b2cCostSub', 'b2cConversion', 'b2cConversionSub'];
     cacheRefs.forEach((key) => { if (refs[key]) refs[key].textContent = ''; });
+    state.financeLeveling = false;
+    renderFinanceFounderBalance(null);
     ['adminGrowthResults', 'adminGrowthMeta', 'adminAcquisitionBreakdown', 'adminAcquisitionMeta', 'adminFunnelBody', 'adminOutcomesBody', 'adminAccountBody', 'adminAccountActions', 'adminAccountTitle'].forEach((id) => {
         const element = document.getElementById(id); if (element) element.textContent = '';
     });
@@ -660,6 +665,7 @@ function bindEvents() {
     refs.couponTableBody?.addEventListener('click', handleCouponTableActionClick);
     refs.financeAddBtn?.addEventListener('click', () => openFinanceEntryForm(null));
     refs.financeExportBtn?.addEventListener('click', exportFinanceLedger);
+    refs.financeLevelBtn?.addEventListener('click', levelFounderSpend);
     refs.financeEntryForm?.addEventListener('submit', submitFinanceEntry);
     refs.financeEntryCancel?.addEventListener('click', () => { if (refs.financeEntryForm) refs.financeEntryForm.hidden = true; });
     refs.aiRangePresets?.addEventListener('click', (event) => {
@@ -1482,6 +1488,7 @@ function renderFinanceEmptyState(message) {
     if (refs.financeTimelineChart) refs.financeTimelineChart.innerHTML = `<div class="table-empty">${safeMessage}</div>`;
     if (refs.financeBreakdownChart) refs.financeBreakdownChart.innerHTML = `<div class="table-empty">${safeMessage}</div>`;
     if (refs.financeContributorChart) refs.financeContributorChart.innerHTML = `<div class="table-empty">${safeMessage}</div>`;
+    renderFinanceFounderBalance(null);
     if (refs.financeTableBody) {
         refs.financeTableBody.innerHTML = `
             <tr>
@@ -1608,7 +1615,10 @@ function renderFinanceContributorBreakdown(breakdown) {
     }
 
     refs.financeContributorChart.innerHTML = rows.map((item) => {
-        const percentage = Math.min(Math.max(Number(item.percentage) || 0, 0), 100);
+        // A settlement followed by a deleted/re-attributed expense can leave one founder
+        // below 0 or above 100%: clamp only the bar, never the number printed beside it.
+        const share = Number(item.percentage) || 0;
+        const barWidth = Math.min(Math.max(share, 0), 100);
         const amount = Number(item.amount_usd) || 0;
         return `
             <div class="finance-breakdown-row contributor-row">
@@ -1617,12 +1627,137 @@ function renderFinanceContributorBreakdown(breakdown) {
                     <span>${escapeHtml(formatUsd(amount))}</span>
                 </div>
                 <div class="finance-breakdown-track contributor-track">
-                    <span style="width: ${percentage.toFixed(2)}%"></span>
+                    <span style="width: ${barWidth.toFixed(2)}%"></span>
                 </div>
-                <div class="finance-breakdown-percent">${escapeHtml(formatPercent(percentage))} of founder spend</div>
+                <div class="finance-breakdown-percent">${escapeHtml(formatPercent(share))} of founder spend</div>
             </div>
         `;
     }).join('');
+}
+
+// The day the Level button is clicked, in the clicker's own timezone (the server accepts
+// any date within a day of UTC's today). toISOString() would be tomorrow for a US evening.
+function localIsoDate(date = new Date()) {
+    const pad = (n) => String(n).padStart(2, '0');
+    return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}`;
+}
+
+// founder_balance comes from the server (Decimal math): who owes whom to make the two
+// founders' spend 50/50. The client only displays it and echoes it back on Level, so the
+// server can refuse if the balance moved after the confirmation was shown.
+function financeOtherContributorsNote(balance) {
+    const others = Array.isArray(balance?.other_contributors) ? balance.other_contributors : [];
+    if (!others.length) return '';
+    const names = others.map((o) => `${o.label} ${formatUsd(o.amount_usd)}`).join(', ');
+    return `Some investment is filed under other names (${names}). Set Paid by on those entries to Gaurav or Kushal, then level.`;
+}
+
+function renderFinanceFounderBalance(balance) {
+    const btn = refs.financeLevelBtn;
+    const status = refs.financeLevelStatus;
+    const founders = Array.isArray(balance?.founders) ? balance.founders : [];
+    const othersNote = financeOtherContributorsNote(balance);
+    const hasSpend = Boolean(othersNote) || founders.some((f) => (Number(f.amount_usd) || 0) !== 0);
+    const pending = Boolean(balance && !othersNote && !balance.is_level && balance.payer && balance.payee
+        && (Number(balance.transfer_usd) || 0) > 0);
+    if (btn) {
+        btn.disabled = state.financeLeveling || !pending || !canWriteSection('finance');
+        btn.textContent = state.financeLeveling ? 'Leveling…' : '⚖ Level 50/50';
+        btn.title = othersNote ? 'Re-assign spend filed under other names first'
+            : pending
+                ? `Record that ${balance.payer} paid ${balance.payee} ${formatUsd(balance.transfer_usd)} so founder spend is 50/50`
+                : (hasSpend ? 'Founder spend is already 50/50' : 'No founder spend to level yet');
+    }
+    if (!status) return;
+    if (!balance || !hasSpend) {
+        status.hidden = true;
+        status.textContent = '';
+        status.className = 'finance-level-status';
+        return;
+    }
+    status.hidden = false;
+    if (othersNote) {
+        status.className = 'finance-level-status is-owed';
+        status.textContent = othersNote;
+    } else if (pending) {
+        status.className = 'finance-level-status is-owed';
+        status.textContent = `${balance.payer} owes ${balance.payee} ${formatUsd(balance.transfer_usd)} to make founder spend 50/50.`;
+    } else {
+        status.className = 'finance-level-status is-level';
+        const split = founders.map((f) => `${f.label} ${formatUsd(f.amount_usd)}`).join(' · ');
+        status.textContent = `✓ Founder spend is level (50/50): ${split}.`;
+    }
+}
+
+async function levelFounderSpend() {
+    if (state.financeLeveling) return;
+    if (!requireAdminPermission('finance', 'write')) return;
+    const balance = state.financeAnalytics?.founder_balance;
+    if (!balance) {
+        showFlash('Finance data has not loaded yet. Refresh and try again.', 'error');
+        return;
+    }
+    const othersNote = financeOtherContributorsNote(balance);
+    if (othersNote) {
+        showFlash(othersNote, 'error');
+        return;
+    }
+    if (balance.is_level || !balance.payer || !balance.payee || !(Number(balance.transfer_usd) > 0)) {
+        showFlash('Founder spend is already 50/50.', 'success');
+        return;
+    }
+    if (!await ensureAdminProtection({ silent: false })) return;
+
+    const occurredOn = localIsoDate();
+    const transfer = Number(balance.transfer_usd);
+    const founders = Array.isArray(balance.founders) ? balance.founders : [];
+    const after = founders.map((f) => `${f.label} ${formatUsd(f.after_usd)}`).join(' · ');
+    const totalInvested = Number(state.financeAnalytics?.summary?.total_invested_usd ?? balance.total_usd) || 0;
+    const confirmed = await confirmDialog(
+        `This adds a settlement to the ledger dated ${occurredOn}: ${balance.payer} paid ${balance.payee} ${formatUsd(transfer)}.\n\n`
+        + `Founder spend after leveling: ${after}.\n`
+        + `Total invested stays ${formatUsd(totalInvested)} — only the split between founders changes.`,
+        { title: 'Level founder spend 50/50?', okText: 'Level 50/50', danger: false }
+    );
+    if (!confirmed) return;
+
+    const accessRevision = state.accessRevision;
+    state.financeLeveling = true;
+    renderFinanceFounderBalance(balance);
+    let message = '';
+    let level = 'error';
+    try {
+        const response = await adminFetch(`${API_BASE}/api/admin/company-finance/level`, {
+            method: 'POST',
+            headers: buildAuthHeaders({ 'Content-Type': 'application/json' }),
+            credentials: 'same-origin',
+            body: JSON.stringify({
+                occurred_on: occurredOn,
+                expected_payer: balance.payer,
+                expected_transfer_usd: transfer,
+            }),
+        });
+        const payload = await response.json().catch(() => ({}));
+        if (response.ok) {
+            message = `Leveled: ${balance.payer} paid ${balance.payee} ${formatUsd(transfer)}. Founder spend is now 50/50.`;
+            level = 'success';
+        } else {
+            message = normalizeErrorMessage(payload, 'Could not level founder spend.');
+            // 409 = the balance moved or someone already leveled; reload so the card is current.
+            if (response.status !== 409) return void showFlash(message, 'error');
+        }
+    } catch (error) {
+        console.error('Level founder spend failed:', error);
+        return void showFlash('Could not level founder spend. Please retry.', 'error');
+    } finally {
+        state.financeLeveling = false;
+        renderFinanceFounderBalance(state.financeAnalytics?.founder_balance);
+    }
+    // Signed out / access changed mid-request: the page no longer belongs to that session.
+    if (state.accessRevision !== accessRevision) return;
+    // Reload first: loadFinanceAnalytics() clears the flash on success.
+    await loadFinanceAnalytics();
+    showFlash(message, level);
 }
 
 function financeLedgerEntryId(item) {
@@ -1651,12 +1786,21 @@ function renderFinanceLedger(ledger) {
 
     refs.financeTableBody.innerHTML = rows.map((item) => {
         const amount = Number(item.amount_usd) || 0;
+        // A settlement is founder → founder (Level 50/50), not company money: neither an
+        // investment nor a return, and only deletable — editing one side would unbalance it.
+        const isSettlement = String(item.kind || '').toLowerCase() === 'settlement';
         const isReturn = amount >= 0;
+        const tone = isSettlement ? 'settlement' : (isReturn ? 'return' : 'investment');
         const fid = financeLedgerEntryId(item);
+        const editBtn = isSettlement ? ''
+            : `<button type="button" class="table-btn" data-admin-write="finance" data-finance-edit="${escapeHtml(fid)}">Edit</button>`;
         const actions = fid
-            ? `<button type="button" class="table-btn" data-admin-write="finance" data-finance-edit="${escapeHtml(fid)}">Edit</button>
+            ? `${editBtn}
                <button type="button" class="table-btn danger" data-admin-delete="finance" data-finance-delete="${escapeHtml(fid)}">Delete</button>`
             : '<span class="finance-source">Auto</span>';
+        const settlementNote = isSettlement
+            ? `<div class="finance-source">${escapeHtml(item.paid_by || '-')} → ${escapeHtml(item.paid_to || item.vendor || '-')}</div>`
+            : '';
         // Payment rows carry what the customer was actually charged. A foreign row with no
         // INR settlement figure is shown at zero and marked — never dropped (a missing row
         // reads as no revenue) and never booked at its charged amount (cents are not paise).
@@ -1669,12 +1813,12 @@ function renderFinanceLedger(ledger) {
         return `
             <tr>
                 <td>${escapeHtml(item.occurred_on || '-')}</td>
-                <td><span class="finance-kind ${isReturn ? 'return' : 'investment'}">${escapeHtml(item.kind || '-')}</span></td>
+                <td><span class="finance-kind ${tone}">${escapeHtml(item.kind || '-')}</span></td>
                 <td><div class="user-name">${escapeHtml(item.vendor || '-')}</div></td>
                 <td>${escapeHtml(item.category || '-')}</td>
                 <td><span class="finance-source">${escapeHtml(item.paid_by || '-')}</span></td>
                 <td>${escapeHtml(item.description || '-')}</td>
-                <td class="finance-amount ${isReturn ? 'positive' : 'negative'}">${escapeHtml(formatUsd(amount))}${chargedNote}${estimatedNote}</td>
+                <td class="finance-amount ${isSettlement ? 'settlement' : (isReturn ? 'positive' : 'negative')}">${escapeHtml(formatUsd(amount))}${settlementNote}${chargedNote}${estimatedNote}</td>
                 <td><span class="finance-source">${escapeHtml(item.source || '-')}</span></td>
                 <td class="finance-actions">${actions}</td>
             </tr>
@@ -1835,8 +1979,12 @@ async function deleteFinanceEntry(fid) {
     if (!requireAdminPermission('finance', 'delete')) return;
     if (!await ensureAdminProtection({ silent: false })) return;
     const item = financeLedgerItemByEntryId(fid);
+    const isSettlement = String(item?.kind || '').toLowerCase() === 'settlement';
     const label = item ? `${item.vendor} · ${formatUsd(Number(item.amount_usd) || 0)}` : `entry #${fid}`;
-    if (!(await confirmDialog(`This finance entry (${label}) will be permanently removed from the ledger and analytics.`, { title: 'Delete finance entry?', okText: 'Delete' }))) return;
+    const message = isSettlement
+        ? `This settlement (${item.paid_by} paid ${item.paid_to || item.vendor} ${formatUsd(Number(item.amount_usd) || 0)}) will be permanently removed, and founder spend goes back to the split before it was leveled.`
+        : `This finance entry (${label}) will be permanently removed from the ledger and analytics.`;
+    if (!(await confirmDialog(message, { title: isSettlement ? 'Delete settlement?' : 'Delete finance entry?', okText: 'Delete' }))) return;
     try {
         const response = await adminFetch(`${API_BASE}/api/admin/company-finance/entries/${encodeURIComponent(fid)}`, {
             method: 'DELETE',
@@ -1867,6 +2015,7 @@ function renderFinanceAnalytics() {
     renderFinanceTimeline(payload.monthly_series || []);
     renderFinanceBreakdown(payload.expense_breakdown || []);
     renderFinanceContributorBreakdown(payload.contributor_breakdown || []);
+    renderFinanceFounderBalance(payload.founder_balance || null);
     renderFinanceLedger(payload.ledger || []);
 }
 

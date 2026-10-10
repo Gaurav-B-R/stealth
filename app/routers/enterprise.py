@@ -2626,6 +2626,7 @@ ENTERPRISE_BULK_EMAIL_MAX_RECIPIENTS = int(os.getenv("ENTERPRISE_BULK_EMAIL_MAX_
 # signups all record the same value. Keep app.legal in sync with
 # LEGAL_LAST_UPDATED.terms / .privacy in static/app.js.
 from app.legal import LEGAL_TERMS_PRIVACY_VERSION, LEGAL_DPA_VERSION, FINANCE_ATTESTATION_VERSION
+from app.phone_numbers import PhoneNumberError, normalize_e164
 
 
 class EnterpriseSignupRequest(BaseModel):
@@ -2637,6 +2638,7 @@ class EnterpriseSignupRequest(BaseModel):
     )
     full_name: str = Field(..., min_length=2, max_length=120)
     email: EmailStr
+    phone: Optional[str] = Field(default=None, max_length=40)
     password: str = Field(..., min_length=8, max_length=200)
     accepted_terms_privacy: bool = False
     accepted_dpa: bool = False
@@ -10325,6 +10327,14 @@ def enterprise_signup(
     if password_error:
         raise HTTPException(status_code=400, detail=password_error)
 
+    # Optional, but when given it must be a real "<country code> <national number>" — the
+    # form's dial-code picker sends exactly that, and we store E.164 so the number is
+    # usable for WhatsApp/SMS and CRM matching without guessing the country later.
+    try:
+        phone = normalize_e164(payload.phone)
+    except PhoneNumberError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+
     existing_user = db.query(models.User).filter(models.User.email == email).first()
     if existing_user:
         raise HTTPException(
@@ -10355,6 +10365,7 @@ def enterprise_signup(
         username=None,
         hashed_password=password_hash,
         full_name=full_name,
+        phone=phone,
         university=company_name,
         is_active=True,
         email_verified=True,

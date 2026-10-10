@@ -1897,7 +1897,7 @@ class CompanyFinanceEntry(Base):
 
     id = Column(Integer, primary_key=True, index=True)
     seed_key = Column(String, unique=True, index=True, nullable=True)
-    entry_type = Column(String, nullable=False, default="expense")  # expense | return
+    entry_type = Column(String, nullable=False, default="expense")  # expense | return | settlement (founder → founder)
     category = Column(String, nullable=False, index=True)
     vendor = Column(String, nullable=False, index=True)
     description = Column(Text, nullable=True)

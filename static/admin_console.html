@@ -7,7 +7,7 @@
     <title>Rilono Admin Console</title>
     <meta name="robots" content="noindex,nofollow">
     <link rel="icon" type="image/png" href="/static/logo.png">
-    <link rel="stylesheet" href="/static/admin_console.css?v=20260913c">
+    <link rel="stylesheet" href="/static/admin_console.css?v=20261009a">
     <script src="https://challenges.cloudflare.com/turnstile/v0/api.js?render=explicit" async defer></script>
 </head>
 
@@ -405,15 +405,17 @@
                         </section>
 
                         <section class="finance-chart-card finance-contributor-card">
-                            <div class="finance-card-header">
+                            <div class="finance-card-header finance-card-header-action">
                                 <div>
                                     <h3>Founder Spend</h3>
                                     <p>Investment split by who paid: Gaurav or Kushal.</p>
                                 </div>
+                                <button type="button" id="adminFinanceLevelBtn" data-admin-write="finance" class="table-btn primary" disabled>⚖ Level 50/50</button>
                             </div>
                             <div id="adminFinanceContributorChart" class="finance-breakdown-chart">
                                 <div class="table-empty">No founder spend data loaded yet.</div>
                             </div>
+                            <p id="adminFinanceLevelStatus" class="finance-level-status" aria-live="polite" hidden></p>
                         </section>
                     </div>
 
@@ -822,7 +824,7 @@
         </div>
     </div>
 
-    <script src="/static/admin_console.js?v=20260913d"></script>
+    <script src="/static/admin_console.js?v=20261009a"></script>
 </body>
 
 </html>

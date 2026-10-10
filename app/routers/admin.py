@@ -10,7 +10,7 @@ from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
 
 from fastapi import APIRouter, Body, Depends, HTTPException, Query, Request, Response, status
 from jose import JWTError, jwt
-from sqlalchemy import case, desc, func, or_, select
+from sqlalchemy import case, desc, func, or_, select, text
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, aliased
 
@@ -706,6 +706,92 @@ def export_users_admin(
     )
 
 
+# --- Founder spend leveling ---
+# Rilono has two founders. A "settlement" row records one founder paying the other directly
+# (outside the company) so their spend evens out. It is stored in company_finance_entries with
+# entry_type='settlement', paid_by = the founder who paid, vendor = the founder who was paid,
+# and amount_usd = -transfer (money out of the payer, like an expense). It moves founder spend
+# between the two — and NOTHING else: total invested, returns, ROI, the monthly chart and the
+# vendor breakdown never see it, because no money entered or left the company.
+FINANCE_FOUNDERS = ("Gaurav", "Kushal")
+FINANCE_SETTLEMENT_TYPE = "settlement"
+FINANCE_SETTLEMENT_CATEGORY = "Founder Settlement"
+FINANCE_SETTLEMENT_SOURCE = "level"
+# Serializes concurrent "Level" clicks on Postgres so two requests can't both read the
+# pre-settlement balance and each record a transfer (pg_advisory_xact_lock key, arbitrary).
+FINANCE_LEVEL_LOCK_KEY = 784_213_901
+
+
+def _finance_contributor_key(name) -> str:
+    """Label a contributor; a founder typed in any case ("gaurav ") counts as that founder."""
+    label = (name or "Unassigned").strip() or "Unassigned"
+    for founder in FINANCE_FOUNDERS:
+        if label.casefold() == founder.casefold():
+            return founder
+    return label
+
+
+def _is_finance_settlement(entry) -> bool:
+    return (getattr(entry, "entry_type", None) or "").strip().lower() == FINANCE_SETTLEMENT_TYPE
+
+
+def _finance_contributor_spend(entries) -> dict[str, Decimal]:
+    """Net spend per contributor: investments by paid_by, plus founder-to-founder settlements
+    (credited to the payer, debited from the payee). Transfers net to zero, so the result
+    still sums to total invested. The one place this is computed — the analytics card, the
+    export and the Level endpoint must never disagree about who owes whom."""
+    spend: dict[str, Decimal] = defaultdict(lambda: Decimal("0"))
+    for entry in entries:
+        amount = _money_decimal(entry.amount_usd)
+        if _is_finance_settlement(entry):
+            transfer = abs(amount)
+            spend[_finance_contributor_key(entry.paid_by)] += transfer
+            spend[_finance_contributor_key(entry.vendor)] -= transfer
+        elif amount < 0:
+            spend[_finance_contributor_key(entry.paid_by)] += abs(amount)
+    return spend
+
+
+def _founder_balance(contributor_spend: dict[str, Decimal]) -> dict:
+    """Who owes whom to make the two founders' spend 50/50.
+
+    The transfer is half the gap, rounded half-up to the cent. When the total is odd in
+    cents the founders can only ever be a cent apart, so a gap of ≤ $0.01 counts as level —
+    otherwise each click would flip the odd cent back and forth forever.
+    """
+    first, second = FINANCE_FOUNDERS
+    spend_first = contributor_spend.get(first, Decimal("0"))
+    spend_second = contributor_spend.get(second, Decimal("0"))
+    gap = spend_first - spend_second
+    is_level = abs(gap) <= Decimal("0.01")
+    transfer = Decimal("0") if is_level else (abs(gap) / 2).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+    payer = payee = None
+    if not is_level:
+        payer, payee = (second, first) if gap > 0 else (first, second)
+
+    founders = []
+    for label, spent in ((first, spend_first), (second, spend_second)):
+        after = spent + transfer if label == payer else spent - transfer if label == payee else spent
+        founders.append({"label": label, "amount_usd": _money_float(spent), "after_usd": _money_float(after)})
+    # paid_by is free text. Spend filed under any other name ("Both", "Gaurav B R") is outside
+    # the 50/50 math — leveling around it could even send money the wrong way — so Level is
+    # refused until those entries are re-attributed to a founder.
+    others = [
+        {"label": label, "amount_usd": _money_float(amount)}
+        for label, amount in sorted(contributor_spend.items(), key=lambda item: (-item[1], item[0]))
+        if label not in FINANCE_FOUNDERS and amount != 0
+    ]
+    return {
+        "founders": founders,
+        "total_usd": _money_float(spend_first + spend_second),
+        "is_level": is_level,
+        "payer": payer,
+        "payee": payee,
+        "transfer_usd": _money_float(transfer),
+        "other_contributors": others,
+    }
+
+
 def _compute_company_finance_analytics(db: Session, *, ledger_limit: int | None = 250) -> dict:
     """
     Build the company finance analytics payload.
@@ -735,7 +821,8 @@ def _compute_company_finance_analytics(db: Session, *, ledger_limit: int | None 
     return_entry_count = 0
     monthly_buckets = defaultdict(lambda: {"investment_usd": Decimal("0"), "returns_usd": Decimal("0")})
     expense_breakdown: dict[str, Decimal] = defaultdict(lambda: Decimal("0"))
-    contributor_spend: dict[str, Decimal] = defaultdict(lambda: Decimal("0"))
+    contributor_spend = _finance_contributor_spend(entries)
+    founder_settlement_count = 0
     ledger: list[dict] = []
 
     for entry in entries:
@@ -743,12 +830,32 @@ def _compute_company_finance_analytics(db: Session, *, ledger_limit: int | None 
         occurred_on = _coerce_date(entry.occurred_on)
         label = (entry.vendor or entry.category or "Uncategorized").strip() or "Uncategorized"
         paid_by = (entry.paid_by or "Unassigned").strip() or "Unassigned"
+        if _is_finance_settlement(entry):
+            # Founder-to-founder transfer: only the founder split moves (see
+            # _finance_contributor_spend). Not company money — no totals, no chart.
+            founder_settlement_count += 1
+            payer = _finance_contributor_key(entry.paid_by)
+            payee = _finance_contributor_key(entry.vendor)
+            ledger.append(
+                {
+                    "id": f"finance-{entry.id}",
+                    "kind": "Settlement",
+                    "category": entry.category or FINANCE_SETTLEMENT_CATEGORY,
+                    "vendor": payee,
+                    "paid_by": payer,
+                    "paid_to": payee,
+                    "description": entry.description,
+                    "amount_usd": _money_float(abs(amount)),
+                    "occurred_on": occurred_on.isoformat(),
+                    "source": entry.source or FINANCE_SETTLEMENT_SOURCE,
+                }
+            )
+            continue
         if amount < 0:
             absolute_amount = abs(amount)
             total_invested += absolute_amount
             investment_entry_count += 1
             expense_breakdown[label] += absolute_amount
-            contributor_spend[paid_by] += absolute_amount
             _add_month_bucket(monthly_buckets, occurred_on, investment=absolute_amount)
             kind = "Investment"
         else:
@@ -851,7 +958,7 @@ def _compute_company_finance_analytics(db: Session, *, ledger_limit: int | None 
         )
 
     contributor_items = []
-    for label, amount in sorted(contributor_spend.items(), key=lambda item: item[1], reverse=True):
+    for label, amount in sorted(contributor_spend.items(), key=lambda item: (-item[1], item[0])):
         percentage = Decimal("0")
         if total_invested > 0:
             percentage = (amount / total_invested) * Decimal("100")
@@ -871,6 +978,8 @@ def _compute_company_finance_analytics(db: Session, *, ledger_limit: int | None 
     notes = [
         "Investment rows are stored in company_finance_entries.",
         "Founder spend uses the paid_by column on each investment row.",
+        "Founder settlements (Level 50/50) record one founder paying the other directly; they "
+        "move founder spend only and never change total invested, returns or the monthly chart.",
         "Returns are calculated live from verified subscription payments.",
         "Payments are booked at their INR settlement figure (base_amount_paise), never at "
         "the charged amount — a $12.99 charge stores 1299 cents, not rupees.",
@@ -894,6 +1003,7 @@ def _compute_company_finance_analytics(db: Session, *, ledger_limit: int | None 
             "break_even_gap_usd": _money_float(max(total_invested - total_returns, Decimal("0"))),
             "investment_entry_count": investment_entry_count,
             "return_entry_count": return_entry_count,
+            "founder_settlement_count": founder_settlement_count,
             "estimated_settlement_count": estimated_settlement_count,
             "usd_to_inr": usd_to_inr,
             "fx_source": fx_state.get("source") or "fallback",
@@ -901,6 +1011,7 @@ def _compute_company_finance_analytics(db: Session, *, ledger_limit: int | None 
         "monthly_series": monthly_series,
         "expense_breakdown": breakdown_items,
         "contributor_breakdown": contributor_items,
+        "founder_balance": _founder_balance(contributor_spend),
         "ledger": ledger[:ledger_limit] if ledger_limit else ledger,
         "notes": notes,
     }
@@ -941,7 +1052,7 @@ def company_finance_analytics_admin(
 # — and the number-format/auto-filter indices below that hardcode them — stay put.
 FINANCE_EXPORT_LEDGER_HEADERS = [
     "Date (UTC)", "Type", "Vendor", "Category", "Paid By", "Description", "Amount (USD)", "Source",
-    "Charged", "Settlement",
+    "Charged", "Settlement", "Founder transfer (USD)",
 ]
 XLSX_MEDIA_TYPE = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
 
@@ -950,6 +1061,10 @@ def _finance_export_rows(payload: dict) -> list[list]:
     """Ledger rows in export order (dates as `date` so Excel sorts/filters them properly)."""
     rows: list[list] = []
     for item in payload.get("ledger", []):
+        # Amount (USD) is signed company cash flow and sums to Net. A founder-to-founder
+        # settlement is not company money, so it books 0 there and its transfer goes in the
+        # appended "Founder transfer" column instead.
+        is_founder_settlement = item.get("kind") == "Settlement"
         rows.append([
             _finance_parse_date_safe(item.get("occurred_on")),
             item.get("kind") or "",
@@ -957,10 +1072,11 @@ def _finance_export_rows(payload: dict) -> list[list]:
             item.get("category") or "",
             item.get("paid_by") or "",
             item.get("description") or "",
-            float(item.get("amount_usd") or 0),
+            0.0 if is_founder_settlement else float(item.get("amount_usd") or 0),
             item.get("source") or "",
             item.get("charged_display") or "",
-            "not counted" if item.get("settlement_estimated") else "settled",
+            "" if is_founder_settlement else "not counted" if item.get("settlement_estimated") else "settled",
+            float(item.get("amount_usd") or 0) if is_founder_settlement else "",
         ])
     return rows
 
@@ -1090,10 +1206,11 @@ def _build_finance_xlsx(payload: dict) -> bytes | None:
     for row_index in range(2, ledger_sheet.max_row + 1):
         ledger_sheet.cell(row=row_index, column=1).number_format = DATE_FORMAT
         ledger_sheet.cell(row=row_index, column=7).number_format = USD_FORMAT
+        ledger_sheet.cell(row=row_index, column=11).number_format = USD_FORMAT
     ledger_sheet.freeze_panes = "A2"
     if ledger_sheet.max_row > 1:
-        ledger_sheet.auto_filter.ref = f"A1:J{ledger_sheet.max_row}"
-    set_widths(ledger_sheet, [13, 12, 18, 22, 16, 42, 15, 22, 14, 12])
+        ledger_sheet.auto_filter.ref = f"A1:K{ledger_sheet.max_row}"
+    set_widths(ledger_sheet, [13, 12, 18, 22, 16, 42, 15, 22, 14, 12, 20])
 
     # --- Breakdowns ---
     def write_breakdown(title: str, label_header: str, items: list[dict]) -> None:
@@ -1211,16 +1328,17 @@ def _finance_signed_amount(entry_type: str | None, amount) -> tuple[str, Decimal
 
 def _serialize_finance_entry(entry: models.CompanyFinanceEntry) -> dict:
     amount = _money_decimal(entry.amount_usd)
+    is_settlement = _is_finance_settlement(entry)
     return {
         "id": entry.id,
         "ledger_id": f"finance-{entry.id}",
         "entry_type": entry.entry_type,
-        "kind": "Return" if amount >= 0 else "Investment",
+        "kind": "Settlement" if is_settlement else "Return" if amount >= 0 else "Investment",
         "category": entry.category,
         "vendor": entry.vendor,
         "paid_by": entry.paid_by,
         "description": entry.description,
-        "amount_usd": _money_float(amount),
+        "amount_usd": _money_float(abs(amount) if is_settlement else amount),
         "occurred_on": _coerce_date(entry.occurred_on).isoformat(),
         "source": entry.source or "manual",
     }
@@ -1285,6 +1403,13 @@ def update_company_finance_entry_admin(
     row = db.query(models.CompanyFinanceEntry).filter(models.CompanyFinanceEntry.id == entry_id).first()
     if not row:
         raise HTTPException(status_code=404, detail="Finance entry not found.")
+    if _is_finance_settlement(row):
+        # Its payer, payee and amount are a computed pair; editing one side would silently
+        # unbalance the founder split. Undo is delete-and-level-again.
+        raise HTTPException(
+            status_code=400,
+            detail="Settlement entries can't be edited. Delete it and use Level 50/50 again.",
+        )
 
     if payload.category is not None:
         category = payload.category.strip()
@@ -1310,6 +1435,100 @@ def update_company_finance_entry_admin(
     db.commit()
     db.refresh(row)
     return {"entry": _serialize_finance_entry(row)}
+
+
+def _finance_level_date(value) -> date:
+    """The settlement is dated the day Level was clicked, in the clicker's own timezone.
+
+    Every timezone's "today" is within a day of UTC's, so anything outside that window is a
+    client clock/paste bug, not a real click date. Omitted → today in UTC.
+    """
+    today_utc = datetime.now(timezone.utc).date()
+    if value is None or not str(value).strip():
+        return today_utc
+    occurred_on = _finance_parse_date(value)
+    if abs((occurred_on - today_utc).days) > 1:
+        raise HTTPException(status_code=400, detail="The settlement date must be today.")
+    return occurred_on
+
+
+@router.post("/company-finance/level")
+@console_section("finance", "write")
+def level_founder_spend_admin(
+    request: Request,
+    payload: schemas.AdminCompanyFinanceLevelRequest,
+    current_user: models.User = Depends(get_current_admin_user),
+    _: None = Depends(require_admin_turnstile_proof),
+    db: Session = Depends(get_db),
+):
+    """Make Gaurav's and Kushal's spend 50/50 by recording a founder-to-founder settlement.
+
+    The founder who has spent less pays the other half the gap (outside the company). The
+    amount is recomputed here from the database; the client sends what it showed in the
+    confirmation, and anything that moved since (another entry, another Level click) is a
+    409 — the ledger records exactly what the admin confirmed, or nothing.
+    """
+    _enforce_rate_limit_or_429(
+        request=request, scope="admin.company_finance.level",
+        limit=ADMIN_ENDPOINT_RATE_LIMIT, window_seconds=ADMIN_ENDPOINT_RATE_WINDOW_SECONDS,
+        extra_key=f"user:{current_user.id}",
+    )
+    occurred_on = _finance_level_date(payload.occurred_on)
+    try:
+        expected_transfer = Decimal(str(payload.expected_transfer_usd)).quantize(Decimal("0.01"))
+    except (InvalidOperation, ValueError, TypeError):
+        raise HTTPException(status_code=400, detail="Enter a valid amount.")
+
+    if db.get_bind().dialect.name == "postgresql":
+        db.execute(text("SELECT pg_advisory_xact_lock(:key)"), {"key": FINANCE_LEVEL_LOCK_KEY})
+    # Read AFTER taking the lock so a click that raced this one is already in the balance.
+    balance = _founder_balance(_finance_contributor_spend(db.query(models.CompanyFinanceEntry).all()))
+    if balance["other_contributors"]:
+        db.rollback()
+        names = ", ".join(f"{item['label']} ${item['amount_usd']:,.2f}" for item in balance["other_contributors"])
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                f"Some investment is filed under other names ({names}). Set Paid by on those "
+                "entries to Gaurav or Kushal, then level."
+            ),
+        )
+    if balance["is_level"]:
+        db.rollback()
+        raise HTTPException(status_code=409, detail="Founder spend is already 50/50 — nothing to settle.")
+    transfer = Decimal(str(balance["transfer_usd"])).quantize(Decimal("0.01"))
+    if balance["payer"] != (payload.expected_payer or "").strip() or transfer != expected_transfer:
+        db.rollback()
+        raise HTTPException(
+            status_code=409,
+            detail="Founder spend changed since this page loaded. Refresh and try again.",
+        )
+
+    payer, payee = balance["payer"], balance["payee"]
+    row = models.CompanyFinanceEntry(
+        seed_key=None,
+        entry_type=FINANCE_SETTLEMENT_TYPE,
+        category=FINANCE_SETTLEMENT_CATEGORY,
+        vendor=payee,
+        description=f"{payer} paid {payee} ${transfer:,.2f} to level founder spend 50/50",
+        amount_usd=-transfer,
+        occurred_on=occurred_on,
+        paid_by=payer,
+        source=FINANCE_SETTLEMENT_SOURCE,
+    )
+    db.add(row)
+    db.commit()
+    db.refresh(row)
+    logger.info(
+        "Founder spend leveled by admin %s: %s paid %s $%s (entry %s)",
+        current_user.id, payer, payee, transfer, row.id,
+    )
+    return {
+        "entry": _serialize_finance_entry(row),
+        "founder_balance": _founder_balance(
+            _finance_contributor_spend(db.query(models.CompanyFinanceEntry).all())
+        ),
+    }
 
 
 @router.delete("/company-finance/entries/{entry_id}")

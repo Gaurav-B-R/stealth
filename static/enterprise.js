@@ -245,74 +245,102 @@
 
   /* ---------------- phone country dial codes ---------------- */
   const PHONE_COUNTRIES = [
-    { f: "🇮🇳", d: "+91", n: "India" },
-    { f: "🇺🇸", d: "+1", n: "United States" },
-    { f: "🇨🇦", d: "+1", n: "Canada" },
-    { f: "🇬🇧", d: "+44", n: "United Kingdom" },
-    { f: "🇦🇺", d: "+61", n: "Australia" },
-    { f: "🇳🇿", d: "+64", n: "New Zealand" },
-    { f: "🇮🇪", d: "+353", n: "Ireland" },
-    { f: "🇩🇪", d: "+49", n: "Germany" },
-    { f: "🇫🇷", d: "+33", n: "France" },
-    { f: "🇮🇹", d: "+39", n: "Italy" },
-    { f: "🇪🇸", d: "+34", n: "Spain" },
-    { f: "🇵🇹", d: "+351", n: "Portugal" },
-    { f: "🇳🇱", d: "+31", n: "Netherlands" },
-    { f: "🇧🇪", d: "+32", n: "Belgium" },
-    { f: "🇨🇭", d: "+41", n: "Switzerland" },
-    { f: "🇦🇹", d: "+43", n: "Austria" },
-    { f: "🇸🇪", d: "+46", n: "Sweden" },
-    { f: "🇳🇴", d: "+47", n: "Norway" },
-    { f: "🇩🇰", d: "+45", n: "Denmark" },
-    { f: "🇫🇮", d: "+358", n: "Finland" },
-    { f: "🇵🇱", d: "+48", n: "Poland" },
-    { f: "🇨🇿", d: "+420", n: "Czechia" },
-    { f: "🇬🇷", d: "+30", n: "Greece" },
-    { f: "🇷🇺", d: "+7", n: "Russia" },
-    { f: "🇺🇦", d: "+380", n: "Ukraine" },
-    { f: "🇹🇷", d: "+90", n: "Turkey" },
-    { f: "🇦🇪", d: "+971", n: "United Arab Emirates" },
-    { f: "🇸🇦", d: "+966", n: "Saudi Arabia" },
-    { f: "🇶🇦", d: "+974", n: "Qatar" },
-    { f: "🇰🇼", d: "+965", n: "Kuwait" },
-    { f: "🇧🇭", d: "+973", n: "Bahrain" },
-    { f: "🇴🇲", d: "+968", n: "Oman" },
-    { f: "🇮🇱", d: "+972", n: "Israel" },
-    { f: "🇪🇬", d: "+20", n: "Egypt" },
-    { f: "🇿🇦", d: "+27", n: "South Africa" },
-    { f: "🇳🇬", d: "+234", n: "Nigeria" },
-    { f: "🇰🇪", d: "+254", n: "Kenya" },
-    { f: "🇬🇭", d: "+233", n: "Ghana" },
-    { f: "🇪🇹", d: "+251", n: "Ethiopia" },
-    { f: "🇹🇿", d: "+255", n: "Tanzania" },
-    { f: "🇺🇬", d: "+256", n: "Uganda" },
-    { f: "🇵🇰", d: "+92", n: "Pakistan" },
-    { f: "🇧🇩", d: "+880", n: "Bangladesh" },
-    { f: "🇱🇰", d: "+94", n: "Sri Lanka" },
-    { f: "🇳🇵", d: "+977", n: "Nepal" },
-    { f: "🇧🇹", d: "+975", n: "Bhutan" },
-    { f: "🇲🇻", d: "+960", n: "Maldives" },
-    { f: "🇨🇳", d: "+86", n: "China" },
-    { f: "🇭🇰", d: "+852", n: "Hong Kong" },
-    { f: "🇹🇼", d: "+886", n: "Taiwan" },
-    { f: "🇯🇵", d: "+81", n: "Japan" },
-    { f: "🇰🇷", d: "+82", n: "South Korea" },
-    { f: "🇸🇬", d: "+65", n: "Singapore" },
-    { f: "🇲🇾", d: "+60", n: "Malaysia" },
-    { f: "🇮🇩", d: "+62", n: "Indonesia" },
-    { f: "🇹🇭", d: "+66", n: "Thailand" },
-    { f: "🇵🇭", d: "+63", n: "Philippines" },
-    { f: "🇻🇳", d: "+84", n: "Vietnam" },
-    { f: "🇲🇲", d: "+95", n: "Myanmar" },
-    { f: "🇰🇭", d: "+855", n: "Cambodia" },
-    { f: "🇧🇷", d: "+55", n: "Brazil" },
-    { f: "🇲🇽", d: "+52", n: "Mexico" },
-    { f: "🇦🇷", d: "+54", n: "Argentina" },
-    { f: "🇨🇴", d: "+57", n: "Colombia" },
-    { f: "🇨🇱", d: "+56", n: "Chile" },
-    { f: "🇵🇪", d: "+51", n: "Peru" },
+    { f: "🇮🇳", d: "+91", n: "India", l: [10, 10] },
+    { f: "🇺🇸", d: "+1", n: "United States", l: [10, 10] },
+    { f: "🇨🇦", d: "+1", n: "Canada", l: [10, 10] },
+    { f: "🇬🇧", d: "+44", n: "United Kingdom", l: [9, 10] },
+    { f: "🇦🇺", d: "+61", n: "Australia", l: [9, 9] },
+    { f: "🇳🇿", d: "+64", n: "New Zealand", l: [8, 10] },
+    { f: "🇮🇪", d: "+353", n: "Ireland", l: [7, 9] },
+    { f: "🇩🇪", d: "+49", n: "Germany", l: [5, 13] },
+    { f: "🇫🇷", d: "+33", n: "France", l: [9, 9] },
+    { f: "🇮🇹", d: "+39", n: "Italy", l: [6, 12] },
+    { f: "🇪🇸", d: "+34", n: "Spain", l: [9, 9] },
+    { f: "🇵🇹", d: "+351", n: "Portugal", l: [9, 9] },
+    { f: "🇳🇱", d: "+31", n: "Netherlands", l: [9, 9] },
+    { f: "🇧🇪", d: "+32", n: "Belgium", l: [8, 9] },
+    { f: "🇨🇭", d: "+41", n: "Switzerland", l: [9, 9] },
+    { f: "🇦🇹", d: "+43", n: "Austria", l: [4, 13] },
+    { f: "🇸🇪", d: "+46", n: "Sweden", l: [7, 13] },
+    { f: "🇳🇴", d: "+47", n: "Norway", l: [8, 8] },
+    { f: "🇩🇰", d: "+45", n: "Denmark", l: [8, 8] },
+    { f: "🇫🇮", d: "+358", n: "Finland", l: [5, 12] },
+    { f: "🇵🇱", d: "+48", n: "Poland", l: [9, 9] },
+    { f: "🇨🇿", d: "+420", n: "Czechia", l: [9, 9] },
+    { f: "🇬🇷", d: "+30", n: "Greece", l: [10, 10] },
+    { f: "🇷🇺", d: "+7", n: "Russia", l: [10, 10] },
+    { f: "🇺🇦", d: "+380", n: "Ukraine", l: [9, 9] },
+    { f: "🇹🇷", d: "+90", n: "Turkey", l: [10, 10] },
+    { f: "🇦🇪", d: "+971", n: "United Arab Emirates", l: [8, 9] },
+    { f: "🇸🇦", d: "+966", n: "Saudi Arabia", l: [9, 9] },
+    { f: "🇶🇦", d: "+974", n: "Qatar", l: [8, 8] },
+    { f: "🇰🇼", d: "+965", n: "Kuwait", l: [8, 8] },
+    { f: "🇧🇭", d: "+973", n: "Bahrain", l: [8, 8] },
+    { f: "🇴🇲", d: "+968", n: "Oman", l: [8, 8] },
+    { f: "🇮🇱", d: "+972", n: "Israel", l: [8, 9] },
+    { f: "🇪🇬", d: "+20", n: "Egypt", l: [9, 10] },
+    { f: "🇿🇦", d: "+27", n: "South Africa", l: [9, 9] },
+    { f: "🇳🇬", d: "+234", n: "Nigeria", l: [8, 10] },
+    { f: "🇰🇪", d: "+254", n: "Kenya", l: [9, 9] },
+    { f: "🇬🇭", d: "+233", n: "Ghana", l: [9, 9] },
+    { f: "🇪🇹", d: "+251", n: "Ethiopia", l: [9, 9] },
+    { f: "🇹🇿", d: "+255", n: "Tanzania", l: [9, 9] },
+    { f: "🇺🇬", d: "+256", n: "Uganda", l: [9, 9] },
+    { f: "🇵🇰", d: "+92", n: "Pakistan", l: [10, 10] },
+    { f: "🇧🇩", d: "+880", n: "Bangladesh", l: [10, 10] },
+    { f: "🇱🇰", d: "+94", n: "Sri Lanka", l: [9, 9] },
+    { f: "🇳🇵", d: "+977", n: "Nepal", l: [8, 10] },
+    { f: "🇧🇹", d: "+975", n: "Bhutan", l: [7, 8] },
+    { f: "🇲🇻", d: "+960", n: "Maldives", l: [7, 7] },
+    { f: "🇨🇳", d: "+86", n: "China", l: [7, 11] },
+    { f: "🇭🇰", d: "+852", n: "Hong Kong", l: [8, 8] },
+    { f: "🇹🇼", d: "+886", n: "Taiwan", l: [8, 9] },
+    { f: "🇯🇵", d: "+81", n: "Japan", l: [9, 10] },
+    { f: "🇰🇷", d: "+82", n: "South Korea", l: [8, 11] },
+    { f: "🇸🇬", d: "+65", n: "Singapore", l: [8, 8] },
+    { f: "🇲🇾", d: "+60", n: "Malaysia", l: [9, 10] },
+    { f: "🇮🇩", d: "+62", n: "Indonesia", l: [8, 12] },
+    { f: "🇹🇭", d: "+66", n: "Thailand", l: [8, 9] },
+    { f: "🇵🇭", d: "+63", n: "Philippines", l: [10, 10] },
+    { f: "🇻🇳", d: "+84", n: "Vietnam", l: [9, 10] },
+    { f: "🇲🇲", d: "+95", n: "Myanmar", l: [7, 10] },
+    { f: "🇰🇭", d: "+855", n: "Cambodia", l: [8, 9] },
+    { f: "🇧🇷", d: "+55", n: "Brazil", l: [10, 11] },
+    { f: "🇲🇽", d: "+52", n: "Mexico", l: [10, 10] },
+    { f: "🇦🇷", d: "+54", n: "Argentina", l: [10, 10] },
+    { f: "🇨🇴", d: "+57", n: "Colombia", l: [10, 10] },
+    { f: "🇨🇱", d: "+56", n: "Chile", l: [9, 9] },
+    { f: "🇵🇪", d: "+51", n: "Peru", l: [9, 9] },
   ];
   const DEFAULT_DIAL = "+91";
+  // Mirrors app/phone_numbers.py (tests keep the two tables in sync): the national number
+  // is what's left after the dial code, without a trunk "0". Italy keeps its leading 0.
+  const PHONE_KEEP_LEADING_ZERO = new Set(["+39"]);
+  function phoneRuleFor(dial) { return PHONE_COUNTRIES.find((p) => p.d === dial) || null; }
+  /* Combine the picker's dial code with what was typed into one E.164 number.
+     Returns { e164 } on success, { error } with a human message otherwise, and
+     { e164: null } when the field is blank (the number is optional at signup). */
+  function buildPhoneE164(dial, local) {
+    const raw = String(local == null ? "" : local).trim();
+    if (!raw) return { e164: null };
+    if (/[^0-9+\s().-]/.test(raw)) return { error: "Phone numbers can only contain digits." };
+    let d = dial, national = raw.replace(/[\s().-]/g, "");
+    if (national[0] === "+") {
+      // They typed the country code into the number box too — trust it over the picker.
+      const parts = splitPhone(national);
+      if (parts.local === national) return { error: "We don't recognise that country code — please pick it from the list." };
+      d = parts.dial; national = parts.local;
+    }
+    const rule = phoneRuleFor(d);
+    if (!rule) return { error: "Please pick your country code from the list." };
+    if (!PHONE_KEEP_LEADING_ZERO.has(d)) national = national.replace(/^0+/, "");
+    if (d === "+1" && /^[01]/.test(national)) return { error: "A +1 number can't start with 0 or 1." };
+    const [lo, hi] = rule.l;
+    if (national.length < lo || national.length > hi) {
+      return { error: `A ${rule.n} (${d}) number should have ${lo === hi ? lo : lo + "\u2013" + hi} digits after the country code.` };
+    }
+    return { e164: d + national };
+  }
   function phoneCcOptions(selectedDial) {
     let picked = false;
     return PHONE_COUNTRIES.map((p) => {
@@ -1082,6 +1110,18 @@
   function setupAuth() {
     const suffix = "." + rootDomain();
     $("#signupDomainSuffix").textContent = suffix;
+    const signupPhoneCc = $("#signupPhoneCc");
+    if (signupPhoneCc) {
+      signupPhoneCc.innerHTML = phoneCcOptions(DEFAULT_DIAL);
+      // Live feedback: the browser's own bubble shows the country-specific message on
+      // submit, and it clears as soon as the number is right for the picked country.
+      const syncPhoneValidity = () => {
+        const r = buildPhoneE164(signupPhoneCc.value, $("#signupPhone").value);
+        $("#signupPhone").setCustomValidity(r.error || "");
+      };
+      signupPhoneCc.onchange = syncPhoneValidity;
+      $("#signupPhone").oninput = syncPhoneValidity;
+    }
     $("#onboardDomainSuffix").textContent = suffix;
     initializeEnterpriseTurnstile();
     // Login is the default card, so its security widget is the one to pre-render.
@@ -1171,11 +1211,19 @@
         err.classList.remove("hidden");
         return;
       }
+      const phoneResult = buildPhoneE164(f.phone_cc.value, f.phone.value);
+      if (phoneResult.error) {
+        err.textContent = phoneResult.error;
+        err.classList.remove("hidden");
+        f.phone.focus();
+        return;
+      }
       pendingSignup = {
         company_name: f.company_name.value.trim(),
         subdomain_slug: f.subdomain_slug.value.trim().toLowerCase(),
         full_name: f.full_name.value.trim(),
         email: f.email.value.trim(),
+        phone: phoneResult.e164,
         password: f.password.value,
         accepted_terms_privacy: f.accept_terms.checked,
         accepted_dpa: f.accept_dpa.checked,
