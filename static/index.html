@@ -3,6 +3,20 @@
 
 <head>
     <script>document.documentElement.className = document.documentElement.className.replace(/\bno-js\b/, 'js');</script>
+    <script>
+        (function () {
+            var root = document.documentElement;
+            try { if (localStorage.getItem('rilono_copilot_bar_dismissed') === '1') root.classList.add('copilot-bar-off'); } catch (e) {}
+            // Rilono Copilot is a desktop Chrome extension. Decide by platform, not input type:
+            // a Chromebook or Surface in tablet mode can still install it; a phone with a mouse can't.
+            try {
+                var uad = navigator.userAgentData, ua = navigator.userAgent || '';
+                var mobile = uad ? (uad.mobile || /Android|iOS/i.test(uad.platform || '')) : /Android|iPhone|iPad|iPod/i.test(ua);
+                if (!mobile && /Macintosh/.test(ua) && navigator.maxTouchPoints > 1) mobile = true; // iPadOS Safari reports a Mac
+                if (mobile) root.classList.add('cab-mobile');
+            } catch (e) {}
+        })();
+    </script>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Rilono — AI University Shortlist &amp; Study-Abroad Platform</title>
@@ -148,6 +162,60 @@
         .hx .btn svg { width: 18px; height: 18px; }
         .btn-primary .plane-ic { transition: transform .3s ease; }
         .btn-primary:hover .plane-ic { transform: translateX(4px) translateY(-3px) rotate(8deg); }
+
+        /* ======================= Rilono Copilot bar ======================= */
+        /* Base look comes from .announcement-bar in styles.css (shared with /us-f1-visa); this
+           layer pins it flush to the top of the sticky nav, adds the dismiss button, and keeps
+           it to one compact row on phones. Kept inline: styles.css is loaded unversioned here. */
+        .copilot-bar-off #copilotAnnouncementBar { display: none; }
+        .navbar > #copilotAnnouncementBar { margin: 0 0 .7rem; border-top: none; border-bottom: 1px solid rgba(124, 138, 255, .18); }
+        #copilotAnnouncementBar .announcement-bar-inner { position: relative; padding-right: 3rem; }
+        #copilotAnnouncementBar .announcement-bar-text strong { color: var(--text-primary); font-weight: 700; }
+        /* the shared light-violet gradient gives white text only ~3:1; this one is >6:1 */
+        #copilotAnnouncementBar .announcement-bar-btn-primary { background: linear-gradient(135deg, #4f46e5, #6d28d9); box-shadow: 0 2px 8px rgba(79, 70, 229, .28); }
+        /* never drop the guide link (styles.css hides the ghost button at <=480px) */
+        #copilotAnnouncementBar .announcement-bar-btn-ghost { display: inline-flex; }
+        #copilotAnnouncementBar .cab-short { display: none; }
+        #copilotAnnouncementBar .cab-nowrap { white-space: nowrap; }
+        #copilotAnnouncementBar .cab-close {
+            position: absolute; right: .6rem; top: 50%; transform: translateY(-50%);
+            width: 32px; height: 32px; display: inline-flex; align-items: center; justify-content: center;
+            border: 0; border-radius: 8px; background: transparent; color: var(--text-muted);
+            font: inherit; font-size: 1.2rem; line-height: 1; cursor: pointer;
+        }
+        #copilotAnnouncementBar .cab-close:hover { background: rgba(15, 23, 42, .06); color: var(--text-primary); }
+        #copilotAnnouncementBar .cab-close:focus-visible { outline: 2px solid #6366f1; outline-offset: 1px; }
+        @media (max-width: 900px) {
+            /* the nav gets .75rem top padding at this width (styles.css); keep the bar flush */
+            .navbar > #copilotAnnouncementBar { margin: -.75rem 0 .75rem; }
+            #copilotAnnouncementBar .announcement-bar-inner {
+                flex-wrap: nowrap; justify-content: center; text-align: left;
+                gap: .6rem; padding: .4rem 2.6rem .4rem 1rem;
+            }
+            #copilotAnnouncementBar .announcement-bar-text { flex: 0 1 auto; font-size: .78rem; justify-content: flex-start; }
+            #copilotAnnouncementBar .announcement-bar-actions { width: auto; flex-wrap: nowrap; }
+            #copilotAnnouncementBar .announcement-bar-btn { font-size: .72rem; padding: .3rem .65rem; }
+            #copilotAnnouncementBar .cab-close { right: .35rem; }
+            /* --nav-h is measured in syncNavOffset(); the menu opens just below the nav */
+            .nav-links { max-height: min(560px, calc(100vh - var(--nav-h, 64px) - 1rem)); max-height: min(560px, calc(100dvh - var(--nav-h, 64px) - 1rem)); }
+            /* a height-capped column must scroll, not wrap its last links into an off-screen
+               second column (landscape phones) */
+            .nav-links { flex-wrap: nowrap; }
+            .nav-links > * { flex-shrink: 0; }
+            /* the closed Products popover is invisible but still 500+px tall: take it out of
+               the menu's scroll area until it's tapped open */
+            .products-nav:not(.is-open) .products-menu { display: none; }
+        }
+        /* The full sentence needs ~970px on one row; below that use the short line. */
+        @media (max-width: 1080px) {
+            #copilotAnnouncementBar .cab-long { display: none; }
+            #copilotAnnouncementBar .cab-short { display: inline; }
+        }
+        /* Phones/tablets (html.cab-mobile, set in <head>) can't install Chrome extensions:
+           say "desktop Chrome" at every width and point them at the guide instead. */
+        .cab-mobile #copilotAnnouncementBar .cab-install,
+        .cab-mobile #copilotAnnouncementBar .cab-long { display: none; }
+        .cab-mobile #copilotAnnouncementBar .cab-short { display: inline; }
 
         /* ======================= Flight progress bar ======================= */
         .skybar { position: fixed; top: 0; left: 0; right: 0; height: 4px; z-index: 2000; pointer-events: none; }
@@ -729,6 +797,29 @@
     </div>
 
     <nav class="navbar">
+        <!-- Rilono Copilot Chrome extension — top bar (dismissal remembered per browser) -->
+        <div class="announcement-bar" id="copilotAnnouncementBar" role="region" aria-label="Rilono Copilot for Chrome">
+            <div class="announcement-bar-inner">
+                <span class="announcement-bar-text">
+                    <span class="cab-long"><strong>Rilono Copilot for Chrome</strong> — AI help on your visa and university application forms, right in your browser.</span>
+                    <span class="cab-short"><strong>Rilono Copilot</strong> for <span class="cab-nowrap">desktop Chrome</span></span>
+                </span>
+                <div class="announcement-bar-actions">
+                    <a href="https://chromewebstore.google.com/detail/rilono-copilot/ggfiafmfibondlacgdigbeigccnecplh"
+                        target="_blank" rel="noopener noreferrer"
+                        class="announcement-bar-btn announcement-bar-btn-primary cab-install">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"
+                            style="width:14px;height:14px;">
+                            <circle cx="12" cy="12" r="10" />
+                            <circle cx="12" cy="12" r="4" fill="currentColor" opacity="0.3" />
+                        </svg>
+                        Add to Chrome
+                    </a>
+                    <a href="/blog/how-to-use-rilono-ai-copilot" class="announcement-bar-btn announcement-bar-btn-ghost">Learn more</a>
+                </div>
+                <button type="button" class="cab-close" id="copilotBarClose" aria-label="Dismiss the Rilono Copilot announcement">&times;</button>
+            </div>
+        </div>
         <div class="nav-container">
             <div class="nav-brand">
                 <a href="/" style="display:flex;align-items:center;gap:0.75rem;text-decoration:none;">
@@ -1478,6 +1569,25 @@
 
             // ---------- Navbar shadow + flight progress bar ----------
             var navbar = document.querySelector(".navbar");
+
+            // ---------- Rilono Copilot bar ----------
+            // The bar makes the sticky nav taller; keep #journey / #countries anchors from
+            // landing underneath it.
+            function syncNavOffset() {
+                document.documentElement.style.scrollPaddingTop = (navbar.offsetHeight + 12) + "px";
+                document.documentElement.style.setProperty("--nav-h", navbar.offsetHeight + "px");
+            }
+            var copilotClose = document.getElementById("copilotBarClose");
+            if (copilotClose) {
+                copilotClose.addEventListener("click", function () {
+                    document.documentElement.classList.add("copilot-bar-off");
+                    try { localStorage.setItem("rilono_copilot_bar_dismissed", "1"); } catch (e) {}
+                    syncNavOffset();
+                });
+            }
+            syncNavOffset();
+            window.addEventListener("resize", syncNavOffset, { passive: true });
+
             var skyTrack = document.getElementById("skyTrack");
             var skyJet = document.getElementById("skyJet");
             var ticking = false;
