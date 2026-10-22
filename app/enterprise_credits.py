@@ -717,41 +717,133 @@ def active_client_count(db: Session, organization_id: int) -> int:
 # rollover: a genuine new period sets reads_used back to 0.
 # ---------------------------------------------------------------------------
 
-def _period_start_for(sub, plan_key: str, *, now: Optional[datetime] = None) -> datetime:
-    """The start of the org's CURRENT billing period.
+_PERIOD_CHAIN_LIMIT = 6
 
-    Paid tiers anchor to `current_period_end` (set at each verified payment) minus the
-    period length, so the allowance refreshes on the org's own renewal date rather than on
-    the 1st of the calendar month. A paid row with no period end yet — an org mid-upgrade,
-    or a legacy row — falls back to the calendar month, which is stable and never grants
-    twice. The sandbox anchors to its own creation so its one-time grant has a fixed key.
+
+def _plan_coverage_chain(sub) -> list[int]:
+    """Days of coverage bought by the org's most recent plan payments, newest first
+    (billing.period_days_for of each payment's billing_cycle) — [] when unknown.
+
+    The subscription row only stores WHERE the paid coverage ends, not how it was built up;
+    the payment rows say what each purchase added (30 days monthly, 365 yearly), and that is
+    what lets a yearly coverage be split into sub-periods from its START. Read through the
+    row's own session so _period_start_for keeps its (sub, plan_key) signature; a transient
+    row (subscription_snapshot's unsaved default) has no session and no payments anyway."""
+    from sqlalchemy.orm import object_session
+
+    from app import enterprise_billing as billing
+
+    org_id = getattr(sub, "organization_id", None)
+    try:
+        session = object_session(sub)
+    except Exception:  # not a mapped instance (a stand-in object in a test or a caller)
+        session = None
+    if session is None or org_id is None:
+        return []
+    with session.no_autoflush:
+        rows = (
+            session.query(models.EnterpriseSubscriptionPayment.billing_cycle)
+            .filter(
+                models.EnterpriseSubscriptionPayment.organization_id == int(org_id),
+                # Same statuses as billing._latest_plan_payment: a payment that was later
+                # refunded still extended current_period_end (nothing rolls coverage back).
+                models.EnterpriseSubscriptionPayment.status.in_(REVENUE_PAYMENT_STATUSES),
+            )
+            .order_by(models.EnterpriseSubscriptionPayment.id.desc())
+            .limit(_PERIOD_CHAIN_LIMIT)
+            .all()
+        )
+    return [billing.period_days_for(cycle) for (cycle,) in rows]
+
+
+def _coverage_bounds(
+    end: datetime, chain: list[int], now: datetime, period: timedelta,
+) -> tuple[datetime, datetime]:
+    """(start, end) of the allowance sub-period that holds `now`, for paid coverage ending at
+    `end` whose purchases (newest first) bought `chain` days each.
+
+    THE YEARLY CASE. One 365-day payment must yield TWELVE monthly allowances, starting on the
+    day it was bought. Walking 30-day periods back from `end` (the old rule, and still the
+    monthly rule below) does not: 365 = 12 × 30 + 5, so the walk leaves a 5-day sliver at the
+    START — a yearly buyer's first allowance expired after 5 days and the year held 13. Here a
+    coverage longer than one period is cut forward from its own start (end − its days), and the
+    final sub-period absorbs the remainder (35 days) instead of opening a 13th grant.
+
+    A coverage that has NOT started yet (anchor > now: the latest payment was stacked onto a
+    period still running, i.e. renewed early) is not the current one — the previous purchase's
+    coverage is, and it ended exactly at this anchor. Recursing onto it keeps the CURRENT
+    sub-period's key steady through an early renewal; recomputing it on a different grid would
+    change the key mid-period and, in a yearly coverage's 35-day tail, read the old key as
+    elapsed and hand out an extra allowance for the few days left.
     """
+    days = chain[0] if chain else int(period.days)
+    anchor = end - timedelta(days=days)
+    if anchor > now and len(chain) > 1:
+        return _coverage_bounds(anchor, chain[1:], now, period)
+    if days <= period.days:
+        # One period per payment (monthly) — the original rule, unchanged.
+        start = end - period
+        # The anchor can sit in the future (stacked renewals, or a long legacy row with no
+        # payment history to split it by); step back until it holds `now`.
+        while start > now:
+            start -= period
+        # Walk forward to the period containing `now`, but NEVER past the coverage that
+        # was actually paid for. `effective_plan_key` keeps a paid tier alive for
+        # PLAN_GRACE_DAYS after `current_period_end`; without the `< end` guard the key
+        # would tick over the moment the period ended and hand out a whole free monthly
+        # allowance inside that unpaid grace window — reintroducing exactly the
+        # mint-credits-forever bug that paid_period_expired() exists to kill. Holding the
+        # key at the last PAID period means the grace window grants nothing, and the next
+        # real payment (which moves `current_period_end`) is what opens the next grant.
+        while (start + period) <= now and (start + period) < end:
+            start += period
+        return start, start + period
+    if anchor > now:
+        # A long coverage stacked on a period we know nothing about (no older payment row):
+        # the best available grid is whole periods back from where this coverage begins.
+        start = anchor
+        while start > now:
+            start -= period
+        return start, start + period
+    # Long (yearly) coverage that has begun: sub-periods counted FORWARD from its start. The
+    # index is capped at the last full sub-period, which therefore runs to `end` — and that
+    # cap is also what holds the key steady through the PLAN_GRACE_DAYS after `end`, the
+    # same no-free-grant-in-grace rule as the monthly walk above.
+    full = max(1, days // period.days)
+    index = min(int((now - anchor) // period), full - 1)
+    start = anchor + period * index
+    return start, (end if index == full - 1 else start + period)
+
+
+def _period_bounds_for(sub, plan_key: str, *, now: Optional[datetime] = None) -> tuple[datetime, datetime]:
+    """(start, end) of the org's CURRENT allowance period — see _period_start_for. `end` is
+    when the next grant is due (the renewal date shown as renews_at / period_ends_at)."""
     from app import enterprise_billing as billing
 
     now = now or datetime.utcnow()
+    period = timedelta(days=billing.PLAN_PERIOD_DAYS)
     if plan_key in billing.PAID_PLAN_KEYS:
         end = _naive(getattr(sub, "current_period_end", None))
         if end:
-            period = timedelta(days=billing.PLAN_PERIOD_DAYS)
-            start = end - period
-            # Legacy yearly rows cover far more than one period, so the anchor can start in
-            # the future; step back until it holds `now`.
-            while start > now:
-                start -= period
-            # Walk forward to the period containing `now`, but NEVER past the coverage that
-            # was actually paid for. `effective_plan_key` keeps a paid tier alive for
-            # PLAN_GRACE_DAYS after `current_period_end`; without the `< end` guard the key
-            # would tick over the moment the period ended and hand out a whole free monthly
-            # allowance inside that unpaid grace window — reintroducing exactly the
-            # mint-credits-forever bug that paid_period_expired() exists to kill. Holding the
-            # key at the last PAID period means the grace window grants nothing, and the next
-            # real payment (which moves `current_period_end`) is what opens the next grant.
-            while (start + period) <= now and (start + period) < end:
-                start += period
-            return start
-        return now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+            return _coverage_bounds(end, _plan_coverage_chain(sub), now, period)
+        start = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+        return start, start + period
     created = _naive(getattr(sub, "created_at", None)) or now
-    return created
+    return created, created + period
+
+
+def _period_start_for(sub, plan_key: str, *, now: Optional[datetime] = None) -> datetime:
+    """The start of the org's CURRENT billing period.
+
+    Paid tiers anchor to `current_period_end` (set at each verified payment): a monthly
+    coverage's period is the 30 days before it, so the allowance refreshes on the org's own
+    renewal date rather than on the 1st of the calendar month; a yearly coverage is cut into
+    monthly sub-periods from the day it was bought (see _coverage_bounds). A paid row with no
+    period end yet — an org mid-upgrade, or a legacy row — falls back to the calendar month,
+    which is stable and never grants twice. The sandbox anchors to its own creation so its
+    one-time grant has a fixed key.
+    """
+    return _period_bounds_for(sub, plan_key, now=now)[0]
 
 
 def plan_credits_period_key(sub, plan_key: str, *, now: Optional[datetime] = None) -> str:
@@ -1121,8 +1213,9 @@ def plan_credits_state(db: Session, organization_id: int, *, read_only: bool = F
     recurring = bool(limits["credits_recur"])
     renews_at = None
     if recurring:
-        start = _period_start_for(sub, plan_key)
-        renews_at = start + timedelta(days=billing.PLAN_PERIOD_DAYS)
+        # The sub-period's own end: 30 days after its start, except a yearly coverage's last
+        # sub-period, which runs to the coverage end (see _coverage_bounds).
+        renews_at = _period_bounds_for(sub, plan_key)[1]
     return {
         "plan": plan_key,
         "plan_label": (billing.get_plan(plan_key) or {}).get("label"),
@@ -1156,7 +1249,7 @@ def _reads_payload(sub, wallet, limits: dict) -> dict:
     recurring = bool(limits["credits_recur"])
     period_ends_at = None
     if recurring:
-        period_ends_at = _period_start_for(sub, plan_key) + timedelta(days=billing.PLAN_PERIOD_DAYS)
+        period_ends_at = _period_bounds_for(sub, plan_key)[1]
     elif billing.normalize_plan_key(getattr(sub, "plan", None)) == billing.SANDBOX_PLAN:
         # The trial's reads are granted once and last for the trial.
         period_ends_at = _naive(getattr(sub, "trial_ends_at", None))

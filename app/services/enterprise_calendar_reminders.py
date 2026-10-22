@@ -115,7 +115,9 @@ def _collect_org_items_by_recipient(db, organization_id: int, today: date, floor
             "date": ev.event_date, "when_label": when_label, "overdue": overdue,
         })
 
-    # Derived: client key dates (target_date), non-terminal
+    # Derived: client key dates (target_date), non-terminal. "Terminal" is the catalog's set —
+    # Approved, Rejected AND Closed — so a file closed without an outcome stops sending key-date
+    # reminders the moment it is closed, exactly as a decided one does.
     label, color = _DERIVED_META["client_deadline"]
     for client in (
         db.query(models.EnterpriseClient)
@@ -124,7 +126,7 @@ def _collect_org_items_by_recipient(db, organization_id: int, today: date, floor
             models.EnterpriseClient.target_date.isnot(None),
             models.EnterpriseClient.target_date >= floor,
             models.EnterpriseClient.target_date <= today,
-            models.EnterpriseClient.status.notin_([catalog.STAGE_APPROVED, catalog.STAGE_REJECTED]),
+            models.EnterpriseClient.status.notin_(sorted(catalog.TERMINAL_STAGE_KEYS)),
         )
         .all()
     ):

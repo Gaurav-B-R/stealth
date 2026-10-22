@@ -209,7 +209,14 @@ _STAGE_PHASES: list[tuple[str, tuple[str, ...]]] = [
                           catalog.STAGE_OFFER_ACCEPTED)),
     ("Visa phase", (catalog.STAGE_DOCUMENTS, catalog.STAGE_SUBMITTED,
                     catalog.STAGE_APPOINTMENT, catalog.STAGE_DECISION)),
-    ("Closed / paused", (catalog.STAGE_APPROVED, catalog.STAGE_REJECTED, catalog.STAGE_ON_HOLD)),
+    # Every stage off the active journey: the terminal ones from the catalog (Approved,
+    # Rejected and Closed — "closed" being a file ended WITHOUT a visa outcome), plus On Hold.
+    # Derived rather than listed so a new terminal stage can't fall out of every phase and
+    # be described to the model as belonging to none.
+    ("Closed / paused", tuple(
+        s["key"] for s in catalog.CLIENT_STAGES
+        if s["is_terminal"] or s["key"] == catalog.STAGE_ON_HOLD
+    )),
 ]
 _PRE_VISA_STAGES = frozenset(
     key for title, keys in _STAGE_PHASES if title in ("Lead", "University phase") for key in keys
@@ -668,7 +675,7 @@ def build_org_tools(db: Session, organization_id: int, ctx=None, viewer_user_id=
         """Count clients matching optional filters (all optional; they combine with AND).
         - status: a pipeline stage such as 'new lead', 'shortlisting', 'applications
           sent', 'offer accepted', 'documents', 'submitted', 'interview', 'awaiting
-          decision', 'approved', 'rejected', 'on hold'. A status that matches no stage
+          decision', 'approved', 'rejected', 'closed', 'on hold'. A status that matches no stage
           returns an error instead of a count — relay it, never answer with a total.
         - destination_country: country name or 2-letter code (US, CA, UK, AU, DE, IE, FR, ES, NL, AE).
         - visa_type: a substring of the visa type (e.g. 'F-1', 'Study Permit').
@@ -821,8 +828,10 @@ def build_org_tools(db: Session, organization_id: int, ctx=None, viewer_user_id=
         open_early = {catalog.STAGE_NEW_LEAD, catalog.STAGE_SHORTLISTING,
                       catalog.STAGE_APPLICATIONS_SENT, catalog.STAGE_OFFER_ACCEPTED,
                       catalog.STAGE_DOCUMENTS}
-        terminal = {catalog.STAGE_APPROVED, catalog.STAGE_REJECTED}
-        rows = _base().filter(models.EnterpriseClient.status.notin_(list(terminal))).all()
+        # Terminal from the catalog: Approved, Rejected AND Closed. A closed file (withdrawn,
+        # gone cold) needs no attention, and flagging its stale key date would be noise.
+        terminal = catalog.TERMINAL_STAGE_KEYS
+        rows = _base().filter(models.EnterpriseClient.status.notin_(sorted(terminal))).all()
         scored = []
         now = datetime.utcnow()
         for c in rows:
@@ -894,7 +903,8 @@ def build_org_tools(db: Session, organization_id: int, ctx=None, viewer_user_id=
             return {"error": "You can only see workload across the whole workspace, "
                              "and your access is limited to your own clients."}
         names = _member_names()
-        terminal = [catalog.STAGE_APPROVED, catalog.STAGE_REJECTED]
+        # "Active (non-closed)" = not in a terminal stage, Closed included (catalog-derived).
+        terminal = sorted(catalog.TERMINAL_STAGE_KEYS)
         counts = dict(
             _base().filter(models.EnterpriseClient.status.notin_(terminal),
                            models.EnterpriseClient.assigned_to_user_id.isnot(None))
@@ -1049,7 +1059,7 @@ def build_org_tools(db: Session, organization_id: int, ctx=None, viewer_user_id=
                   .filter(models.EnterpriseClient.target_date.isnot(None),
                           models.EnterpriseClient.target_date >= start,
                           models.EnterpriseClient.target_date <= end,
-                          models.EnterpriseClient.status.notin_([catalog.STAGE_APPROVED, catalog.STAGE_REJECTED])).all()):
+                          models.EnterpriseClient.status.notin_(sorted(catalog.TERMINAL_STAGE_KEYS))).all()):
             d = c.target_date
             events.append({"date": d.isoformat() if d else None, "time": None,
                            "title": f"Key date — {c.full_name}", "type": "client_deadline",
@@ -1062,7 +1072,7 @@ def build_org_tools(db: Session, organization_id: int, ctx=None, viewer_user_id=
                   .filter(models.EnterpriseClient.next_followup_date.isnot(None),
                           models.EnterpriseClient.next_followup_date >= start,
                           models.EnterpriseClient.next_followup_date <= end,
-                          models.EnterpriseClient.status.notin_([catalog.STAGE_APPROVED, catalog.STAGE_REJECTED])).all()):
+                          models.EnterpriseClient.status.notin_(sorted(catalog.TERMINAL_STAGE_KEYS))).all()):
             d = c.next_followup_date
             events.append({"date": d.isoformat() if d else None, "time": None,
                            "title": f"Follow-up — {c.full_name}", "type": "client_followup",
@@ -1087,7 +1097,7 @@ def build_org_tools(db: Session, organization_id: int, ctx=None, viewer_user_id=
             nxt = (_base()
                    .filter(models.EnterpriseClient.target_date > end,
                            models.EnterpriseClient.status.notin_(
-                               [catalog.STAGE_APPROVED, catalog.STAGE_REJECTED]))
+                               sorted(catalog.TERMINAL_STAGE_KEYS)))
                    .order_by(models.EnterpriseClient.target_date.asc()).first())
             if nxt is not None:
                 payload["next_key_date_after_window"] = {

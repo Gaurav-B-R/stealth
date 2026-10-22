@@ -1243,8 +1243,35 @@ def _apply_branch_fields(branch, data: dict) -> dict:
     return changed
 
 
+# ===========================================================================
+# PLAN GATES (pricing v2, 2026-10-22)
+# ===========================================================================
+#
+# Offices beyond the head office, custom roles and per-person permission overrides are Team /
+# Multi-branch features (enterprise_billing.TIER_FEATURES; a live trial evaluates Team). The
+# gates sit HERE, in the write functions, not in the router: every path that changes an
+# office or a role comes through this module, so no future endpoint can forget them.
+#
+# What is gated is CHANGE, never use. On a lower plan (Starter, or a lapsed/downgraded org)
+# existing offices and custom roles keep working exactly as before: clients stay filed in
+# them, members keep their roles, and assigning people to an office or role that ALREADY
+# exists is not gated (refusing it would strand an existing office the moment someone new
+# joined). The gate fires first in each function, before any validation, so a Starter owner
+# is told "this is a Team feature" rather than first being made to fix a form field.
+
+def _require_plan_feature(db: Session, org_id: int, feature: str) -> None:
+    """402 with the Team-plan upgrade message unless the org's plan includes `feature`
+    ("branches" | "custom_roles"). A no-op while billing is disabled or for a live trial."""
+    billing.enforce_feature_or_402(db, int(org_id), feature)
+
+
 def create_branch(db: Session, *, organization, actor_user, actor_ctx, data: dict) -> models.EnterpriseBranch:
     org_id = int(organization.id)
+    # Every plan includes ONE office — the head office new clients are filed in. Creating it
+    # is never gated (an org with no active office at all needs somewhere to file clients);
+    # any office beyond it is a Team feature.
+    if _active_branch_count(db, org_id) > 0:
+        _require_plan_feature(db, org_id, "branches")
     name = _branch_name_or_422((data or {}).get("name"))
 
     if _active_branch_count(db, org_id) >= access.MAX_BRANCHES:
@@ -1296,6 +1323,11 @@ def update_branch(
     db: Session, *, organization, actor_user, actor_ctx, branch, data: dict
 ) -> models.EnterpriseBranch:
     org_id = int(organization.id)
+    # The DEFAULT office is the one every plan includes, so editing it (its name, address,
+    # and above all its time zone, which dates and reminders are computed in) stays open on
+    # every plan. Editing any other office is a Team feature.
+    if not bool(branch.is_default):
+        _require_plan_feature(db, org_id, "branches")
     data = data or {}
     before = {
         "name": branch.name, "code": branch.code, "city": branch.city,
@@ -1350,6 +1382,9 @@ def update_branch(
 
 def set_default_branch(db: Session, *, organization, actor_user, actor_ctx, branch) -> None:
     org_id = int(organization.id)
+    if bool(branch.is_default) and bool(branch.is_active):
+        return  # already the default: nothing changes, so nothing to gate
+    _require_plan_feature(db, org_id, "branches")
     if not bool(branch.is_active):
         raise HTTPException(
             status_code=400,
@@ -1429,6 +1464,7 @@ def archive_branch(
     reassign_members_to_branch_id=None,
 ) -> dict:
     org_id = int(organization.id)
+    _require_plan_feature(db, org_id, "branches")
     if bool(branch.is_default):
         raise HTTPException(
             status_code=400, detail="Make another office the default before archiving this one."
@@ -1582,6 +1618,8 @@ def reactivate_branch(
     org_id = int(organization.id)
     if bool(branch.is_active):
         return branch
+    # Reopening an archived office adds an office back — gated exactly like creating one.
+    _require_plan_feature(db, org_id, "branches")
     if _active_branch_count(db, org_id) >= access.MAX_BRANCHES:
         raise HTTPException(
             status_code=422,
@@ -1786,6 +1824,9 @@ def _role_capabilities_or_422(actor_ctx, raw) -> frozenset[str]:
 
 def create_role(db: Session, *, organization, actor_user, actor_ctx, data: dict) -> models.EnterpriseRole:
     org_id = int(organization.id)
+    # Custom roles are a Team feature (Starter has the built-in presets). Also covers
+    # duplicate_role, which creates through here.
+    _require_plan_feature(db, org_id, "custom_roles")
     data = data or {}
 
     if _active_role_count(db, org_id) >= access.MAX_CUSTOM_ROLES:
@@ -1835,6 +1876,8 @@ def create_role(db: Session, *, organization, actor_user, actor_ctx, data: dict)
 
 def update_role(db: Session, *, organization, actor_user, actor_ctx, role, data: dict) -> models.EnterpriseRole:
     org_id = int(organization.id)
+    # Editing a custom role is gated; the members on it keep its permissions regardless.
+    _require_plan_feature(db, org_id, "custom_roles")
     data = data or {}
     before = {
         "name": role.name,
@@ -1959,6 +2002,9 @@ def archive_role(
     db: Session, *, organization, actor_user, actor_ctx, role, move_members_to=None
 ) -> dict:
     org_id = int(organization.id)
+    # Removing a custom role is managing custom roles (gated). A lower-plan org can still move
+    # each member onto a built-in preset through their access settings, which is not gated.
+    _require_plan_feature(db, org_id, "custom_roles")
     members = (
         db.query(models.EnterpriseOrganizationMember)
         .filter(
@@ -2322,6 +2368,12 @@ def _apply_access_fields(
             # Denies need no escalation check — narrowing somebody is always allowed.
             denies = access.sanitize_capabilities(data.get("capability_denies"))
         if grants != old_grants or denies != old_denies:
+            # Individual permission overrides ARE a custom role, one person wide — a Team
+            # feature. Only ADDING an override is gated: removing grants or blocks a member
+            # already has (up to clearing them all, back to the plain role) moves a lower-plan
+            # org TOWARDS the built-in presets and must never be refused.
+            if not (grants <= old_grants and denies <= old_denies):
+                _require_plan_feature(db, org_id, "custom_roles")
             before["capabilities"] = {
                 "granted": sorted(old_grants), "blocked": sorted(old_denies),
             }
@@ -3021,6 +3073,13 @@ def team_meta_payload(db: Session, *, organization, membership, ctx) -> dict:
         "limits": access.limits_payload(),
         "me": access.access_payload(ctx),
         "seats": {"used": seats.get("seats_used", 0), "max": seats.get("max_seats", billing.UNLIMITED)},
+        # Which office/role editors this org's PLAN allows (see PLAN GATES above), so the
+        # screen can show an upgrade prompt instead of an editor whose save returns 402.
+        # Capabilities (above/below) say what this PERSON may do; this says what the plan does.
+        "plan_features": dict(seats.get("features") or {}),
+        "plan_upgrade_messages": {
+            key: billing.feature_upgrade_message(key) for key in billing.FEATURE_KEYS
+        },
         # What the CALLER may hand out. Owner-only keys are excluded for everyone —
         # including the owner — because nobody can grant them (see assert_can_grant), and
         # a checkbox that always 422s is worse than no checkbox.

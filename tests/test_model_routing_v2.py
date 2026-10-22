@@ -113,20 +113,22 @@ def _string_lists_bound_as_model_defaults(tree):
                     yield node.value
 
 
-def test_no_default_chain_outside_routers_names_a_retired_model():
-    # app/routers/* belongs to another work package (and is reported there); everything
-    # else under app/ is guarded here so a retired id can never creep back into a chain.
+def test_no_default_chain_anywhere_in_app_names_a_retired_model():
+    # Every default chain under app/ — routers included, now that the B2C interview chain in
+    # app/routers/ai_chat.py starts on a live model — is guarded here so a retired id can
+    # never creep back into a chain.
     offenders = []
+    scanned_routers = False
     for path in sorted(APP_DIR.rglob("*.py")):
         relative = path.relative_to(APP_DIR.parent).as_posix()
-        if relative.startswith("app/routers/"):
-            continue
+        scanned_routers = scanned_routers or relative.startswith("app/routers/")
         tree = ast.parse(path.read_text(encoding="utf-8"))
         for chain in _string_lists_bound_as_model_defaults(tree):
             for element in chain.elts:
                 if isinstance(element, ast.Constant) and isinstance(element.value, str):
                     if element.value.startswith(("gemini-2.5", "gemini-2.0", "gemini-1.5")):
                         offenders.append(f"{relative}:{element.lineno} {element.value}")
+    assert scanned_routers  # the scan must actually cover app/routers/
     assert not offenders, offenders
 
 

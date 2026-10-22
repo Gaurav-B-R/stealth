@@ -8,14 +8,18 @@ only shapes the context, so every message stays attributable to the staff user.
 Context = the client's CRM profile + org-uploaded client documents
 (extracted_text) + the consultancy's own case pipeline for the client's destination.
 Generation reuses the B2C chat model helpers (app/routers/ai_chat.py) so both
-copilots share provider selection, model candidates, and inline-attachment
-handling. Usage is recorded under the `enterprise_copilot_extension` source
-with the organization attributed; billing (org credit wallet) is enforced by
-the caller in routers/enterprise.py, mirroring the dashboard copilot.
+copilots share provider selection and inline-attachment handling. The STAFF
+surface runs on the enterprise cheap model chain (see staff_model_candidates);
+the client-link surface keeps the general chat chain. Usage is recorded under
+the `enterprise_copilot_extension` source with the organization attributed;
+billing (org credit wallet) is enforced by the caller in routers/enterprise.py,
+mirroring the dashboard copilot.
 """
 
 import logging
+import os
 import re
+from decimal import Decimal
 from typing import List, Optional
 
 from sqlalchemy.orm import Session
@@ -47,6 +51,47 @@ DOC_TEXT_CAP_TOTAL = 60_000
 HISTORY_MAX_TURNS = 200
 HISTORY_CAP_PER_TURN = 4_000
 HISTORY_CAP_TOTAL = 60_000
+
+
+def _int_env(env_key: str, default_value: int, minimum: int = 1) -> int:
+    """Env-overridable integer; a blank, malformed or below-minimum value keeps the default."""
+    raw = os.getenv(env_key, "").strip()
+    if not raw:
+        return default_value
+    try:
+        value = int(raw)
+    except ValueError:
+        return default_value
+    return value if value >= minimum else default_value
+
+
+# Output cap for a staff turn the wallet can only PARTLY cover (credits.copilot_turn_budget
+# returned a cost budget). The dashboard assistant enforces such a budget by stopping its
+# tool loop part-way; this surface is ONE model call, so there is nothing to stop part-way —
+# the prompt side is already bounded by the document/history caps above, and the only cost
+# the call itself can still grow is its output. Capping that is how a budget is respected
+# here. 4096 is deliberately the same headroom the B2C interview turns measured as safe on
+# thinking models (their private reasoning counts against max_output_tokens; a cap sized for
+# the visible reply alone returns MAX_TOKENS with no text). At Flash-Lite's output rate it is
+# well under one metered message of spend; an unbudgeted turn is never capped.
+COPILOT_BUDGET_MAX_OUTPUT_TOKENS = _int_env("ENTERPRISE_COPILOT_BUDGET_MAX_OUTPUT_TOKENS", 4096)
+
+
+def staff_model_candidates() -> List[str]:
+    """Model chain for the STAFF Copilot (Chrome extension): ENTERPRISE_COPILOT_MODEL /
+    ENTERPRISE_COPILOT_MODEL_CANDIDATES first, then the shared cheap chain.
+
+    It used to read the B2C chat's RILONO_AI_CHAT_MODEL pair and fall back to the app-wide
+    default (3.1 Pro first). Staff turns are metered per message against the org wallet,
+    exactly like the dashboard assistant, which already defaults to the cheap chain — so this
+    surface does too, and gets its OWN override pair: a B2C setting (the README's example even
+    names a retired 2.5 id) must not silently re-route, and re-price, enterprise turns.
+    """
+    return gemini_utils.get_model_candidates(
+        primary_env="ENTERPRISE_COPILOT_MODEL",
+        candidates_env="ENTERPRISE_COPILOT_MODEL_CANDIDATES",
+        defaults=gemini_utils.CHEAP_MODEL_CANDIDATES,
+    )
 
 
 def is_provider_available() -> bool:
@@ -385,6 +430,7 @@ def run_enterprise_copilot_chat(
     conversation_history: Optional[List[dict]] = None,
     session_attachments=None,
     ctx=None,
+    cost_budget_usd: Optional[Decimal] = None,
 ) -> "ChatTurnResult":
     """Generate one staff-mode Copilot reply.
 
@@ -399,6 +445,12 @@ def run_enterprise_copilot_chat(
     split the dashboard assistant enforces on its tools. Without it, a member deliberately
     denied `clients.view_sensitive` or `documents.download` could read passport numbers
     and raw document text just by asking the Copilot instead of opening the record.
+
+    `cost_budget_usd` is the reservation from credits.copilot_turn_budget: None for a turn
+    the wallet can fully cover (unchanged behaviour), a Decimal when it can only partly cover
+    it. A single call cannot be stopped part-way, so a budgeted turn is instead made with its
+    output capped at COPILOT_BUDGET_MAX_OUTPUT_TOKENS — the one part of the call's cost the
+    prompt caps above do not already bound.
 
     Raises on provider failure — the caller maps that to a 502 and only meters after
     success.
@@ -465,15 +517,16 @@ Please provide a helpful response:"""
     else:
         raise RuntimeError("Rilono AI model provider is not available.")
 
-    model_candidates = gemini_utils.get_model_candidates(
-        primary_env="RILONO_AI_CHAT_MODEL",
-        candidates_env="RILONO_AI_CHAT_MODEL_CANDIDATES",
+    model_candidates = staff_model_candidates()
+    generation_config = (
+        {"max_output_tokens": COPILOT_BUDGET_MAX_OUTPUT_TOKENS}
+        if cost_budget_usd is not None else None
     )
 
     # Privacy: never log message or client content — operational marker only.
     logger.info(
-        "Enterprise copilot chat: org_id=%s client_id=%s attachments=%s",
-        organization.id, client.id, len(session_attachments or []),
+        "Enterprise copilot chat: org_id=%s client_id=%s attachments=%s budgeted=%s",
+        organization.id, client.id, len(session_attachments or []), cost_budget_usd is not None,
     )
 
     response = None
@@ -481,7 +534,7 @@ Please provide a helpful response:"""
     used_model = None
     for model_name in model_candidates:
         try:
-            model = b2c_chat._build_ai_chat_model(provider, model_name)
+            model = b2c_chat._build_ai_chat_model(provider, model_name, generation_config)
             response = b2c_chat._generate_with_ai_chat_model(
                 model=model,
                 provider=provider,

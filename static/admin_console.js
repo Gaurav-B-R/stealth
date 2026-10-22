@@ -41,6 +41,11 @@ const state = {
     couponOrg: null,            // { id, company } currently open in the discount modal
     couponList: [],
     couponLoading: false,
+    // Billing controls on the account modal: the open tab survives the re-render that
+    // follows every save, and the last result (with any server warnings) is shown above the
+    // forms for THAT org only — a notice must never appear on a different account.
+    billingTab: 'payment',
+    billingNotice: null,        // { orgId, tone: 'success'|'info', text, warnings: [] }
     enterpriseFilters: {
         search: ''
     },
@@ -327,10 +332,17 @@ function deniedAdminResponse(message, status = 403) {
     return { ok: false, status, headers: { get: () => null }, json: async () => ({ detail: message }) };
 }
 
+// Writes the server files under the Admin ("delete") role rather than Editor: refunds, and
+// the billing controls that hand out plan time or credits without a gateway payment
+// (app/routers/admin.py "Billing controls"). Mirrored here so an Editor's click is refused
+// before a request is sent, with the same message the server would give.
+const ADMIN_ROLE_WRITE_PATH_RE = /\/enterprise\/accounts\/[^/]+\/(?:refunds|offline-payment|credits\/adjust|overrides)$/;
+
 async function adminFetch(url, options = {}) {
     const section = adminRequestSection(url);
     const method = String(options.method || 'GET').toUpperCase();
-    const destructive = method === 'DELETE' || (method === 'POST' && /\/enterprise\/accounts\/[^/]+\/refunds$/.test(String(url).split('?')[0]));
+    const destructive = method === 'DELETE'
+        || (['POST', 'PUT'].includes(method) && ADMIN_ROLE_WRITE_PATH_RE.test(String(url).split('?')[0]));
     const allowed = section && (destructive ? canDeleteSection(section)
         : ['GET', 'HEAD'].includes(method) ? canAccessSection(section) : canWriteSection(section));
     if (!allowed || (String(url).split('?')[0].endsWith('/enterprise/credentials') && !canProvisionEnterprise())) {
@@ -377,6 +389,7 @@ function clearPrivilegedState() {
     state.financeAnalytics = null; state.financeLoading = false;
     state.accountDetails = null;
     state.couponOrg = null; state.couponList = []; state.couponLoading = false;
+    state.billingNotice = null; state.billingTab = 'payment';
     state.aiUsageRequestId += 1; state.aiUsageData = null; state.aiSeries = [];
     state.aiProfiles.requestId += 1; state.aiProfiles.data = null; state.aiProfiles.total = 0;
     state.aiProfiles.loading = false; state.aiProfiles.exporting = false;
@@ -4513,6 +4526,8 @@ async function openCouponModal(orgId, company) {
     if (!canAccessSection('enterprise')) return;
     state.couponOrg = { id: orgId, company };
     state.couponList = [];
+    state.billingNotice = null;
+    state.billingTab = 'payment';
     if (refs.couponModalTitle) refs.couponModalTitle.textContent = 'Manage account';
     if (refs.couponModalSubtitle) refs.couponModalSubtitle.textContent = company;
     refs.couponForm?.reset();
@@ -4574,7 +4589,8 @@ function renderAccountDetails(data) {
     if (subx.monthly_display && !subx.is_sandbox) {
         planBits.push(`${escapeHtml(subx.monthly_display)}/mo${subx.tax_label ? ' + ' + escapeHtml(subx.tax_label) : ''}`);
     }
-    planBits.push(`${Number(subx.clients_used || 0).toLocaleString()} / ${capWord(subx.max_clients)} clients`);
+    // Pricing v2 counts OPEN files only (closed/approved/rejected don't use the limit).
+    planBits.push(`${Number(subx.open_files_used ?? subx.clients_used ?? 0).toLocaleString()} / ${capWord(subx.max_open_files ?? subx.max_clients)} open files`);
     planBits.push(`${Number(subx.seats_used || 0).toLocaleString()} / ${capWord(subx.max_seats)} seats`);
     if (subx.included_credits) planBits.push(`${Number(subx.included_credits).toLocaleString()} credits${subx.credits_recur ? '/mo' : ' once'}`);
     if (subx.grandfathered) planBits.push('<em>grandfathered</em>');
@@ -4618,6 +4634,7 @@ function renderAccountDetails(data) {
                 <small>${escapeHtml(totalPaidSub)}</small></article>
         </div>
         <p class="account-meta-line">Plan: ${planBits.join(' · ')}</p>
+        ${buildBillingFactsLine(data)}
         ${Number(totals.infra_revenue_paise || 0) > 0 ? `<p class="account-meta-line">Infrastructure fee (retired): ${escapeHtml(moneyOr(totals.infra_revenue_display, totalsCurrency))} paid historically</p>` : ''}
         ${uncountedNote}${mixedRefundNote}`;
 
@@ -4690,13 +4707,16 @@ function renderAccountDetails(data) {
     state.accountDetails = data;
     const refundsBlock = buildRefundsHistoryBlock(data);
     const refundFormBlock = buildRefundFormBlock(data);
+    const planPaymentsBlock = buildPlanPaymentsBlock(data);
+    const billingControlsBlock = buildBillingControlsBlock(data);
 
     refs.accountDetails.innerHTML =
         `<h4 class="account-section-title">Wallet &amp; billing</h4>` +
         `<p class="account-meta-line" style="margin-top:-0.2rem">${metaBits.join(' · ')}</p>` +
-        metrics + purchasesBlock + refundFormBlock + refundsBlock + activityBlock;
+        metrics + planPaymentsBlock + billingControlsBlock + purchasesBlock + refundFormBlock + refundsBlock + activityBlock;
 
     wireRefundForm(data);
+    wireBillingControls(data);
     applyAdminPermissions();
 }
 
@@ -4919,6 +4939,421 @@ async function issueRefund(button, body) {
         button.disabled = false;
         button.textContent = originalLabel;
     }
+}
+
+// ---------------------------------------------------------------------------
+// Billing controls (Admin role): record an offline plan payment, adjust credits / grant the
+// demo-call bonus, edit Branch Packs, limit overrides and the trial end.
+// Server: app/routers/admin.py "Billing controls". Every amount sent is an INTEGER IN THE
+// MINOR UNIT of its currency, converted in ONE place (billingMajorToMinor) — the same rule
+// as the refund form.
+// ---------------------------------------------------------------------------
+
+const BILLING_OVERRIDE_FIELDS = [
+    // [request field, input id, label]
+    ['max_seats', 'billingOvSeats', 'Staff seats'],
+    ['max_clients', 'billingOvFiles', 'Open files'],
+    ['included_credits', 'billingOvCredits', 'AI credits / period'],
+    ['monthly_reads', 'billingOvReads', 'AI reads / period']
+];
+
+function billingInput(id) {
+    return document.getElementById(id) || {};
+}
+
+// '4,718.82' (INR) → 471882. NaN for anything that is not a plain non-negative amount with
+// at most the currency's decimals — a third decimal on a rupee figure is a typo, not paise.
+function billingMajorToMinor(value, currency) {
+    const raw = String(value ?? '').replace(/,/g, '').trim();
+    if (!raw) return NaN;
+    const exponent = currencyExponent(currency);
+    const pattern = exponent === 0 ? /^\d+$/ : new RegExp(`^\\d+(?:\\.\\d{1,${exponent}})?$`);
+    if (!pattern.test(raw)) return NaN;
+    return Math.round(Number(raw) * Math.pow(10, exponent));
+}
+
+// '' → null (back to the plan default); a whole number ≥ 0 → that number; else NaN.
+function billingOptionalCount(value) {
+    const raw = String(value ?? '').trim();
+    if (!raw) return null;
+    return /^\d+$/.test(raw) ? Number(raw) : NaN;
+}
+
+function billingDateInputValue(iso) {
+    if (!iso) return '';
+    const match = String(iso).match(/^(\d{4}-\d{2}-\d{2})/);
+    return match ? match[1] : '';
+}
+
+function billingListPrice(controls, plan, cycle, currency) {
+    return (controls.price_list || []).find((row) => row.plan === plan && row.billing_cycle === cycle
+        && row.currency === currencyCode(currency)) || null;
+}
+
+function buildBillingFactsLine(data) {
+    const subx = data.subscription || {};
+    const controls = data.billing_controls || {};
+    const bits = [];
+    const reads = subx.reads || {};
+    if (reads.unlimited) {
+        bits.push('AI reads unlimited');
+    } else if (reads.granted != null) {
+        bits.push(`${Number(reads.remaining ?? 0).toLocaleString()} / ${Number(reads.granted || 0).toLocaleString()} AI reads left`);
+    }
+    const packs = Number(controls.branch_packs || 0);
+    if (packs > 0) {
+        bits.push(`${packs} Branch Pack${packs === 1 ? '' : 's'}${controls.branch_packs_applied ? '' : ' (not applied — no paid plan)'}`);
+    }
+    const overrides = controls.overrides || {};
+    const set = BILLING_OVERRIDE_FIELDS.filter(([key]) => overrides[key] != null)
+        .map(([key, , label]) => `${label.toLowerCase()} ${Number(overrides[key]).toLocaleString()}`);
+    if (set.length) {
+        bits.push(`overrides: ${set.join(', ')}${controls.overrides_applied === false ? ' (not applied — plan lapsed)' : ''}`);
+    }
+    if (controls.demo_bonus_granted_at) bits.push(`demo bonus granted ${formatDateTime(controls.demo_bonus_granted_at)}`);
+    if (subx.is_sandbox && controls.trial_ends_at) bits.push(`trial ends ${formatDateTime(controls.trial_ends_at)}`);
+    if (controls.trial_domain_blocked) bits.push('company domain already used a trial');
+    if (!bits.length && !subx.ai_paused) return '';
+    const paused = subx.ai_paused ? ` · <em>AI paused${subx.ai_paused_reason ? ` (${escapeHtml(String(subx.ai_paused_reason).replace(/_/g, ' '))})` : ''}</em>` : '';
+    return `<p class="account-meta-line">${bits.map(escapeHtml).join(' · ')}${paused}</p>`;
+}
+
+function buildPlanPaymentsBlock(data) {
+    const rows = Array.isArray(data.plan_payments) ? data.plan_payments : [];
+    if (!rows.length) return '';
+    const body = rows.map((p) => {
+        let statusCls = 'created';
+        if (p.status === 'verified') statusCls = 'verified';
+        else if (p.status === 'failed') statusCls = 'failed';
+        else if (p.status === 'refunded' || p.status === 'partially_refunded') statusCls = 'refunded';
+        const statusLabel = String(p.status || '').replace(/_/g, ' ');
+        const offlineTag = p.is_offline ? ' <span class="account-coupon-tag">offline</span>' : '';
+        const reference = p.reference ? `<div class="enterprise-meta">${escapeHtml(p.reference)}</div>` : '';
+        const recordedBy = (p.is_offline && p.created_by_name)
+            ? `<div class="enterprise-meta">recorded by ${escapeHtml(p.created_by_name)}</div>` : '';
+        // Tax is shown only when the row actually carries some — a 0% GST payment has no line.
+        const tax = p.tax_display ? `<div class="enterprise-meta">incl. ${escapeHtml(p.tax_label || 'tax')} ${escapeHtml(p.tax_display)}</div>` : '';
+        const settled = (currencyCode(p.currency) !== 'INR' && p.settled_inr_display)
+            ? `<div class="enterprise-meta">settled ${escapeHtml(p.settled_inr_display)}</div>` : '';
+        const list = p.original_amount_display ? `<div class="enterprise-meta">list ${escapeHtml(p.original_amount_display)}</div>` : '';
+        return `<tr>
+            <td>${escapeHtml(formatDateTime(p.verified_at || p.created_at))}</td>
+            <td>${escapeHtml(p.plan_label || p.plan || '—')}<div class="enterprise-meta">${escapeHtml(p.billing_cycle || 'monthly')}</div></td>
+            <td>${escapeHtml(moneyOr(p.amount_display, p.currency))}${tax}${settled}${list}</td>
+            <td>${escapeHtml(p.provider_label || p.provider || '—')}${offlineTag}${reference}${recordedBy}</td>
+            <td><span class="account-status-chip ${statusCls}">${escapeHtml(statusLabel)}</span></td>
+        </tr>`;
+    }).join('');
+    return `
+        <h4 class="account-section-title">Plan payments</h4>
+        <div class="coupon-list-wrap">
+            <table class="users-table">
+                <thead><tr><th>Date</th><th>Plan</th><th>Amount</th><th>Method</th><th>Status</th></tr></thead>
+                <tbody>${body}</tbody>
+            </table>
+        </div>`;
+}
+
+function buildBillingNotice() {
+    const notice = state.billingNotice;
+    if (!notice || !state.couponOrg || notice.orgId !== state.couponOrg.id) return '';
+    const warnings = (notice.warnings || []).map((w) => `<li>${escapeHtml(w)}</li>`).join('');
+    return `<div id="billingNotice" class="billing-notice ${notice.tone === 'success' ? 'success' : 'info'}">
+        <p>${escapeHtml(notice.text)}</p>${warnings ? `<ul>${warnings}</ul>` : ''}</div>`;
+}
+
+function buildBillingControlsBlock(data) {
+    if (!canDeleteSection('enterprise')) return '';
+    const c = data.billing_controls;
+    if (!c) return '';
+    const tab = ['payment', 'credits', 'overrides'].includes(state.billingTab) ? state.billingTab : 'payment';
+    const option = (value, label, selected) => `<option value="${escapeHtml(value)}"${selected ? ' selected' : ''}>${escapeHtml(label)}</option>`;
+
+    const subPlan = (data.subscription || {}).plan;
+    const defaultPlan = (c.plans || []).some((p) => p.key === subPlan) ? subPlan : ((c.plans || [])[0] || {}).key;
+    const defaultCurrency = currencyCode(c.default_currency || 'INR');
+    const planOptions = (c.plans || []).map((p) => option(p.key, p.label, p.key === defaultPlan)).join('');
+    const providerOptions = (c.providers || []).map((p) => option(p.key, p.label, p.key === 'bank_transfer')).join('');
+    const currencyOptions = (c.currencies || ['INR']).map((code) => option(code, code, code === defaultCurrency)).join('');
+    const days = c.period_days || {};
+    const yearlyLabel = `Yearly (${Number(days.yearly || 365)} days${c.yearly_enabled ? '' : ' — invoice sale; self-serve yearly is off'})`;
+
+    const paymentInner = c.billing_enabled === false
+        ? '<p class="account-details-status">Billing is switched off (ENTERPRISE_FREE), so there is no plan to activate.</p>'
+        : `
+            <div class="refund-grid">
+                <label class="coupon-field"><span>Plan</span><select id="billingPayPlan">${planOptions}</select></label>
+                <label class="coupon-field"><span>Billing cycle</span><select id="billingPayCycle">
+                    ${option('monthly', `Monthly (${Number(days.monthly || 30)} days)`, true)}${option('yearly', yearlyLabel, false)}</select></label>
+                <label class="coupon-field"><span>Method</span><select id="billingPayProvider">${providerOptions}</select></label>
+                <label class="coupon-field"><span>Currency</span><select id="billingPayCurrency">${currencyOptions}</select></label>
+                <label class="coupon-field"><span id="billingPayAmountLabel">Amount received, incl. tax (${escapeHtml(currencyInputLabel(defaultCurrency))})</span>
+                    <input type="text" inputmode="decimal" id="billingPayAmount" placeholder="0.00" autocomplete="off"></label>
+                <label class="coupon-field"><span id="billingPayTaxLabel">Tax inside that amount (optional)</span>
+                    <input type="text" inputmode="decimal" id="billingPayTax" placeholder="auto" autocomplete="off"></label>
+                <label class="coupon-field" id="billingPaySettledField"${defaultCurrency === 'INR' ? ' hidden' : ''}><span>INR that settled (₹)</span>
+                    <input type="text" inputmode="decimal" id="billingPaySettled" placeholder="from the bank credit advice" autocomplete="off"></label>
+                <label class="coupon-field"><span>Reference (UTR / pay_… id / invoice no.)</span>
+                    <input type="text" id="billingPayReference" maxlength="80" autocomplete="off"></label>
+                <label class="coupon-field coupon-field-wide"><span>Note (optional)</span>
+                    <input type="text" id="billingPayNote" maxlength="500" placeholder="e.g. NEFT after the demo call"></label>
+            </div>
+            <p id="billingPayHint" class="account-meta-line" style="margin:-0.3rem 0 0.6rem"></p>
+            <button type="button" id="billingPayBtn" class="primary-btn small-btn">Record payment</button>
+            <p class="account-meta-line" style="margin:0.4rem 0 0">Activates the plan, extends it from the current end date (or today, if it has lapsed) and grants this period's credits. Recording the same reference again changes nothing.</p>`;
+
+    const bonus = Number(c.demo_bonus_credits || 0);
+    let demoInner;
+    if (c.demo_bonus_granted_at) {
+        demoInner = `<p id="billingDemoStatus" class="account-meta-line" style="margin:0">Demo-call bonus granted ${escapeHtml(formatDateTime(c.demo_bonus_granted_at))} — it can be given once per account.</p>`;
+    } else if (bonus > 0) {
+        demoInner = `<button type="button" id="billingDemoBtn" class="primary-btn small-btn">Grant demo-call bonus (+${bonus.toLocaleString()} credits)</button>`;
+    } else {
+        demoInner = '<p id="billingDemoStatus" class="account-meta-line" style="margin:0">The demo-call bonus is switched off.</p>';
+    }
+    const caps = c.caps || {};
+    const creditsInner = `
+            <div class="refund-grid">
+                <label class="coupon-field"><span>Credits (negative to deduct)</span>
+                    <input type="number" id="billingAdjustCredits" step="1" placeholder="e.g. 50 or -20"></label>
+                <label class="coupon-field coupon-field-wide"><span>Reason (shown in the customer's credit history)</span>
+                    <input type="text" id="billingAdjustReason" maxlength="200" placeholder="e.g. Goodwill — Deep Scan failed twice"></label>
+            </div>
+            <button type="button" id="billingAdjustBtn" class="primary-btn small-btn">Apply adjustment</button>
+            <p class="account-meta-line" style="margin:0.4rem 0 0.9rem">No money moves. A deduction stops at the current balance${caps.credit_adjust_max ? `; at most ${Number(caps.credit_adjust_max).toLocaleString()} credits per adjustment` : ''}.</p>
+            ${demoInner}`;
+
+    const defaults = c.plan_defaults || {};
+    const overrides = c.overrides || {};
+    const pack = c.branch_pack || {};
+    const overrideInputs = BILLING_OVERRIDE_FIELDS.map(([key, id, label]) => `
+                <label class="coupon-field"><span>${escapeHtml(label)}</span>
+                    <input type="number" id="${id}" min="0" step="1" value="${overrides[key] != null ? escapeHtml(String(overrides[key])) : ''}"
+                        placeholder="${defaults[key] != null ? `Plan default: ${escapeHtml(Number(defaults[key]).toLocaleString())}` : 'Plan default'}"></label>`).join('');
+    const overridesInner = `
+            <div class="refund-grid">
+                <label class="coupon-field"><span>Branch Packs</span>
+                    <input type="number" id="billingOvPacks" min="0" step="1" value="${escapeHtml(String(Number(c.branch_packs || 0)))}"></label>
+                <label class="coupon-field"><span>Trial ends (UTC, end of day)</span>
+                    <input type="date" id="billingOvTrial" value="${escapeHtml(billingDateInputValue(c.trial_ends_at))}"></label>
+                ${overrideInputs}
+            </div>
+            <button type="button" id="billingOvBtn" class="primary-btn small-btn">Save limits</button>
+            <p class="account-meta-line" style="margin:0.4rem 0 0">Each Branch Pack adds +${Number(pack.open_files || 0).toLocaleString()} open files, +${Number(pack.seats || 0).toLocaleString()} seats, +${Number(pack.credits || 0).toLocaleString()} credits and +${Number(pack.reads || 0).toLocaleString()} reads a month on a paid plan. Leave a limit empty for the plan default; an override replaces it and packs add on top. A raised allowance is granted now; a lower one applies from the next period.</p>`;
+
+    const tabButton = (mode, label) => `<button type="button" class="billing-tab${tab === mode ? ' active' : ''}" data-billing-mode="${mode}">${label}</button>`;
+    const pane = (mode, inner) => `<div class="billing-mode${tab === mode ? '' : ' hidden'}" data-mode="${mode}">${inner}</div>`;
+    return `
+        <h4 class="account-section-title">Billing controls</h4>
+        ${buildBillingNotice()}
+        <div class="billing-tabs">
+            ${tabButton('payment', 'Record offline payment')}${tabButton('credits', 'Credits')}${tabButton('overrides', 'Limits &amp; trial')}
+        </div>
+        ${pane('payment', paymentInner)}${pane('credits', creditsInner)}${pane('overrides', overridesInner)}
+        <p id="billingFormError" class="coupon-form-error" hidden></p>`;
+}
+
+function setBillingError(message) {
+    const el = document.getElementById('billingFormError');
+    if (!el) return;
+    if (!message) { el.hidden = true; el.textContent = ''; return; }
+    el.textContent = message;
+    el.hidden = false;
+}
+
+function syncOfflinePaymentForm(controls) {
+    const currency = currencyCode(billingInput('billingPayCurrency').value || 'INR');
+    const label = document.getElementById('billingPayAmountLabel');
+    if (label) label.textContent = `Amount received, incl. tax (${currencyInputLabel(currency)})`;
+    const settledField = document.getElementById('billingPaySettledField');
+    if (settledField) settledField.hidden = currency === 'INR';
+    const hint = document.getElementById('billingPayHint');
+    if (!hint) return;
+    const price = billingListPrice(controls, billingInput('billingPayPlan').value, billingInput('billingPayCycle').value, currency);
+    hint.textContent = price ? `List price: ${price.total_display}${price.tax_minor ? ' including tax' : ''}.` : '';
+}
+
+// Reads the offline-payment form into the request body, or { error } without sending.
+function readOfflinePaymentForm(controls) {
+    const plan = String(billingInput('billingPayPlan').value || '');
+    const cycle = billingInput('billingPayCycle').value === 'yearly' ? 'yearly' : 'monthly';
+    const provider = String(billingInput('billingPayProvider').value || '');
+    const currency = currencyCode(billingInput('billingPayCurrency').value || 'INR');
+    const reference = String(billingInput('billingPayReference').value || '').trim();
+    const note = String(billingInput('billingPayNote').value || '').trim();
+    if (!plan) return { error: 'Choose the plan that was paid for.' };
+    const amountMinor = billingMajorToMinor(billingInput('billingPayAmount').value, currency);
+    if (!Number.isFinite(amountMinor) || amountMinor <= 0) {
+        return { error: `Enter the amount received in ${currency}, e.g. 4718.82.` };
+    }
+    const caps = controls.caps || {};
+    if (caps.offline_payment_max_minor && amountMinor > Number(caps.offline_payment_max_minor)) {
+        return { error: `That is more than ${formatMinor(caps.offline_payment_max_minor, currency)} — check the amount.` };
+    }
+    const body = { plan, billing_cycle: cycle, provider, currency, amount_minor: amountMinor, reference };
+    const taxRaw = String(billingInput('billingPayTax').value || '').trim();
+    if (taxRaw) {
+        const taxMinor = billingMajorToMinor(taxRaw, currency);
+        if (!Number.isFinite(taxMinor) || taxMinor >= amountMinor) {
+            return { error: 'Tax must be a plain amount smaller than the amount received (or empty for automatic).' };
+        }
+        body.tax_minor = taxMinor;
+    }
+    if (currency !== 'INR') {
+        const settled = billingMajorToMinor(billingInput('billingPaySettled').value, 'INR');
+        if (!Number.isFinite(settled) || settled <= 0) {
+            return { error: `Enter the INR amount that settled for this ${currency} payment.` };
+        }
+        body.settled_inr_minor = settled;
+    }
+    if (!/^[A-Za-z0-9][A-Za-z0-9._/#:-]{2,79}$/.test(reference)) {
+        return { error: 'Enter the payment reference (UTR, pay_… id or invoice number) — 3 to 80 characters, no spaces.' };
+    }
+    if (note) body.note = note;
+    return { body };
+}
+
+// Reads the limits form and returns only what CHANGED, so saving never resets a value
+// another admin set while this modal was open. { error } on bad input.
+function readOverridesForm(controls) {
+    const body = {};
+    const lines = [];
+    const overrides = controls.overrides || {};
+    const defaults = controls.plan_defaults || {};
+    const packs = billingOptionalCount(billingInput('billingOvPacks').value);
+    if (Number.isNaN(packs)) return { error: 'Branch Packs must be a whole number (0 for none).' };
+    const packsValue = packs == null ? 0 : packs;
+    if (packsValue !== Number(controls.branch_packs || 0)) {
+        body.branch_packs = packsValue;
+        lines.push(`Branch Packs: ${Number(controls.branch_packs || 0)} → ${packsValue}`);
+    }
+    for (const [key, id, label] of BILLING_OVERRIDE_FIELDS) {
+        const value = billingOptionalCount(billingInput(id).value);
+        if (Number.isNaN(value)) return { error: `${label} must be a whole number, or empty for the plan default.` };
+        const current = overrides[key] != null ? Number(overrides[key]) : null;
+        if (value !== current) {
+            body[key] = value;
+            const shown = (v) => (v == null ? `plan default${defaults[key] != null ? ` (${Number(defaults[key]).toLocaleString()})` : ''}` : Number(v).toLocaleString());
+            lines.push(`${label}: ${shown(current)} → ${shown(value)}`);
+        }
+    }
+    const trial = String(billingInput('billingOvTrial').value || '').trim();
+    const currentTrial = billingDateInputValue(controls.trial_ends_at);
+    if (trial && trial !== currentTrial) {
+        body.trial_ends_at = trial;
+        lines.push(`Trial ends: ${currentTrial || 'not set'} → ${trial} (end of day, UTC)`);
+    }
+    if (!lines.length) return { error: 'Nothing changed.' };
+    return { body, lines };
+}
+
+async function submitBillingControl(button, path, method, body, fallbackMessage) {
+    if (!requireAdminPermission('enterprise', 'delete')) return null;
+    if (!state.couponOrg) return null;
+    if (!await ensureAdminProtection({ silent: false })) return null;
+    const orgId = state.couponOrg.id;
+    const originalLabel = button.textContent;
+    button.disabled = true;
+    button.textContent = 'Saving…';
+    try {
+        const response = await adminFetch(`${API_BASE}/api/admin/enterprise/accounts/${orgId}/${path}`, {
+            method,
+            headers: buildAuthHeaders({ 'Content-Type': 'application/json' }),
+            credentials: 'same-origin',
+            body: JSON.stringify(body)
+        });
+        const payload = await response.json().catch(() => ({}));
+        if (!response.ok) {
+            setBillingError(normalizeErrorMessage(payload, fallbackMessage));
+            return null;
+        }
+        // A replay (duplicate payment / bonus already given) or any server warning is
+        // information the admin must read, so it is not styled as a plain success.
+        const warnings = Array.isArray(payload.warnings) ? payload.warnings.filter(Boolean) : [];
+        const neutral = payload.duplicate || payload.already_granted || payload.changed === false || warnings.length;
+        state.billingNotice = { orgId, tone: neutral ? 'info' : 'success', text: payload.message || 'Saved.', warnings };
+        await loadAccountDetails();
+        await loadEnterpriseAccounts({ silent: true }).catch(() => {});
+        return payload;
+    } catch (error) {
+        console.error('Billing control failed:', error);
+        setBillingError('Could not reach the server. Please retry.');
+        return null;
+    } finally {
+        button.disabled = false;
+        button.textContent = originalLabel;
+    }
+}
+
+function wireBillingControls(data) {
+    const controls = data.billing_controls;
+    if (!controls || !canDeleteSection('enterprise')) return;
+    const company = () => (state.couponOrg && state.couponOrg.company) || 'this account';
+
+    document.querySelectorAll('.billing-tab').forEach((tab) => {
+        tab.addEventListener('click', () => {
+            const mode = tab.dataset.billingMode;
+            state.billingTab = mode;
+            document.querySelectorAll('.billing-tab').forEach((t) => t.classList.toggle('active', t === tab));
+            document.querySelectorAll('.billing-mode').forEach((m) => m.classList.toggle('hidden', m.dataset.mode !== mode));
+            setBillingError('');
+        });
+    });
+
+    // --- offline payment ---
+    ['billingPayPlan', 'billingPayCycle', 'billingPayCurrency'].forEach((id) => {
+        document.getElementById(id)?.addEventListener('change', () => syncOfflinePaymentForm(controls));
+    });
+    if (document.getElementById('billingPayPlan')) syncOfflinePaymentForm(controls);
+    const payBtn = document.getElementById('billingPayBtn');
+    if (payBtn) payBtn.addEventListener('click', async () => {
+        setBillingError('');
+        const { body, error } = readOfflinePaymentForm(controls);
+        if (error) { setBillingError(error); return; }
+        const planLabel = ((controls.plans || []).find((p) => p.key === body.plan) || {}).label || body.plan;
+        const providerLabel = ((controls.providers || []).find((p) => p.key === body.provider) || {}).label || body.provider;
+        const days = (controls.period_days || {})[body.billing_cycle] || (body.billing_cycle === 'yearly' ? 365 : 30);
+        const amountText = formatMinor(body.amount_minor, body.currency);
+        const message = `Record ${amountText} (${body.currency}) received by ${providerLabel}, reference ${body.reference}, for ${company()}?\n`
+            + `This activates ${planLabel} (${body.billing_cycle}) and extends it by ${days} days. It can't be undone from the console.`;
+        if (!(await confirmDialog(message, { title: 'Record offline payment?', okText: `Record ${amountText}`, danger: false }))) return;
+        await submitBillingControl(payBtn, 'offline-payment', 'POST', body, 'Could not record the payment.');
+    });
+
+    // --- credits ---
+    const adjustBtn = document.getElementById('billingAdjustBtn');
+    if (adjustBtn) adjustBtn.addEventListener('click', async () => {
+        setBillingError('');
+        const raw = String(billingInput('billingAdjustCredits').value ?? '').trim();
+        const credits = /^-?\d+$/.test(raw) ? Number(raw) : NaN;
+        const reason = String(billingInput('billingAdjustReason').value || '').trim();
+        if (!Number.isFinite(credits) || credits === 0) { setBillingError('Enter a whole number of credits (negative to deduct).'); return; }
+        const cap = Number((controls.caps || {}).credit_adjust_max || 0);
+        if (cap && Math.abs(credits) > cap) { setBillingError(`At most ${cap.toLocaleString()} credits per adjustment.`); return; }
+        if (reason.length < 3) { setBillingError('Give a reason — the customer sees it in their credit history.'); return; }
+        const verb = credits > 0 ? `Add ${credits.toLocaleString()} credits to` : `Deduct ${Math.abs(credits).toLocaleString()} credits from`;
+        const tail = credits > 0 ? '' : ' A deduction stops at the current balance.';
+        if (!(await confirmDialog(`${verb} ${company()}?\nReason: ${reason}.${tail}`, { title: 'Adjust credits?', okText: credits > 0 ? 'Add credits' : 'Deduct credits', danger: credits < 0 }))) return;
+        await submitBillingControl(adjustBtn, 'credits/adjust', 'POST', { kind: 'adjustment', credits, reason }, 'Could not adjust credits.');
+    });
+    const demoBtn = document.getElementById('billingDemoBtn');
+    if (demoBtn) demoBtn.addEventListener('click', async () => {
+        setBillingError('');
+        const bonus = Number(controls.demo_bonus_credits || 0);
+        if (!(await confirmDialog(`Grant the one-time ${bonus.toLocaleString()}-credit demo-call bonus to ${company()}? It can only be given once per account.`, { title: 'Grant demo-call bonus?', okText: 'Grant bonus', danger: false }))) return;
+        const reason = String(billingInput('billingAdjustReason').value || '').trim();
+        await submitBillingControl(demoBtn, 'credits/adjust', 'POST', { kind: 'demo_call_bonus', reason }, 'Could not grant the bonus.');
+    });
+
+    // --- limits & trial ---
+    const ovBtn = document.getElementById('billingOvBtn');
+    if (ovBtn) ovBtn.addEventListener('click', async () => {
+        setBillingError('');
+        const { body, lines, error } = readOverridesForm(controls);
+        if (error) { setBillingError(error); return; }
+        if (!(await confirmDialog(`Change limits for ${company()}?\n${lines.join('\n')}`, { title: 'Save limits?', okText: 'Save limits', danger: false }))) return;
+        await submitBillingControl(ovBtn, 'overrides', 'PUT', body, 'Could not save the limits.');
+    });
 }
 
 function closeCouponModal() {

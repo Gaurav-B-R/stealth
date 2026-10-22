@@ -35,6 +35,7 @@ from app import enterprise_billing as billing
 from app import enterprise_credits as credits
 from app import enterprise_coupons
 from app import enterprise_payments
+from app import email_domains
 from app import enterprise_finance as finance
 from app import enterprise_ai
 from app import enterprise_writing
@@ -1072,7 +1073,10 @@ def _build_enterprise_context(
         except Exception:
             logger.exception("Failed to build subscription state for org_id=%s", organization.id)
         try:
-            credits_summary = credits.wallet_state(db, organization.id, currency=_resolve_charge_currency(None, organization))
+            credits_summary = credits.wallet_state(
+                db, organization.id,
+                currency=_resolve_charge_currency(None, organization, db=db, request=request),
+            )
         except Exception:
             logger.exception("Failed to build credit wallet state for org_id=%s", organization.id)
 
@@ -2888,6 +2892,56 @@ def _serialize_subscription_state(state: dict) -> dict:
         "total_minor": state.get("total_minor", 0),
         "total_display": state.get("total_display"),
         "is_free_platform": state.get("is_free_platform", False),
+        # --- Pricing v2 (2026-10-22). This is an allow-list on purpose (internal fields such
+        # as the raw override columns' provenance never leave the server), so every key the
+        # UI renders has to be named here or it silently never arrives. ------------------
+        # "+ GST" (or "" at a 0% rate / outside India) — render this, never a literal.
+        "price_note": state.get("price_note", ""),
+        # The cycle of the latest plan payment ("monthly" | "yearly"; None if never paid).
+        "billing_cycle": state.get("billing_cycle"),
+        # Open files (the plan limit counts only stages with is_open=True). max_clients /
+        # clients_used above keep their names and carry the same numbers.
+        "open_files_used": state.get("open_files_used", state.get("clients_used", 0)),
+        "max_open_files": state.get("max_open_files", state.get("max_clients")),
+        "clients_total": state.get("clients_total"),
+        # The over-limit grace window: when the clock started, when adding stops, and
+        # whether that is still ahead — the UI's "you're over, N days left" banner.
+        "files_over_limit": state.get("files_over_limit", False),
+        "files_over_limit_since": state.get("files_over_limit_since"),
+        "files_grace_ends_at": state.get("files_grace_ends_at"),
+        "files_in_grace": state.get("files_in_grace", False),
+        "files_grace_days": state.get("files_grace_days", billing.FILE_LIMIT_GRACE_DAYS),
+        # The monthly AI reading allowance (free upload reading).
+        "monthly_reads": state.get("monthly_reads", 0),
+        "reads": state.get("reads"),
+        # Tier-gated features (offices, custom roles, per-branch reporting).
+        "features": state.get("features") or {key: True for key in billing.FEATURE_KEYS},
+        "features_tier": state.get("features_tier"),
+        # The shared "AI paused" gate, as a banner rather than a 402.
+        "ai_paused": state.get("ai_paused", False),
+        "ai_paused_reason": state.get("ai_paused_reason"),
+        "ai_paused_message": state.get("ai_paused_message"),
+        # Yearly ("2 months free"): the price is always reported, yearly_enabled says
+        # whether it can be bought.
+        "yearly_enabled": state.get("yearly_enabled", False),
+        "yearly_minor": state.get("yearly_minor", 0),
+        "yearly_display": state.get("yearly_display"),
+        "yearly_total_minor": state.get("yearly_total_minor", 0),
+        "yearly_total_display": state.get("yearly_total_display"),
+        # Admin-set extras: Branch Packs and per-org limit overrides (None = plan default).
+        "branch_packs": state.get("branch_packs", 0),
+        "overrides": state.get("overrides") or {
+            "max_seats": None, "max_clients": None, "included_credits": None, "monthly_reads": None,
+        },
+        # Trial extras: the one-off demo-call bonus, and the repeat-company-domain block.
+        "trial_bonus_available": state.get("trial_bonus_available", False),
+        "trial_bonus_credits": state.get("trial_bonus_credits", billing.TRIAL_DEMO_BONUS_CREDITS),
+        "trial_domain_blocked": state.get("trial_domain_blocked", False),
+        # Currency region: INR-region orgs are charged INR only; the non-Indian ones are
+        # shown a US$ estimate beside it.
+        "inr_region": state.get("inr_region", True),
+        "show_usd_estimate": state.get("show_usd_estimate", False),
+        "usd_estimate": state.get("usd_estimate"),
     }
 
 
@@ -2993,7 +3047,8 @@ def _stage_key_or_400(raw_stage: str | None) -> str:
 # Keyed by stage KEY, never by position: inserting a stage must not re-map the others.
 # Everything from the visa phase onwards holds at doc_in_hand — the visa pipeline says
 # nothing further about admissions, and inventing a value would mean a key no other surface
-# knows. A stage absent from this map (on_hold) leaves the recorded value untouched.
+# knows. A stage absent from this map (on_hold, closed) leaves the recorded value untouched —
+# a file closed without a visa outcome says nothing about where its admissions had got to.
 #
 # applications_sent is the one stage that does not settle on its mapped value: it spans both
 # "applied" and "admitted" (an admit is in hand, the offer is not accepted yet), and the
@@ -3092,6 +3147,41 @@ def _apply_status_change(
     # must never overwrite one — a deferred case still sits at the stage it reached.
     if derived and not client_fields.is_manual_choice("admission_stage", client.admission_stage):
         client.admission_stage = derived
+
+
+def _enforce_reopen_limit_or_402(
+    db: Session, organization_id: int, old_status: str | None, new_status: str | None,
+) -> None:
+    """Refuse (402) a stage move that REOPENS a file the plan has no open-file room for.
+
+    Plans are sized by OPEN files (catalog.OPEN_STAGE_KEYS), so a move from a non-open stage
+    — Approved, Rejected, Closed, or On Hold — back into an open one takes a slot exactly as
+    creating a client does. Without this check "close a file, add a new one, reopen the old
+    one" walks straight past the limit. The same 14-day grace applies
+    (billing.enforce_client_limit_or_402); every other move is free.
+
+    Callers run this BEFORE mutating anything on the request: the limit check can initialise
+    the org's billing row, and an earlier half-applied edit must never ride along on that.
+    _apply_status_change deliberately does not call it for the same reason — by the time it
+    runs, the update endpoint has already applied the other fields of the form."""
+    if catalog.is_reopen(old_status, new_status):
+        billing.enforce_client_limit_or_402(db, int(organization_id), adding=1)
+
+
+def _refresh_open_file_grace(
+    db: Session, organization_id: int, old_status: str | None, new_status: str | None,
+) -> None:
+    """After a move that FREES an open-file slot (open → Approved/Rejected/Closed/On Hold),
+    clear the over-limit grace stamp if the org is now back at/below its limit.
+
+    Optional hygiene (enforce_client_limit_or_402 already ignores a stamp while the org is not
+    over), but without it an org that dips under and is later pushed over again by something
+    that is not an add — a downgrade, a lowered override — would inherit the first overage's
+    spent grace. Flushes first: the sessions here do not autoflush, and the count must see
+    this move."""
+    if catalog.is_open_stage(old_status) and not catalog.is_open_stage(new_status):
+        db.flush()
+        billing.refresh_files_over_limit(db, int(organization_id))
 
 
 def _parse_stage_data(client: models.EnterpriseClient) -> tuple[dict, bool]:
@@ -3204,13 +3294,23 @@ def _stages_reached(client: models.EnterpriseClient) -> list[str]:
     return list(reached)
 
 
+# The stages that sit OFF the linear journey: a case can be IN them, but never walks THROUGH
+# them on its way somewhere else. A refusal and a file closed without an outcome are where a
+# case STOPPED (terminal, like Approved — except Approved is the journey's own last step); a
+# hold is a pause. Closed was added 2026-10-22; without it here the tracker drew "Closed" as
+# a step between Rejected and the end, and every approved case read as having skipped it.
+_OFF_PATH_STAGE_KEYS = frozenset({catalog.STAGE_REJECTED, catalog.STAGE_CLOSED, catalog.STAGE_ON_HOLD})
+# Off-path stages a case ENDS in (as opposed to pausing in): drawn as "stopped where it was".
+_STOPPED_STAGE_KEYS = frozenset({catalog.STAGE_REJECTED, catalog.STAGE_CLOSED})
+
+
 def _linear_stage_keys(client: models.EnterpriseClient) -> list[str]:
-    """This destination's pipeline in order, minus the two stages that sit OFF it. A refusal
-    and a hold are states a case is in, not steps it walks through."""
+    """This destination's pipeline in order, minus the stages that sit OFF it. A refusal,
+    a closed file and a hold are states a case is in, not steps it walks through."""
     return [
         stage["key"]
         for stage in catalog.stages_for(getattr(client, "destination_country_code", None))
-        if stage["key"] not in (catalog.STAGE_REJECTED, catalog.STAGE_ON_HOLD)
+        if stage["key"] not in _OFF_PATH_STAGE_KEYS
     ]
 
 
@@ -3230,11 +3330,12 @@ def _stages_behind(
     ahead of the case has not been passed over, it simply has not happened yet."""
     linear = _linear_stage_keys(client)
     key = str(status or "").strip().lower()
-    if key == catalog.STAGE_REJECTED:
-        # A refused case is closed where it stopped, and the tracker has always drawn the whole
-        # pipeline behind it. Only the part up to the furthest stage it actually reached can be
-        # judged: nothing beyond that was passed over — it never happened at all, and calling it
-        # skipped would report a refusal as somebody's choice.
+    if key in _STOPPED_STAGE_KEYS:
+        # A refused (or closed) case is closed where it stopped, and the tracker has always
+        # drawn the whole pipeline behind it. Only the part up to the furthest stage it actually
+        # reached can be judged: nothing beyond that was passed over — it never happened at
+        # all, and calling it skipped would report a refusal or a withdrawal as somebody's
+        # choice.
         reached = set(_stages_reached(client))
         last = max((i for i, k in enumerate(linear) if k in reached), default=-1)
         return linear[: last + 1]
@@ -3876,6 +3977,12 @@ def enterprise_list_clients(
     _, organization, role = _require_enterprise_membership(
         db=db, user=current_user, request=request, require_capability="clients.view"
     )
+    if branch_id:
+        # Filtering the client book by office is per-branch reporting — a Team / Multi-branch
+        # feature (billing.FEATURE_KEYS). The unfiltered list is never gated, and neither is a
+        # branch-SCOPED member's own view: that narrowing comes from their access scope below,
+        # not from this parameter.
+        billing.enforce_feature_or_402(db, organization.id, "branch_reporting")
 
     # Record scope is applied to the BASE query, before any of the caller's filters below, so a
     # query parameter can only ever narrow what comes back — never widen it.
@@ -4211,9 +4318,13 @@ def enterprise_create_client(
     _, organization, role = _require_enterprise_membership(
         db=db, user=current_user, request=request, require_capability="clients.create"
     )
-    # The active-client cap is the plan's (sandbox 10 / Starter 100 / Growth 500 /
-    # Scale 2,000). The infra-fee gate this used to sit beside was retired with the fee.
-    billing.enforce_client_limit_or_402(db, organization.id)
+    # The plan's OPEN-file limit (billing.effective_limits: the tier's number, admin overrides
+    # and Branch Packs), with its over-limit grace. Checked first, before anything is built,
+    # and also the gate for converting a lead — a lead becomes a client only through this
+    # endpoint (see /leads/{id}/mark-converted). A client opened straight into a non-open
+    # stage still goes through it: an expired trial stops ALL adds, and keeping one rule for
+    # "create" is worth more than the rare historical file entered at the limit.
+    billing.enforce_client_limit_or_402(db, organization.id, adding=1)
 
     full_name = (payload.full_name or "").strip()
     if len(full_name) < 2:
@@ -4387,6 +4498,11 @@ def enterprise_update_client(
     _assert_client_write_is_current(client, data, force=payload.force_overwrite)
     status_before_edit = client.status
     admission_stage_before_edit = client.admission_stage
+    # Validated up front, and the open-file limit checked before ANY field is applied: a
+    # reopen refused with a 402 must leave the record exactly as it was.
+    target_status = _stage_key_or_400(data["status"]) if data.get("status") else None
+    if target_status is not None:
+        _enforce_reopen_limit_or_402(db, organization.id, status_before_edit, target_status)
     # Snapshot of the matchable identity, taken before anything is applied. The Edit form
     # posts every field on every save, so "email in data" says nothing about whether the
     # email actually changed — comparing the two fingerprints does, and it keeps a plain
@@ -4449,8 +4565,8 @@ def enterprise_update_client(
         "admission_stage" in data and client.admission_stage != admission_stage_before_edit
     )
     staff_admission_stage = client.admission_stage
-    if "status" in data and data["status"]:
-        _apply_status_change(client, _stage_key_or_400(data["status"]), db)
+    if target_status is not None:
+        _apply_status_change(client, target_status, db)
         if admission_stage_edited:
             client.admission_stage = staff_admission_stage
     _apply_client_branch(
@@ -4465,6 +4581,8 @@ def enterprise_update_client(
             hint="Check the match before saving these details onto this file.",
         )
 
+    if target_status is not None:
+        _refresh_open_file_grace(db, organization.id, status_before_edit, target_status)
     db.commit()
     db.refresh(client)
     if client.status != status_before_edit:
@@ -4508,7 +4626,10 @@ def enterprise_update_client_status(
             _raise_stale_write(client, what="client", conflicts=[_CLIENT_FIELD_LABELS["status"]])
     else:
         _assert_fresh_write(client, payload.expected_version, what="client")
+    # Reopening a closed / decided / held file takes an open-file slot (402 past the grace).
+    _enforce_reopen_limit_or_402(db, organization.id, old_status, new_status)
     _apply_status_change(client, new_status, db)
+    _refresh_open_file_grace(db, organization.id, old_status, new_status)
     db.commit()
     db.refresh(client)
     if new_status != old_status:
@@ -4694,7 +4815,10 @@ def enterprise_delete_client(
         models.EnterpriseLead.converted_client_id == client.id,
     ).update({"converted_client_id": None}, synchronize_session=False)
 
+    deleted_status = client.status
     db.delete(client)
+    # A deleted open file frees its slot, exactly like closing one (see _refresh_open_file_grace).
+    _refresh_open_file_grace(db, organization.id, deleted_status, catalog.STAGE_CLOSED)
     db.commit()
 
     # Only now, with the rows durably gone, purge the bytes. The DPA's deletion promise is
@@ -5395,6 +5519,11 @@ def enterprise_dashboard(
     )
     org_id = organization.id
     ctx = role.ctx
+    if branch_id:
+        # The dashboard narrowed to one office IS per-branch reporting (Team / Multi-branch).
+        # The whole-workspace dashboard is never gated; neither is what a branch-scoped
+        # member sees by default, which comes from their scope, not this parameter.
+        billing.enforce_feature_or_402(db, org_id, "branch_reporting")
 
     # Every roll-up on this screen is built from its OWN query, so each one needs the scope filter
     # separately — a single missed aggregate would report whole-workspace numbers to someone who
@@ -5534,7 +5663,7 @@ def enterprise_dashboard(
             .filter(
                 models.EnterpriseClient.target_date.isnot(None),
                 models.EnterpriseClient.target_date >= today,
-                models.EnterpriseClient.status.notin_([catalog.STAGE_APPROVED, catalog.STAGE_REJECTED]),
+                models.EnterpriseClient.status.notin_(sorted(catalog.TERMINAL_STAGE_KEYS)),
             )
             .order_by(models.EnterpriseClient.target_date.asc())
             .limit(8)
@@ -5926,7 +6055,9 @@ def _collect_calendar_events(
         for ev in manual_events
     ]
 
-    # Derived: client key dates (target_date) — skip terminal cases
+    # Derived: client key dates (target_date) — skip terminal cases. Terminal comes from the
+    # catalog (Approved, Rejected AND Closed): a hand-written {approved, rejected} pair kept
+    # chasing deadlines on files closed without an outcome once that stage existed.
     for client in (
         _branch_scope(scope_client_query(
             db.query(models.EnterpriseClient).filter(
@@ -5934,7 +6065,7 @@ def _collect_calendar_events(
                 models.EnterpriseClient.target_date.isnot(None),
                 models.EnterpriseClient.target_date >= start,
                 models.EnterpriseClient.target_date <= end,
-                models.EnterpriseClient.status.notin_([catalog.STAGE_APPROVED, catalog.STAGE_REJECTED]),
+                models.EnterpriseClient.status.notin_(sorted(catalog.TERMINAL_STAGE_KEYS)),
             ),
             ctx,
         ))
@@ -5943,7 +6074,7 @@ def _collect_calendar_events(
         events.append(_serialize_calendar_derived_event("client_deadline", client, client.target_date, today=today))
 
     # Derived: the "Next follow-up" date a counsellor sets on the intake record. Same skip of
-    # decided cases as the key date — an approved or refused applicant needs no chasing.
+    # decided cases as the key date — an approved, refused or closed file needs no chasing.
     for client in (
         _branch_scope(scope_client_query(
             db.query(models.EnterpriseClient).filter(
@@ -5951,7 +6082,7 @@ def _collect_calendar_events(
                 models.EnterpriseClient.next_followup_date.isnot(None),
                 models.EnterpriseClient.next_followup_date >= start,
                 models.EnterpriseClient.next_followup_date <= end,
-                models.EnterpriseClient.status.notin_([catalog.STAGE_APPROVED, catalog.STAGE_REJECTED]),
+                models.EnterpriseClient.status.notin_(sorted(catalog.TERMINAL_STAGE_KEYS)),
             ),
             ctx,
         ))
@@ -6777,34 +6908,28 @@ def _razorpay_enabled() -> bool:
     return bool(key_id and key_secret)
 
 
-def _resolve_charge_currency(hint: Optional[str], organization) -> str:
-    """Decide what currency to CHARGE an organization in.
+def _resolve_charge_currency(
+    hint: Optional[str],
+    organization,
+    *,
+    db: Session | None = None,
+    request: Request | None = None,
+) -> str:
+    """Decide what currency to CHARGE (and quote) an organization in.
 
-    Precedence: explicit hint from the buyer -> the currency they were last billed in
-    (organization.billing_currency, if set) -> the org's country -> INR.
+    A thin delegate to billing.charge_currency_for_org, which owns the whole rule: the buyer's
+    hint (validated strictly — an unknown or not-enabled code is a 400, never a silent
+    coercion) -> the currency they were last billed in -> their country -> INR, then CLAMPED
+    to the org's currency region. That clamp is why this must not be re-implemented here: an
+    org in the INR region is charged INR whatever it hints, and an org outside it can never be
+    charged INR (₹1,499 against a $39 ladder would be a 60% discount for a London office).
 
-    The hint is validated strictly: an unrecognised or not-yet-enabled code is a 400,
-    never a silent coercion to INR. Coercing here would charge someone in a currency
-    they did not pick, which is exactly the class of bug this whole module exists to
-    prevent. Note this decides only the CURRENCY — the amount always comes from the
-    server-side price book.
+    Pass `request` wherever there is one: when the org has no country on file, the request's
+    CDN geo country is what decides its region. Callers without one (the AI handlers' wallet
+    displays) still get the org-country rule. `db` is only needed when `organization` is an id.
+    Only the CURRENCY is decided here — the amount always comes from the price book.
     """
-    raw = (hint or "").strip()
-    if raw:
-        try:
-            return money.normalize_currency(raw, strict=True)
-        except money.UnsupportedCurrency:
-            raise HTTPException(
-                status_code=400,
-                detail=(
-                    f"We can't charge in {raw.upper()[:8]} yet. Supported: "
-                    + ", ".join(money.supported_charge_currencies()) + "."
-                ),
-            )
-    return billing.fallback_charge_currency(
-        getattr(organization, "billing_currency", None),
-        getattr(organization, "country_code", None),
-    )
+    return billing.charge_currency_for_org(db, organization, hint, request=request)
 
 
 def _razorpay_request(method: str, path: str, json_payload: dict | None = None) -> dict:
@@ -8026,7 +8151,8 @@ def _reconcile_plan_payment(db: Session, *, plan_row, entity: dict, order_id: st
     plan_row.base_currency = "INR"
     plan_row.is_international = bool(entity.get("international"))
 
-    period_days = 365 if plan_row.billing_cycle == "yearly" else billing.PLAN_PERIOD_DAYS
+    # Same coverage rule as /billing/verify: what the stored row's cycle bought.
+    period_days = billing.period_days_for(plan_row.billing_cycle)
     sub = billing.get_or_create_org_subscription(db, plan_row.organization_id, commit=False)
     sub.plan = plan_row.plan
     sub.status = "active"
@@ -8615,6 +8741,85 @@ async def _alert_staff_of_inbound_reply(
             logger.exception("inbound-email: alert email to %s failed", user.email)
 
 
+# The public price list. Unauthenticated and cacheable, so it is rate-limited per IP like the
+# other public enterprise endpoints, with its own budget: a pricing page fetches it once per
+# view, but an office behind one NAT can open it many times a minute.
+ENTERPRISE_PUBLIC_PLANS_RATE_LIMIT = int(os.getenv("ENTERPRISE_PUBLIC_PLANS_RATE_LIMIT", "60") or "60")
+ENTERPRISE_PUBLIC_PLANS_RATE_WINDOW = int(os.getenv("ENTERPRISE_PUBLIC_PLANS_RATE_WINDOW", "60") or "60")
+# Browser/CDN cache lifetime for it. Prices change by deploy, never mid-day, so five minutes
+# of staleness is invisible — and it keeps a traffic spike off the price book entirely.
+ENTERPRISE_PUBLIC_PLANS_MAX_AGE = int(os.getenv("ENTERPRISE_PUBLIC_PLANS_MAX_AGE", "300") or "300")
+
+
+@router.get("/public/plans")
+def enterprise_public_plans(
+    request: Request,
+    response: Response,
+    currency: Optional[str] = None,
+    db: Session = Depends(get_db),
+):
+    """The enterprise price list for marketing pages, the /pricing card and the signup flow —
+    the SAME numbers checkout charges, from the same code (app/money.py PRICE_BOOK +
+    enterprise_billing.PLANS), so no page ever has to carry a price of its own.
+
+    `currency` is a display HINT. The visitor's currency region applies exactly as it would at
+    checkout (billing.charge_currency_for_org with no org: the CDN geo country decides): a
+    visitor in the INR region sees INR whatever they ask for (non-Indian members with a US$
+    estimate), a visitor elsewhere never sees INR, and an unknown country keeps INR available.
+    An unsupported hint is ignored rather than a 400 — a public page passing the browser's
+    locale currency must still render a price list.
+    """
+    _enforce_rate_limit_or_429(
+        request=request, scope="enterprise.public_plans",
+        limit=ENTERPRISE_PUBLIC_PLANS_RATE_LIMIT, window_seconds=ENTERPRISE_PUBLIC_PLANS_RATE_WINDOW,
+    )
+    hint = (currency or "").strip().upper()[:3] or None
+    try:
+        code = billing.charge_currency_for_org(db, None, hint, request=request)
+        hint_supported = True
+    except HTTPException:
+        code = billing.charge_currency_for_org(db, None, None, request=request)
+        hint_supported = False
+    country = billing.request_geo_country(request)
+    # Same rule as the subscription state: the estimate is for the NON-Indian members of the
+    # INR region, who are charged rupees but think in dollars.
+    show_usd_estimate = code == "INR" and bool(country) and country != "IN" and billing.is_inr_region(country)
+    sell_yearly = billing.yearly_enabled()
+
+    # Varies by the geo header (it decides the region), so a shared cache must key on it —
+    # without Vary, a CDN could serve a Nepal visitor's INR list to a visitor in London.
+    response.headers["Cache-Control"] = f"public, max-age={max(0, ENTERPRISE_PUBLIC_PLANS_MAX_AGE)}"
+    response.headers["Vary"] = "CF-IPCountry, X-Vercel-IP-Country, X-AppEngine-Country, X-Country-Code, Fastly-Geo-Country"
+    return {
+        "currency": code,
+        "requested_currency": hint,
+        "requested_currency_supported": hint_supported if hint else None,
+        "country_code": country,
+        "inr_region": country is None or billing.is_inr_region(country),
+        "show_usd_estimate": show_usd_estimate,
+        # What a currency selector may offer this visitor (the region rule applied), and the
+        # full launch list for reference.
+        "currencies": _org_charge_currencies(None, request),
+        "all_currencies": list(money.supported_charge_currencies()),
+        "billing_enabled": not billing.ENTERPRISE_FREE,
+        "yearly_enabled": sell_yearly,
+        "yearly_price_months": int(money.YEARLY_PRICE_MONTHS),
+        "tax": _tax_payload(code),
+        "gst_percent": float(money.GST_PERCENT),
+        "plans": billing.public_plans_payload(code, usd_estimate=show_usd_estimate),
+        "actions": credits.actions_payload(),
+        "packages": credits.packages_payload(code),
+        "trial": billing.trial_facts(),
+        "branch_pack": billing.branch_pack_facts(),
+        "file_grace_days": billing.FILE_LIMIT_GRACE_DAYS,
+        "features": {
+            "keys": list(billing.FEATURE_KEYS),
+            "team_plan_label": billing.PLANS["growth"]["label"],
+        },
+        "price_book_version": money.PRICE_BOOK_VERSION,
+    }
+
+
 @router.get("/billing/plans")
 def enterprise_billing_plans(
     request: Request,
@@ -8622,21 +8827,62 @@ def enterprise_billing_plans(
     current_user: models.User = Depends(get_current_active_user),
 ):
     _, organization, role = _require_enterprise_membership(db=db, user=current_user, request=request)
-    # Tier cards priced in the org's own billing currency (sticky choice -> country ->
-    # INR). Each plan also carries its full `price_options` ladder so the UI can offer a
-    # currency selector without a second round trip.
-    org_currency = _resolve_charge_currency(None, organization)
     return {
-        "plans": billing.public_plans_payload(org_currency),
-        "currency": org_currency,
-        "charge_currencies": list(money.supported_charge_currencies()),
-        # The live INR GST rate, so the SPA's cross-currency preview (INR selected over a
-        # foreign-quoted payload) never has to hardcode 18.
-        "gst_percent": float(money.GST_PERCENT),
+        **_billing_catalog_payload(db, organization, request),
         "checkout_enabled": _razorpay_enabled(),
         "razorpay_key_id": os.getenv("RAZORPAY_KEY_ID", "").strip() or None,
         "permissions": _enterprise_permissions_for_role(role),
-        "subscription": _serialize_subscription_state(billing.build_subscription_state(db, organization.id)),
+    }
+
+
+def _org_charge_currencies(organization, request: Request | None) -> list[str]:
+    """The launch currencies this org may actually be charged in — the region rule applied
+    to each (an INR-region org: ["INR"]; elsewhere: every ladder currency except INR; country
+    unknown: all of them). What a currency selector should offer, so a buyer can never pick
+    a currency checkout would then refuse or silently replace."""
+    raw = str(getattr(organization, "country_code", None) or "").strip().upper()
+    # The same country charge_currency_for_org decides by: the org's own, else the request's
+    # CDN geo country, else unknown (every launch currency, INR included, stays allowed).
+    country = (raw if len(raw) == 2 and raw.isalpha() else None) or billing.request_geo_country(request)
+    return [
+        code for code in money.supported_charge_currencies()
+        if billing.region_charge_currency(code, country) == code
+    ]
+
+
+def _billing_catalog_payload(db: Session, organization, request: Request | None) -> dict:
+    """The tier cards + subscription block shared by /billing/plans and /billing/subscription.
+
+    Cards are priced in the currency this org is charged in (charge_currency_for_org: sticky
+    choice -> country -> INR, clamped to its currency region), and carry their full
+    `price_options` ladder for a selector. `usd_estimate` is attached to INR cards only for
+    the non-Indian members of the INR region — the same flag the subscription state reports,
+    so the chip and the cards never disagree about whether to show it."""
+    org_currency = _resolve_charge_currency(None, organization, db=db, request=request)
+    state = billing.build_subscription_state(db, organization.id)
+    return {
+        "plans": billing.public_plans_payload(
+            org_currency, usd_estimate=bool(state.get("show_usd_estimate")),
+        ),
+        "currency": org_currency,
+        "charge_currencies": _org_charge_currencies(organization, request),
+        # The live INR GST rate, so the SPA's cross-currency preview (INR selected over a
+        # foreign-quoted payload) never has to hardcode 18 — and 0 means "no tax line".
+        "gst_percent": float(money.GST_PERCENT),
+        "tax": _tax_payload(org_currency),
+        "yearly_enabled": billing.yearly_enabled(),
+        "subscription": _serialize_subscription_state(state),
+    }
+
+
+def _tax_payload(currency: str) -> dict:
+    """{percent, label, note} for `currency` — percent 0, label None and note "" whenever no
+    tax is charged (outside India, or ENTERPRISE_GST_PERCENT=0). The one shape every price
+    surface renders tax from, so none of them can turn 0 back into 18."""
+    return {
+        "percent": float(money.tax_percent_for(currency)),
+        "label": money.tax_label_for(currency),
+        "note": money.tax_note(currency),
     }
 
 
@@ -8647,14 +8893,9 @@ def enterprise_billing_subscription(
     current_user: models.User = Depends(get_current_active_user),
 ):
     _, organization, role = _require_enterprise_membership(db=db, user=current_user, request=request)
-    org_currency = _resolve_charge_currency(None, organization)
     return {
         "permissions": _enterprise_permissions_for_role(role),
-        "subscription": _serialize_subscription_state(billing.build_subscription_state(db, organization.id)),
-        "plans": billing.public_plans_payload(org_currency),
-        "currency": org_currency,
-        "charge_currencies": list(money.supported_charge_currencies()),
-        "gst_percent": float(money.GST_PERCENT),
+        **_billing_catalog_payload(db, organization, request),
     }
 
 
@@ -8727,6 +8968,23 @@ def _ensure_razorpay_plan_id(db: Session, *, plan_key: str, currency: str, amoun
     return plan_id
 
 
+def _checkout_cycle_or_400(raw: Optional[str]) -> str:
+    """The billing cycle a checkout (or its coupon preview) may sell: "yearly" only while
+    yearly is on sale (ENTERPRISE_YEARLY_ENABLED), else "monthly".
+
+    An explicit request for yearly while it is NOT on sale is a 400, not a quiet downgrade:
+    billing.normalize_billing_cycle would collapse it to "monthly", and a buyer who clicked a
+    ₹14,990/year card would then be shown a one-month charge they never chose. The deployed
+    SPA always sends "monthly" until it renders yearly_enabled, so this never fires for it."""
+    cycle = billing.normalize_billing_cycle(raw)
+    if cycle != "yearly" and billing._is_yearly(raw):
+        raise HTTPException(
+            status_code=400,
+            detail="Yearly billing isn't available yet — please choose monthly.",
+        )
+    return cycle
+
+
 def _activate_free_plan(
     db: Session, *, organization, user, plan: dict, cycle: str,
     subtotal: int, tax: int, quote: dict, currency: str,
@@ -8739,7 +8997,9 @@ def _activate_free_plan(
     indistinguishable downstream from a paying one — including lapsing on schedule.
     """
     now = datetime.utcnow()
-    period_days = 365 if cycle == "yearly" else billing.PLAN_PERIOD_DAYS
+    # The coverage one payment of this cycle buys (30 days monthly, 365 yearly) — from
+    # billing, never a literal here, so the comped path can't drift from the paid ones.
+    period_days = billing.period_days_for(cycle)
     row = models.EnterpriseSubscriptionPayment(
         organization_id=organization.id,
         created_by_user_id=user.id,
@@ -8797,13 +9057,13 @@ def enterprise_billing_checkout(
     plan = billing.get_plan(payload.plan)
     if not plan or plan["key"] not in billing.PAID_PLAN_KEYS:
         raise HTTPException(status_code=400, detail="Please choose a valid paid plan.")
-    cycle = billing.normalize_billing_cycle(payload.billing_cycle)
+    cycle = _checkout_cycle_or_400(payload.billing_cycle)
     # The buyer's selected currency (validated strictly; falls back to the org's sticky
-    # choice, then country, then INR), clamped by resolve_plan_currency so price and
-    # currency still come from the same PRICE_BOOK entry. Reading billing.CURRENCY here
-    # instead would let a misconfigured ENTERPRISE_PLAN_CURRENCY create a USD order for
-    # a rupee amount.
-    requested_currency = _resolve_charge_currency(payload.currency, organization)
+    # choice, then country, then INR) and clamped to the org's currency region, then by
+    # resolve_plan_currency so price and currency still come from the same PRICE_BOOK entry.
+    # Reading billing.CURRENCY here instead would let a misconfigured
+    # ENTERPRISE_PLAN_CURRENCY create a USD order for a rupee amount.
+    requested_currency = _resolve_charge_currency(payload.currency, organization, db=db, request=request)
     plan_currency = billing.resolve_plan_currency(plan["key"], requested_currency)
     if payload.currency and plan_currency != requested_currency:
         # The hint was chargeable in general but this plan's book has no entry for it
@@ -8813,7 +9073,7 @@ def enterprise_billing_checkout(
             status_code=400,
             detail=f"{plan['label']} is not sold in {requested_currency} yet. Please pick another currency.",
         )
-    list_amount = billing.plan_price_minor(plan["key"], plan_currency)
+    list_amount = billing.plan_price_minor(plan["key"], plan_currency, cycle)
     if list_amount <= 0:
         raise HTTPException(status_code=400, detail="This plan is not available for online checkout.")
 
@@ -8835,11 +9095,16 @@ def enterprise_billing_checkout(
         coupon = enterprise_coupons.resolve_active_coupon_or_400(
             db, organization.id, raw_coupon, context="billing"
         )
-        coupon_percent = enterprise_coupons.parse_percent_off(coupon.percent_off)
+        # The percent ACTUALLY applied: the stored value capped at ENTERPRISE_COUPON_MAX_PERCENT
+        # (a legacy code above the cap is logged and applied at the cap). This — not the stored
+        # number — is what the payment row records, so the invoice says what was discounted.
+        coupon_percent = enterprise_coupons.effective_percent_off(coupon.percent_off)
         coupon_code = enterprise_coupons.normalize_code(coupon.code)
 
     # list → discount → GST → total, in that order and in exactly one place.
-    quote = billing.checkout_quote(plan["key"], plan_currency, discount_percent=coupon_percent)
+    quote = billing.checkout_quote(
+        plan["key"], plan_currency, discount_percent=coupon_percent, billing_cycle=cycle,
+    )
     subtotal = quote["subtotal_minor"]
     tax = quote["tax_minor"]
     # The ONLY figure that may reach Razorpay. Sending `subtotal` here would undercharge
@@ -8887,11 +9152,17 @@ def enterprise_billing_checkout(
         "price_book_version": money.PRICE_BOOK_VERSION,
     }
 
-    # RECURRING PATH (the default). A Razorpay Subscription is a MANDATE: standing permission
-    # to auto-charge every month. The legacy /orders path below charges once and leaves the
-    # customer to remember to come back — which for a product sold as "₹2,999/month" means it
-    # silently stops billing after one month. Set ENTERPRISE_AUTO_RENEW=false to fall back.
-    if AUTO_RENEW:
+    # RECURRING PATH (the default, MONTHLY only). A Razorpay Subscription is a MANDATE:
+    # standing permission to auto-charge every month. The legacy /orders path below charges
+    # once and leaves the customer to remember to come back — which for a product sold as
+    # "₹1,499/month" means it silently stops billing after one month. Set
+    # ENTERPRISE_AUTO_RENEW=false to fall back.
+    #
+    # YEARLY NEVER TAKES THIS PATH. A year is paid up front as a one-off ORDER (owner
+    # decision): the cached Razorpay plans are monthly (_ensure_razorpay_plan_id), so a
+    # mandate here would auto-debit the YEARLY total every month; and an annual e-mandate for
+    # ₹1 lakh+ is above the RBI auto-debit limit anyway. The buyer renews a year by hand.
+    if AUTO_RENEW and cycle == "monthly":
         # Any mandate this org already holds is superseded ONLY once the replacement is paid
         # for — see the cancellation in /billing/verify. Razorpay charges every mandate it
         # holds, so an org upgrading Starter -> Growth must not keep both; but opening a
@@ -8957,6 +9228,8 @@ def enterprise_billing_checkout(
             "plan_label": plan["label"],
             "included_credits": billing.included_credits_for(plan["key"]),
             "billing_cycle": cycle,
+            "period_days": quote["period_days"],
+            "tax_note": quote["tax_note"],
             "auto_renew": True,
             "organization_name": organization.company_name,
             "prefill": {
@@ -9024,6 +9297,10 @@ def enterprise_billing_checkout(
         "plan_label": plan["label"],
         "included_credits": billing.included_credits_for(plan["key"]),
         "billing_cycle": cycle,
+        # Coverage this one-off order buys (30 / 365 days). A yearly order is always this
+        # path: it never auto-renews, and its credits still arrive month by month.
+        "period_days": quote["period_days"],
+        "tax_note": quote["tax_note"],
         "organization_name": organization.company_name,
         "prefill": {
             "name": current_user.full_name or "",
@@ -9205,9 +9482,11 @@ def enterprise_billing_verify(
     payment_row.base_currency = "INR"
     payment_row.is_international = bool(payment_data.get("international"))
 
-    # Monthly only (billing.normalize_billing_cycle collapses everything to "monthly"), but
-    # an in-flight order created before that change may still carry "yearly" — honour it.
-    period_days = 365 if payment_row.billing_cycle == "yearly" else billing.PLAN_PERIOD_DAYS
+    # The coverage THIS payment bought, read from the stored row (never the request): 365 days
+    # for a yearly order, 30 for monthly. period_days_for is deliberately not gated on yearly
+    # being on sale, so an order created while it was and verified after it was switched off
+    # still gets the year it paid for.
+    period_days = billing.period_days_for(payment_row.billing_cycle)
     sub = billing.get_or_create_org_subscription(db, organization.id, commit=False)
     sub.plan = payment_row.plan
     sub.status = "active"
@@ -9303,16 +9582,20 @@ def enterprise_credits_wallet(
     current_user: models.User = Depends(get_current_active_user),
 ):
     _, organization, role = _require_enterprise_membership(db=db, user=current_user, request=request, require_capability="credits.view")
+    org_currency = _resolve_charge_currency(None, organization, db=db, request=request)
     return {
         "permissions": _enterprise_permissions_for_role(role),
-        "wallet": credits.wallet_state(db, organization.id, currency=_resolve_charge_currency(None, organization)),
+        "wallet": credits.wallet_state(db, organization.id, currency=org_currency),
         "usage": credits.usage_breakdown(
             db, organization.id, include_by_member=role.ctx.is_org_scope,
         ),
-        # Priced in the org's billing currency, with the full ladder on each package so
-        # the top-up modal can offer a currency selector without a second round-trip.
-        "packages": credits.packages_payload(_resolve_charge_currency(None, organization)),
-        "charge_currencies": list(money.supported_charge_currencies()),
+        # Priced in the currency this org is charged in (its region applied), with the full
+        # ladder on each package so the top-up modal can offer a currency selector without a
+        # second round-trip — limited to the currencies this org can actually be charged in.
+        "packages": credits.packages_payload(org_currency),
+        "charge_currencies": _org_charge_currencies(organization, request),
+        # Top-ups are refused (402) while AI is paused; the modal says so up front instead.
+        "topup_allowed": bool(billing.ai_access_state(db, organization.id)["allowed"]),
         "checkout_enabled": _razorpay_enabled(),
         "razorpay_key_id": os.getenv("RAZORPAY_KEY_ID", "").strip() or None,
     }
@@ -9473,7 +9756,10 @@ def enterprise_credits_analytics(
     _, organization, role = _require_enterprise_membership(db=db, user=current_user, request=request, require_capability="credits.view")
     return {
         "permissions": _enterprise_permissions_for_role(role),
-        "wallet": credits.wallet_state(db, organization.id, currency=_resolve_charge_currency(None, organization)),
+        "wallet": credits.wallet_state(
+            db, organization.id,
+            currency=_resolve_charge_currency(None, organization, db=db, request=request),
+        ),
         "analytics": credits.spend_analytics(
             db, organization.id, days=days, start=start, end=end, bucket=bucket,
             include_by_member=role.ctx.is_org_scope,
@@ -9602,7 +9888,11 @@ def enterprise_credits_payments(
             "id": p.id,
             "kind": "plan",
             "package_key": p.plan,
-            "label": f"{plan_meta.get('label', p.plan)} plan · monthly",
+            "label": (
+                f"{plan_meta.get('label', p.plan)} plan · "
+                + ("yearly" if (p.billing_cycle or "").strip().lower() == "yearly" else "monthly")
+            ),
+            "billing_cycle": (p.billing_cycle or "monthly"),
             "credits": 0,
             "bonus_credits": 0,
             # Credits the plan period granted — shown in the same column as a top-up's, so
@@ -9669,6 +9959,7 @@ def enterprise_coupon_validate(
     if context not in ("credits", "billing"):
         raise HTTPException(status_code=400, detail="Unknown checkout context.")
 
+    cycle = None
     if context == "credits":
         package = credits.get_package(payload.package)
         if not package:
@@ -9678,32 +9969,36 @@ def enterprise_coupon_validate(
         # price to every org: a USD buyer saw "₹999 → ₹499" and was then charged
         # $12.99 → $6.49. Same resolver, same price book, same currency as the order —
         # including the buyer's selected currency when the UI passes it along.
-        currency = _resolve_charge_currency(payload.currency, organization)
+        currency = _resolve_charge_currency(payload.currency, organization, db=db, request=request)
         base_amount = credits.package_price_minor(package["key"], currency)
     else:
         plan = billing.get_plan(payload.plan)
         if not plan or plan["key"] not in billing.PAID_PLAN_KEYS:
             raise HTTPException(status_code=400, detail="Please choose a valid paid plan.")
-        cycle = billing.normalize_billing_cycle(payload.billing_cycle)
+        cycle = _checkout_cycle_or_400(payload.billing_cycle)
         # Same resolver, same price book, same currency as /billing/checkout — this is a
         # PREVIEW of that checkout and must price exactly the way it will, including the
         # explicit-hint refusal, or the card shows one discount and Razorpay charges
-        # another (the credits branch above records the same bug class).
-        requested = _resolve_charge_currency(payload.currency, organization)
+        # another (the credits branch above records the same bug class). The cycle too: a
+        # yearly preview discounts the yearly list price.
+        requested = _resolve_charge_currency(payload.currency, organization, db=db, request=request)
         currency = billing.resolve_plan_currency(plan["key"], requested)
         if payload.currency and currency != requested:
             raise HTTPException(
                 status_code=400,
                 detail=f"{plan['label']} is not sold in {requested} yet. Please pick another currency.",
             )
-        base_amount = billing.plan_price_minor(plan["key"], currency)
+        base_amount = billing.plan_price_minor(plan["key"], currency, cycle)
     if base_amount <= 0:
         raise HTTPException(status_code=400, detail="This item is not available for checkout.")
 
     coupon = enterprise_coupons.resolve_active_coupon_or_400(
         db, organization.id, payload.code, context=context
     )
-    percent = enterprise_coupons.parse_percent_off(coupon.percent_off)
+    # What checkout will ACTUALLY take off — the stored percent capped at
+    # ENTERPRISE_COUPON_MAX_PERCENT. Previewing the stored figure would promise a legacy
+    # "50% off" code a discount checkout then refuses to give.
+    percent = enterprise_coupons.effective_percent_off(coupon.percent_off)
     # A fully-covering discount (e.g. 100% off) leaves a zero amount. Don't block — report
     # it as free; checkout will grant the credits without Razorpay. The "is it free?"
     # threshold is per-currency for the same reason the checkout floor is: the shared
@@ -9724,12 +10019,14 @@ def enterprise_coupon_validate(
         "discount_paise": base_amount - amount,
         "base_amount_display": money.format_money(base_amount, currency),
         "amount_display": money.format_money(amount, currency),
+        # The cycle the preview priced (plan context only): yearly discounts the yearly price.
+        "billing_cycle": cycle,
     }
 
 
 def _grant_free_credit_topup(
     db, organization, current_user, package, base_amount, amount, coupon_code, coupon_percent,
-    currency=None,
+    currency=None, request: Request | None = None,
 ):
     """A discount covered the full amount (e.g. 100% off) → add the credits without
     Razorpay. Records a verified 'free' payment so the redemption is counted and the
@@ -9778,7 +10075,10 @@ def _grant_free_credit_topup(
         "message": f"{coupon_code} covered the full amount — {total_credits} credits added to your wallet.",
         "total_credits": total_credits,
         "coupon_code": coupon_code,
-        "wallet": credits.wallet_state(db, organization.id, currency=_resolve_charge_currency(None, organization)),
+        "wallet": credits.wallet_state(
+            db, organization.id,
+            currency=_resolve_charge_currency(None, organization, db=db, request=request),
+        ),
     }
 
 
@@ -9795,9 +10095,16 @@ def enterprise_credits_topup_checkout(
     package = credits.get_package(payload.package)
     if not package:
         raise HTTPException(status_code=400, detail="Please choose a valid credit package.")
+    # A top-up is an ADD-ON to an active plan or a live trial: while AI is paused (trial over,
+    # or a paid plan lapsed) the credits would buy nothing usable, and selling them anyway
+    # turns "choose a plan" into a support ticket asking why paid-for credits don't work.
+    # Refused here, before any order exists. Deliberately NOT on /credits/topup/verify or the
+    # credits webhook: those credit money that has ALREADY been captured, and must always do so.
+    billing.enforce_ai_access_or_402(db, organization.id)
     # Currency is a client HINT; the price is always resolved server-side from the shared
-    # price book. An unsupported code is a 400 rather than a silent fall back to INR.
-    currency = _resolve_charge_currency(payload.currency, organization)
+    # price book. An unsupported code is a 400 rather than a silent fall back to INR, and the
+    # org's currency region still applies (INR-region orgs pay INR; others never do).
+    currency = _resolve_charge_currency(payload.currency, organization, db=db, request=request)
     base_amount = credits.package_price_minor(package["key"], currency)
     if base_amount <= 0:
         raise HTTPException(status_code=400, detail="This package is not available for checkout.")
@@ -9811,7 +10118,9 @@ def enterprise_credits_topup_checkout(
         coupon = enterprise_coupons.resolve_active_coupon_or_400(
             db, organization.id, raw_coupon, context="credits"
         )
-        coupon_percent = enterprise_coupons.parse_percent_off(coupon.percent_off)
+        # Capped at ENTERPRISE_COUPON_MAX_PERCENT, and THIS (not the stored percent) is what the
+        # payment row records — see the plan checkout.
+        coupon_percent = enterprise_coupons.effective_percent_off(coupon.percent_off)
         coupon_code = enterprise_coupons.normalize_code(coupon.code)
         amount = enterprise_coupons.compute_discounted_amount_paise(base_amount, coupon_percent)
 
@@ -9828,7 +10137,7 @@ def enterprise_credits_topup_checkout(
     if coupon_code and amount < checkout_floor:
         return _grant_free_credit_topup(
             db, organization, current_user, package, base_amount, amount, coupon_code,
-            coupon_percent, currency,
+            coupon_percent, currency, request=request,
         )
     # Currency-aware floor. The old constant was 100 = "₹1"; the same integer in USD
     # would be $1.00, a 87× stricter floor applied by accident.
@@ -9947,7 +10256,10 @@ def enterprise_credits_topup_verify(
 
     return {
         "message": f"{total_credits} credits added to your wallet.",
-        "wallet": credits.wallet_state(db, organization.id, currency=_resolve_charge_currency(None, organization)),
+        "wallet": credits.wallet_state(
+            db, organization.id,
+            currency=_resolve_charge_currency(None, organization, db=db, request=request),
+        ),
     }
 
 
@@ -10093,7 +10405,10 @@ def enterprise_infra_fee_verify(
 
     return {
         "message": "Infrastructure server fee activated.",
-        "wallet": credits.wallet_state(db, organization.id, currency=_resolve_charge_currency(None, organization)),
+        "wallet": credits.wallet_state(
+            db, organization.id,
+            currency=_resolve_charge_currency(None, organization, db=db, request=request),
+        ),
     }
 
 
@@ -10282,6 +10597,49 @@ def _verify_signup_otp_or_400(db: Session, email: str, code: Optional[str]) -> m
     return row
 
 
+# One free trial per COMPANY email domain (pricing v2, 2026-10-22). Kill-switch only: the rule
+# is on by default and turning it off restores "every signup gets a trial".
+ENTERPRISE_ONE_TRIAL_PER_DOMAIN = os.getenv(
+    "ENTERPRISE_ONE_TRIAL_PER_DOMAIN", "true"
+).strip().lower() in {"1", "true", "yes", "on"}
+
+ENTERPRISE_TRIAL_DOMAIN_BLOCKED_MESSAGE = (
+    "Your company already used its free trial — choose a plan to continue."
+)
+
+
+def _company_domain_already_trialled(db: Session, domain: str) -> bool:
+    """Whether an enterprise workspace already exists whose owner or ANY member (active or
+    not) has an address at `domain`.
+
+    Any member, not just owners: the abuse is the same consultancy coming back under a
+    colleague's address, and a colleague of theirs is by definition a member of the first
+    workspace. Inactive members count too — offboarding everyone at the domain must not
+    reopen the trial. The org's creator is checked separately because a workspace whose owner
+    row was reassigned still records who created it.
+
+    Matched with an escaped LIKE suffix on the lower-cased address, so "%" / "_" can never
+    widen it, and only on exactly this domain (a subsidiary on its own domain is its own
+    company)."""
+    pattern = email_domains.like_suffix_pattern(domain)
+    email_lc = func.lower(models.User.email)
+    via_member = (
+        db.query(models.EnterpriseOrganizationMember.id)
+        .join(models.User, models.User.id == models.EnterpriseOrganizationMember.user_id)
+        .filter(email_lc.like(pattern, escape="\\"))
+        .first()
+    )
+    if via_member is not None:
+        return True
+    via_creator = (
+        db.query(models.EnterpriseOrganization.id)
+        .join(models.User, models.User.id == models.EnterpriseOrganization.created_by_user_id)
+        .filter(email_lc.like(pattern, escape="\\"))
+        .first()
+    )
+    return via_creator is not None
+
+
 @router.post("/signup")
 def enterprise_signup(
     payload: EnterpriseSignupRequest,
@@ -10346,6 +10704,14 @@ def enterprise_signup(
     otp_row = _verify_signup_otp_or_400(db, email, payload.email_otp)
 
     _assert_subdomain_available(db=db, subdomain_slug=subdomain_slug)
+
+    # ONE FREE TRIAL PER COMPANY DOMAIN. Decided BEFORE this signup creates any row, so the
+    # new owner can never match themselves. The workspace is still created — refusing it would
+    # lose a customer who is about to pay — but with its trial already ended and no trial
+    # credits or reads (billing then reports AI as paused with the "already used" wording).
+    # Free mailbox providers are exempt: gmail.com identifies nobody (app/email_domains.py).
+    trial_domain = email_domains.company_domain(email) if ENTERPRISE_ONE_TRIAL_PER_DOMAIN else None
+    trial_domain_blocked = bool(trial_domain) and _company_domain_already_trialled(db, trial_domain)
 
     password_hash = get_password_hash(payload.password)
 
@@ -10421,7 +10787,22 @@ def enterprise_signup(
         subdomain_slug=subdomain_slug,
         randomize=True,
     )
-    billing.get_or_create_org_subscription(db, organization.id, commit=False)
+    sub = billing.get_or_create_org_subscription(db, organization.id, commit=False)
+    if trial_domain_blocked:
+        blocked_at = datetime.utcnow()
+        # Trial over from the first second: AI is paused and adding clients/seats needs a plan.
+        sub.trial_ends_at = blocked_at
+        # Drives the "your company already used its free trial" wording everywhere, and is
+        # the durable fact enterprise_credits re-checks before any one-time trial grant.
+        sub.trial_domain_blocked = True
+        # Stamp the "one-time trial grant already used" marker now, in the same commit, so no
+        # wallet read between here and the first sync can hand out sandbox credits or reads.
+        wallet = credits.get_or_create_wallet(db, organization.id, commit=False)
+        wallet.plan_credits_once_at = blocked_at
+        logger.info(
+            "enterprise signup: trial not granted — company domain %s already has a workspace "
+            "(new org_id=%s)", trial_domain, organization.id,
+        )
 
     user.last_login_at = datetime.utcnow()
     user.first_login_at = datetime.utcnow()
@@ -10460,6 +10841,10 @@ def enterprise_signup(
             "is_admin": user.is_admin,
         },
         "portal_url": portal_url,
+        # One-trial-per-company: True when this workspace was created with its trial already
+        # over because another workspace already holds the owner's company email domain.
+        "trial_domain_blocked": trial_domain_blocked,
+        "message": ENTERPRISE_TRIAL_DOMAIN_BLOCKED_MESSAGE if trial_domain_blocked else None,
         **context,
     }
 
@@ -10627,16 +11012,40 @@ def _append_ai_turn(
     conv.last_message_at = now
 
 
+def _copilot_turn_budget_or_402(db: Session, organization_id: int) -> dict:
+    """The assistant's per-turn reservation (credits.copilot_turn_budget), raising form.
+
+    402 while AI is paused (copilot_turn_budget raises it first), or with the budget's own
+    message when there is neither a free message left today nor a bundle the wallet can pay.
+    Otherwise returns the budget: `cost_budget_usd` None = the turn may run unbounded, a
+    Decimal = the most it may spend. Shared by the dashboard assistant and the Chrome
+    extension so both surfaces reserve identically — they share one org meter.
+    """
+    budget = credits.copilot_turn_budget(db, organization_id)
+    if not budget.get("allowed", True):
+        raise HTTPException(
+            status_code=402,
+            detail=budget.get("message") or "Not enough Rilono Credits for another assistant message.",
+        )
+    return budget
+
+
 @router.get("/ai/meta")
 def enterprise_ai_meta(
     request: Request,
     db: Session = Depends(get_db),
     current_user: models.User = Depends(get_current_active_user),
 ):
-    _require_enterprise_membership(db=db, user=current_user, request=request)
+    _, organization, _role = _require_enterprise_membership(db=db, user=current_user, request=request)
+    # The shared AI-paused gate, read-only: lets the assistant panel say WHY it will refuse
+    # (trial ended / plan lapsed) before the member types a message into a 402.
+    ai = billing.ai_access_state(db, organization.id)
     return {
         "enabled": enterprise_ai.is_ai_configured(),
         "suggestions": ENTERPRISE_AI_SUGGESTIONS,
+        "ai_paused": not ai["allowed"],
+        "ai_paused_reason": ai["reason"],
+        "ai_paused_message": ai["message"],
     }
 
 
@@ -10661,6 +11070,10 @@ def enterprise_ai_chat(
             status_code=503,
             detail="The AI assistant isn't available right now. Please try again later.",
         )
+    # AI paused (trial ended / plan lapsed) refuses EVERY assistant message — the free daily
+    # ones and the off-topic refusal included — so the member sees one consistent reason
+    # instead of a free answer one minute and a 402 the next.
+    billing.enforce_ai_access_or_402(db, organization.id)
 
     # Resolve the thread FIRST: an id the member doesn't own must 404 before any
     # metering or model work happens.
@@ -10691,8 +11104,11 @@ def enterprise_ai_chat(
         return response
 
     # Meter the copilot: free daily allowance, then 1 credit per bundle of messages.
-    # Block a paid message the wallet can't cover BEFORE spending any Gemini tokens.
-    credits.copilot_precheck_or_402(db, organization.id)
+    # RESERVE before spending any Gemini tokens: refuse when neither a free message nor a
+    # bundle is left, and otherwise get the turn's cost budget — None when the free allowance
+    # plus the wallet cover the worst-case turn, a USD cap when they only cover part of it, so
+    # a "free" turn on an empty wallet cannot fan out into several paid messages of tool work.
+    budget = _copilot_turn_budget_or_402(db, organization.id)
 
     # A known thread replays its own server-side transcript; the request's history is
     # only honoured for legacy stateless clients that predate saved threads.
@@ -10709,6 +11125,7 @@ def enterprise_ai_chat(
             message=payload.message,
             history=history,
             ctx=role.ctx,
+            cost_budget_usd=budget["cost_budget_usd"],
         )
     except Exception:
         logger.exception("Enterprise AI chat failed (org_id=%s)", organization.id)
@@ -10758,12 +11175,18 @@ def enterprise_ai_chat(
         "answer": answer,
         "permissions": _enterprise_permissions_for_role(role),
         "credits_meter": meter,
+        # True when the wallet could only cover part of this turn and the assistant answered
+        # from what it had gathered instead of running more lookups (see the reservation).
+        "budget_limited": bool(getattr(turn.usage, "hit_cost_budget", False)),
     }
     if conv is not None:
         response["conversation_id"] = conv.id
         response["conversation"] = _serialize_ai_conversation(conv)
     if meter.get("credits_charged"):
-        response["wallet"] = credits.wallet_state(db, organization.id, currency=_resolve_charge_currency(None, organization))
+        response["wallet"] = credits.wallet_state(
+            db, organization.id,
+            currency=_resolve_charge_currency(None, organization, db=db, request=request),
+        )
     return response
 
 
@@ -10985,6 +11408,9 @@ def enterprise_copilot_extension_chat(
             status_code=503,
             detail="Rilono Copilot isn't available right now. Please try again later.",
         )
+    # Same AI-paused gate as the dashboard assistant (they share one meter), ahead of the
+    # free guardrail for the same reason: one consistent answer while AI is paused.
+    billing.enforce_ai_access_or_402(db, organization.id)
 
     client = _get_org_client_or_404(db, organization.id, payload.client_id, ctx=role.ctx)
 
@@ -11011,9 +11437,10 @@ def enterprise_copilot_extension_chat(
         ai_guardrails.record_block(source=enterprise_copilot.USAGE_SOURCE, detail="enterprise_extension")
         return {"response": ai_guardrails.OFF_TOPIC_REFUSAL}
 
-    # Meter: free daily allowance, then credits — block unaffordable paid
-    # messages BEFORE any Gemini tokens are spent.
-    credits.copilot_precheck_or_402(db, organization.id)
+    # Meter: free daily allowance, then credits — the same reservation as /ai/chat, made
+    # BEFORE any Gemini tokens are spent. This surface is a single model call, so a budget
+    # cannot stop it part-way; enterprise_copilot honours it by capping the call's output.
+    budget = _copilot_turn_budget_or_402(db, organization.id)
 
     try:
         copilot_turn = enterprise_copilot.run_enterprise_copilot_chat(
@@ -11029,6 +11456,7 @@ def enterprise_copilot_extension_chat(
             # disclose about them — the extension must not be a way around the
             # clients.view_sensitive / documents.* gates the dashboard enforces.
             ctx=role.ctx,
+            cost_budget_usd=budget["cost_budget_usd"],
         )
         answer = copilot_turn.answer
     except Exception:
@@ -11056,7 +11484,10 @@ def enterprise_copilot_extension_chat(
         )
         response["credits_meter"] = meter
         if meter.get("credits_charged"):
-            response["wallet"] = credits.wallet_state(db, organization.id, currency=_resolve_charge_currency(None, organization))
+            response["wallet"] = credits.wallet_state(
+                db, organization.id,
+                currency=_resolve_charge_currency(None, organization, db=db, request=request),
+            )
     except Exception:
         logger.exception(
             "Copilot metering failed after successful generation (org_id=%s) — answer delivered unmetered",
@@ -11092,11 +11523,21 @@ ENTERPRISE_DOC_EXT_MIME = {
 
 
 def _document_scan_pricing(db: Session, organization_id: int) -> dict:
-    """What one document scan costs this org right now, for the upload card and the
-    per-document Scan button (so the price is shown before the credit is spent)."""
+    """What a document check costs this org right now, for the upload card and the
+    per-document Scan button (so the price is shown before the credit is spent).
+
+    A check is priced per 15-page block of the file (an image or text file is one block), so
+    `cost_credits` is the price of ONE block and `can_afford` answers for one block — the
+    exact total is only known once the file's pages are counted, and the upload/scan
+    endpoints refuse with a 402 naming it. `price_label` is the price list's wording."""
+    action = credits.get_action(ENTERPRISE_DOC_SCAN_ACTION_KEY) or {}
     return {
         "action_key": ENTERPRISE_DOC_SCAN_ACTION_KEY,
         "cost_credits": credits.action_cost(ENTERPRISE_DOC_SCAN_ACTION_KEY),
+        "per_unit": True,
+        "pages_per_unit": int(action.get("pages_per_unit") or credits.DOCUMENT_BLOCK_PAGES),
+        "unit_label": action.get("unit_label"),
+        "price_label": _action_price_label(ENTERPRISE_DOC_SCAN_ACTION_KEY),
         "can_afford": credits.can_afford(db, organization_id, ENTERPRISE_DOC_SCAN_ACTION_KEY),
         "ai_available": gemini_service.is_ai_configured(),
     }
@@ -11181,6 +11622,12 @@ def _serialize_client_document(
         "validation_message": doc.validation_message,
         "validated_at": _iso(doc.validated_at),
         "validation_credits_charged": int(doc.validation_credits_charged or 0),
+        # Free AI READING (text extraction against the monthly reads allowance), separate from
+        # the paid check above. "read" | "not_read" (stored, allowance used up or AI paused) |
+        # "pending" | "failed" | null (legacy row). can_read_now = offer "Read now".
+        "read_status": doc.read_status,
+        "read_blocks": int(doc.read_blocks or 0),
+        "can_read_now": _document_can_read_now(doc),
         # Human-in-the-loop override (staff accepted a document Rilono AI flagged).
         "manually_accepted": manually_accepted,
         "manually_accepted_by": accepted_by,
@@ -11225,9 +11672,15 @@ def enterprise_list_client_documents(
         # post-charge balance actually becomes visible. Without it the sidebar badge would
         # keep showing the pre-scan balance until the next full page load.
         "wallet": (
-            credits.wallet_state(db, organization.id, currency=_resolve_charge_currency(None, organization))
+            credits.wallet_state(
+                db, organization.id,
+                currency=_resolve_charge_currency(None, organization, db=db, request=request),
+            )
             if role.ctx.has("credits.view") else None
         ),
+        # The monthly reading allowance, for the "Not read yet" badge and "Read now" — shown
+        # to every member who can see documents, not only those who can see the wallet.
+        "reads": credits.reads_state(db, organization.id, read_only=True),
     }
 
 
@@ -11266,12 +11719,23 @@ async def enterprise_upload_client_document(
     # Silently degrading (rather than 403ing) is deliberate: the upload itself is allowed,
     # and the response reports scan_requested so the UI can say why nothing was scanned.
     want_scan = _ent_parse_bool_form(scan, default=True)
+    scan_skipped_reason = None
     if want_scan and not role.ctx.has("credits.spend"):
-        want_scan = False
+        want_scan, scan_skipped_reason = False, "no_permission"
     if want_scan and not gemini_service.is_ai_configured():
-        want_scan = False
+        want_scan, scan_skipped_reason = False, "ai_unavailable"
+    # AI paused (trial ended / plan lapsed) degrades the same way rather than refusing: the
+    # upload is the CRM, which keeps working while AI is paused ("everything in your workspace
+    # is still here"), and the scan checkbox defaults to on — a 402 here would stop every
+    # upload until the member noticed and unticked it. The document is stored, not scanned
+    # and not read (the reader refuses on its own); the explicit Scan / Read now buttons are
+    # where a paused org gets the 402.
+    if want_scan and not billing.ai_access_state(db, organization.id)["allowed"]:
+        want_scan, scan_skipped_reason = False, "ai_paused"
     # Block an unaffordable scan BEFORE storing anything, so the member gets a clean 402
     # with the file still on their machine rather than a stored-but-unscanned surprise.
+    # This first check is for ONE block (AI paused, or an empty wallet, fails here before the
+    # body is even read); the file's real block count is checked once it is in hand, below.
     if want_scan:
         credits.enforce_action_or_402(db, organization.id, ENTERPRISE_DOC_SCAN_ACTION_KEY)
 
@@ -11292,6 +11756,20 @@ async def enterprise_upload_client_document(
             detail=f"File is too large. Maximum size is {ENTERPRISE_DOC_MAX_BYTES // (1024 * 1024)} MB.",
         )
 
+    # A check is priced per 15-page block of THIS file — the check sends the whole file to
+    # the model, so every page is priced (no block cap). Counted off the event loop (pypdf
+    # parses the file) and enforced before anything is stored, like the one-block check.
+    scan_units = 1
+    if want_scan:
+        pages = await run_in_threadpool(
+            gemini_service.count_document_pages, data, original, file.content_type or "",
+        )
+        scan_units = credits.document_scan_units(pages)
+        if scan_units > 1:
+            credits.enforce_action_or_402(
+                db, organization.id, ENTERPRISE_DOC_SCAN_ACTION_KEY, units=scan_units,
+            )
+
     storage_key = f"enterprise/{organization.id}/clients/{client.id}/{uuid.uuid4().hex}{ext}"
     try:
         await run_in_threadpool(enterprise_storage.store_document, storage_key, data, content_type=file.content_type)
@@ -11309,25 +11787,39 @@ async def enterprise_upload_client_document(
         mime_type=(file.content_type or None),
         uploaded_by_user_id=current_user.id,
         uploaded_by_name=current_user.full_name or current_user.email,
+        # The background reader settles this to read / not_read / failed.
+        read_status=DOC_READ_PENDING,
     )
     db.add(doc)
     db.commit()
     db.refresh(doc)
 
-    # Text extraction (free) always runs so the copilot can read the document; the billed
-    # scan only when asked for. Both happen in the background so neither slows the upload.
+    # Reading (free, against the monthly reads allowance) runs so the assistant can read the
+    # document; the billed check only when asked for — and then the check reads the file
+    # itself instead of using reads. Both run in the background so neither slows the upload.
     _start_document_processing(
         doc.id, data, original, file.content_type,
-        validate=want_scan, charge_user_id=current_user.id,
+        validate=want_scan, charge_user_id=current_user.id, scan_units=scan_units,
     )
 
+    message = "Document uploaded." + (" Rilono AI is scanning it." if want_scan else "")
+    if scan_skipped_reason == "ai_paused":
+        message = "Document uploaded. AI features are paused, so Rilono AI didn't scan or read it."
     return {
-        "message": "Document uploaded." + (" Rilono AI is scanning it." if want_scan else ""),
+        "message": message,
         "permissions": _enterprise_permissions_for_role(role),
         "document": _serialize_client_document(
             doc, include_sensitive=role.ctx.has("clients.view_sensitive")
         ),
         "scan_requested": want_scan,
+        # Why a requested scan did not run: "no_permission" (no credits.spend),
+        # "ai_unavailable" (AI not configured), "ai_paused" (trial ended / plan lapsed), or null.
+        "scan_skipped_reason": scan_skipped_reason,
+        # What this check will be debited once it returns a verdict (blocks × block price).
+        "scan_units": scan_units if want_scan else 0,
+        "scan_cost_credits": (
+            credits.action_cost(ENTERPRISE_DOC_SCAN_ACTION_KEY, scan_units) if want_scan else 0
+        ),
         "scan_pricing": _document_scan_pricing(db, organization.id),
     }
 
@@ -11423,6 +11915,108 @@ ENTERPRISE_DOC_SCAN_RATE_LIMIT = int(os.getenv("ENTERPRISE_DOC_SCAN_RATE_LIMIT",
 ENTERPRISE_DOC_SCAN_RATE_WINDOW_SECONDS = int(
     os.getenv("ENTERPRISE_DOC_SCAN_RATE_WINDOW_SECONDS", "3600") or "3600"
 )
+# "Read now" re-reads a stored file and spends the org's reads allowance, so it gets its own
+# limit for the same reason the re-scan has one.
+ENTERPRISE_DOC_READ_RATE_LIMIT = int(os.getenv("ENTERPRISE_DOC_READ_RATE_LIMIT", "30") or "30")
+ENTERPRISE_DOC_READ_RATE_WINDOW_SECONDS = int(
+    os.getenv("ENTERPRISE_DOC_READ_RATE_WINDOW_SECONDS", "3600") or "3600"
+)
+
+# Blocks the free upload READING requests per document. Each block is 15 pages and costs one
+# read from the org's monthly allowance, and the meter must be charged with EXACTLY the blocks
+# the reader requests — so the reader's own hard ceiling is used, and the same number is
+# handed to both gemini_service.enterprise_read_units (what is consumed) and
+# extract_text_from_document (what is read). Not a separate env knob: one that drifted above
+# ENTERPRISE_READ_MAX_BLOCKS would charge for blocks the reader silently refuses to read.
+ENTERPRISE_DOC_READ_MAX_BLOCKS = gemini_service.ENTERPRISE_READ_MAX_BLOCKS
+# read_status values (enterprise_client_documents.read_status). NULL = a legacy row.
+DOC_READ_READ = "read"
+DOC_READ_NOT_READ = "not_read"
+DOC_READ_PENDING = "pending"
+DOC_READ_FAILED = "failed"
+# A document left "pending" longer than this has lost its reader: the reading runs on a
+# daemon thread, which dies with the process on a deploy or restart and never writes the
+# outcome. Past this age "Read now" may claim it again (see _document_can_read_now).
+ENTERPRISE_DOC_READ_STALE_MINUTES = int(os.getenv("ENTERPRISE_DOC_READ_STALE_MINUTES", "30") or "30")
+
+# Documents whose reader is running in THIS process. A "pending" row listed here is alive
+# however old the upload is, so the staleness rule above can never hand a document that is
+# being read right now to a second, double-charged read (e.g. "Read now" double-clicked on
+# an old upload). Rows another process is reading are covered by the age rule alone.
+_DOC_READS_IN_FLIGHT: set[int] = set()
+_DOC_READS_IN_FLIGHT_LOCK = threading.Lock()
+
+
+def _utc_naive(value):
+    """A DB timestamp as naive UTC (Postgres hands back aware values, SQLite naive ones)."""
+    if value is None:
+        return None
+    if getattr(value, "tzinfo", None) is not None:
+        return value.astimezone(dt_timezone.utc).replace(tzinfo=None)
+    return value
+
+
+def _document_has_text(doc) -> bool:
+    return bool((getattr(doc, "extracted_text", None) or "").strip())
+
+
+def _document_can_read_now(doc) -> bool:
+    """Whether "Read now" may read this document: never read (not_read), a read that
+    failed, a legacy row with no text, or a "pending" read orphaned by a restart."""
+    status_value = getattr(doc, "read_status", None)
+    if status_value in (DOC_READ_NOT_READ, DOC_READ_FAILED):
+        return True
+    if status_value is None:
+        return not _document_has_text(doc)
+    if status_value == DOC_READ_PENDING:
+        with _DOC_READS_IN_FLIGHT_LOCK:
+            if int(doc.id) in _DOC_READS_IN_FLIGHT:
+                return False
+        created = _utc_naive(getattr(doc, "created_at", None))
+        if created is None:
+            return False
+        return created < datetime.utcnow() - timedelta(minutes=max(1, ENTERPRISE_DOC_READ_STALE_MINUTES))
+    return False
+
+
+def _action_price_label(action_key: str) -> str:
+    """'4 credits per 15 pages' — the price list's own label, never re-typed in copy."""
+    for action in credits.actions_payload():
+        if action["key"] == action_key:
+            return action.get("price_label") or ""
+    return ""
+
+
+def _reads_date(value) -> Optional[str]:
+    value = _utc_naive(value)
+    if value is None:
+        return None
+    return f"{value.day} {value.strftime('%b %Y')}"
+
+
+def _reads_exhausted_detail(reads: dict, needed: int) -> str:
+    """The 402 for "Read now" when the reading allowance cannot cover the document. Names
+    the paid alternative (a document check reads the file itself, without using reads)."""
+    check = _action_price_label(ENTERPRISE_DOC_SCAN_ACTION_KEY)
+    alternative = f"run a paid document check ({check})" if check else "run a paid document check"
+    remaining = max(0, int(reads.get("remaining") or 0))
+    granted = max(0, int(reads.get("granted") or 0))
+    recurring = bool(reads.get("recurring"))
+    refresh = _reads_date(reads.get("period_ends_at")) if recurring else None
+    period_word = "this month's" if recurring else "your trial's"
+    if remaining <= 0:
+        lead = f"You've used {period_word} {granted:,} AI document read{'s' if granted != 1 else ''}."
+    else:
+        lead = (
+            f"This document needs {needed:,} AI document reads (one per "
+            f"{credits.DOCUMENT_BLOCK_PAGES} pages) and you have {remaining:,} left"
+            f"{' this month' if recurring else ' on your trial'}."
+        )
+    if refresh:
+        return f"{lead} They refresh on {refresh}, or {alternative}."
+    if recurring:
+        return f"{lead} They refresh when your plan renews, or {alternative}."
+    return f"{lead} Choose a plan for a monthly allowance, or {alternative}."
 
 
 def _ent_client_profile_context(client) -> str:
@@ -11592,6 +12186,83 @@ def _ent_autofill_profile(db: Session, client: models.EnterpriseClient, document
     return {"filled": filled, "conflicts": conflicts}
 
 
+def _ent_read_document_text(
+    db2: Session,
+    row: models.EnterpriseClientDocument,
+    data: bytes,
+    filename: str,
+    mime_type: str | None,
+    *,
+    metered: bool,
+    prepaid: dict | None = None,
+) -> None:
+    """Free AI READING of one stored document: extract its text for the assistant, the
+    Copilot and Deep Scan, and settle `row.read_status`. The caller commits.
+
+    metered=True (uploads, "Read now") spends the org's monthly reads allowance:
+    ceil(pages / 15) reads, counted by gemini_service.enterprise_read_units with the SAME
+    block cap the reader then reads with, so the meter and the model calls cannot disagree.
+    The reads are consumed BEFORE any model call (consume_reads is atomic and commits, which
+    also releases the wallet lock before the slow read). When they cannot be — allowance used
+    up, or AI paused — nothing is read and the row is left "not_read": the upload itself has
+    already succeeded and staff can "Read now" later. A read that then FAILS gives its reads
+    back (release_reads, keyed to the period they were taken from, so a read that straddles a
+    renewal never refunds into the new month). `prepaid` ({"reads", "period_key"}) means the
+    reads were already consumed by the request ("Read now" consumes in the request so it can
+    answer 402 synchronously).
+
+    metered=False is the paid document check's own reading: the check reads the file itself
+    and is priced per block, so it never touches the reads allowance.
+    """
+    org_id = row.organization_id
+    reads_taken = 0
+    period_key = None
+    if metered:
+        if prepaid is not None:
+            reads_taken = max(0, int(prepaid.get("reads") or 0))
+            period_key = prepaid.get("period_key")
+        else:
+            if not gemini_service.is_ai_configured():
+                # Nothing could read it: keep the reads, offer "Read now" once AI is back.
+                row.read_status = DOC_READ_NOT_READ
+                row.read_blocks = 0
+                return
+            units = gemini_service.enterprise_read_units(
+                data, filename, mime_type or "", max_blocks=ENTERPRISE_DOC_READ_MAX_BLOCKS,
+            )
+            # Grants a period that rolled since the last request (no commit), and remembers
+            # which period these reads come out of.
+            reads = credits.reads_state(db2, org_id)
+            if not credits.consume_reads(db2, org_id, units):
+                row.read_status = DOC_READ_NOT_READ
+                row.read_blocks = 0
+                return
+            if not reads.get("unlimited"):
+                reads_taken = int(units)
+                period_key = reads.get("period_key")
+    try:
+        text = gemini_service.extract_text_from_document(
+            data, filename, mime_type or "application/octet-stream",
+            model_candidates=gemini_service.enterprise_read_model_candidates(),
+            max_blocks=ENTERPRISE_DOC_READ_MAX_BLOCKS,
+        )
+    except Exception:
+        logger.exception("Enterprise doc reading failed (document_id=%s)", row.id)
+        text = None
+    if text:
+        row.extracted_text = text[:200000]
+        row.read_status = DOC_READ_READ
+        row.read_blocks = reads_taken
+        return
+    row.read_status = DOC_READ_FAILED
+    row.read_blocks = 0
+    if reads_taken:
+        try:
+            credits.release_reads(db2, org_id, reads_taken, period_key=period_key, commit=False)
+        except Exception:
+            logger.exception("Could not give back reads for a failed read (document_id=%s)", row.id)
+
+
 def _start_document_processing(
     document_id: int,
     data: bytes,
@@ -11600,21 +12271,31 @@ def _start_document_processing(
     *,
     validate: bool,
     charge_user_id: int | None = None,
+    scan_units: int = 1,
+    prepaid_reads: dict | None = None,
 ) -> None:
-    """Background work for a newly stored document, in two halves.
+    """Background work for a stored document, in two halves.
 
-    ALWAYS (free): extract the document's text, so the AI copilot can read it and Deep
-    Scan has something to map over. Storing a document must never cost credits — that is
-    the CRM, not a premium AI action.
+    READING (free up to the plan's monthly reads allowance): extract the document's text so
+    the AI assistant / Copilot can read it and Deep Scan has something to map over. Storing a
+    document never costs anything; reading it spends ceil(pages / 15) reads, and once the
+    allowance is used up (or AI is paused) the document is stored "not_read" with no model
+    call at all — see _ent_read_document_text.
 
-    ONLY when `validate` (billed, credits action "document_scan"): run Rilono AI's
-    validation + structured extraction, cross-checked against the client profile and their
-    already-validated documents, and auto-fill empty profile fields from a passed identity
-    document. The caller must already have run credits.enforce_action_or_402 — this worker
-    debits the wallet *after* a successful scan, so a failed scan is never billed.
+    ONLY when `validate` (billed, credits action "document_scan", `scan_units` 15-page
+    blocks): run Rilono AI's validation + structured extraction, cross-checked against the
+    client profile and their already-validated documents, and auto-fill empty profile fields
+    from a passed identity document. The caller must already have run
+    credits.enforce_action_or_402 for those units — this worker debits the wallet *after* a
+    successful scan, so a failed scan is never billed. A paid check reads the file itself:
+    a document with no text yet is read as part of the check, without using reads.
 
-    Used by the staff upload, the client secure-link upload (never validates — no
-    authenticated member to bill) and the on-demand re-scan endpoint.
+    `prepaid_reads` ({"organization_id", "reads", "period_key"}) comes from "Read now", which
+    consumed the reads in the request; the worker only reads, and returns them on failure.
+
+    Used by the staff upload, the client secure-link upload and lead conversion (none of
+    which validate — no authenticated member chose to spend), the on-demand scan endpoint
+    and "Read now".
     """
     def _worker():
         import json
@@ -11627,9 +12308,18 @@ def _start_document_processing(
                 .first()
             )
             if row is None:
+                # Deleted while queued: reads "Read now" already took for it go back.
+                if prepaid_reads and prepaid_reads.get("reads") and prepaid_reads.get("organization_id"):
+                    try:
+                        credits.release_reads(
+                            db2, int(prepaid_reads["organization_id"]), int(prepaid_reads["reads"]),
+                            period_key=prepaid_reads.get("period_key"),
+                        )
+                    except Exception:
+                        logger.exception("Could not give back reads for a deleted document (document_id=%s)", document_id)
                 return
             # Fresh thread = fresh contextvars: attribute this worker's Gemini calls
-            # (extraction + validation) to the org so their cost isn't unattributed.
+            # (reading + validation) to the org so their cost isn't unattributed.
             ai_usage.set_usage_account(organization_id=row.organization_id)
             client = (
                 db2.query(models.EnterpriseClient)
@@ -11637,25 +12327,30 @@ def _start_document_processing(
                 .first()
             )
 
-            # 1) Full-text extraction for the copilot (best-effort, never billed).
-            try:
-                extracted = gemini_service.extract_text_from_document(
-                    data, filename, mime_type or "application/octet-stream"
+            # 1) Reading for the assistant. Metered against the reads allowance — except as
+            #    part of a paid check, which reads the file itself (and only when there is no
+            #    text yet: a re-scan of a read document does not pay to read it again).
+            if validate:
+                if not _document_has_text(row):
+                    _ent_read_document_text(db2, row, data, filename, mime_type, metered=False)
+            else:
+                _ent_read_document_text(
+                    db2, row, data, filename, mime_type, metered=True, prepaid=prepaid_reads,
                 )
-                if extracted:
-                    row.extracted_text = extracted[:200000]
-            except Exception:
-                logger.exception("Enterprise doc text extraction failed (document_id=%s)", document_id)
 
             # The scan was not asked for: keep the document, skip the paid half. An explicit
             # "not_scanned" (rather than NULL) lets the UI tell "never scanned" apart from
-            # "scan still running" and offer the Scan button on exactly the former.
+            # "scan still running" and offer the Scan button on exactly the former. Only a
+            # FRESH upload is stamped — "Read now" on a checked document must not erase its
+            # verdict, nor clobber a check that is in flight (NULL) right now.
             if not validate:
-                row.validation_status = "not_scanned"
-                row.validation_message = None
+                if prepaid_reads is None and row.validation_status is None:
+                    row.validation_status = "not_scanned"
+                    row.validation_message = None
                 db2.commit()
                 return
 
+            units_to_charge = max(1, int(scan_units or 1))
             # 2) Validate the document + extract structured identity fields.
             destination_code = client.destination_country_code if client is not None else None
             destination_summary = (
@@ -11751,8 +12446,12 @@ def _start_document_processing(
                     if charge_user_id else None
                 )
                 try:
+                    # Priced per 15-page block (scan_units, counted by the endpoint that
+                    # pre-checked the wallet for exactly this amount); the row records the
+                    # same total the ledger row debits.
                     credits.charge_action(
                         db2, row.organization_id, ENTERPRISE_DOC_SCAN_ACTION_KEY,
+                        units=units_to_charge,
                         user=charging_user, reference_type="client", reference_id=row.client_id,
                         description=(
                             f"Document scan — {row.document_type}"
@@ -11760,7 +12459,9 @@ def _start_document_processing(
                         ),
                         commit=False,
                     )
-                    row.validation_credits_charged = credits.action_cost(ENTERPRISE_DOC_SCAN_ACTION_KEY)
+                    row.validation_credits_charged = credits.action_cost(
+                        ENTERPRISE_DOC_SCAN_ACTION_KEY, units_to_charge,
+                    )
                 except Exception:
                     # The wallet was drained by a concurrent action between this scan's
                     # pre-check and here. The Gemini call is already paid for, so keep the
@@ -11777,7 +12478,14 @@ def _start_document_processing(
             logger.exception("Background document processing failed (document_id=%s)", document_id)
         finally:
             db2.close()
+            with _DOC_READS_IN_FLIGHT_LOCK:
+                _DOC_READS_IN_FLIGHT.discard(int(document_id))
 
+    # Registered BEFORE the thread starts, not inside it: the caller has already committed
+    # the row as "pending", and a "Read now" landing in the gap before the thread runs must
+    # see this read as alive rather than orphaned.
+    with _DOC_READS_IN_FLIGHT_LOCK:
+        _DOC_READS_IN_FLIGHT.add(int(document_id))
     threading.Thread(target=_worker, daemon=True).start()
 
 
@@ -11825,20 +12533,23 @@ def enterprise_scan_client_document(
     if not gemini_service.is_ai_configured():
         raise HTTPException(status_code=503, detail="Document scanning isn't available right now.")
 
-    # Block before spending anything — same order as every other billed action here.
+    # Block before spending anything — same order as every other billed action here. One
+    # block first (AI paused / an empty wallet stop here without touching storage), then the
+    # file's real block count once it is fetched.
     credits.enforce_action_or_402(db, organization.id, ENTERPRISE_DOC_SCAN_ACTION_KEY)
 
-    try:
-        data = enterprise_storage.fetch_document(doc.storage_key)
-    except enterprise_storage.DocumentNotFound:
-        logger.warning("Document blob missing for scan (document_id=%s)", doc.id)
-        raise HTTPException(
-            status_code=410,
-            detail="This document's file is no longer available and can't be scanned. Please re-upload it.",
+    data = _fetch_document_bytes_or_error(doc, purpose="scanned")
+
+    # Priced per 15-page block of the whole file: the check sends every page to the model.
+    # A check reads the file itself, so it never uses (or needs) the reads allowance — which
+    # is also why it is the way to read a "not_read" document once the allowance is spent.
+    scan_units = credits.document_scan_units(
+        gemini_service.count_document_pages(data, doc.original_filename, doc.mime_type or "")
+    )
+    if scan_units > 1:
+        credits.enforce_action_or_402(
+            db, organization.id, ENTERPRISE_DOC_SCAN_ACTION_KEY, units=scan_units,
         )
-    except Exception:
-        logger.exception("Failed to fetch document for scan (document_id=%s)", doc.id)
-        raise HTTPException(status_code=502, detail="Could not retrieve the document right now. Please try again.")
 
     # Hand the worker a clean slate: a re-scan that fails must not leave the previous
     # verdict on screen looking like the new one. NULL marks the scan as in flight.
@@ -11849,7 +12560,7 @@ def enterprise_scan_client_document(
 
     _start_document_processing(
         doc.id, data, doc.original_filename, doc.mime_type,
-        validate=True, charge_user_id=current_user.id,
+        validate=True, charge_user_id=current_user.id, scan_units=scan_units,
     )
 
     return {
@@ -11858,7 +12569,131 @@ def enterprise_scan_client_document(
         "document": _serialize_client_document(
             doc, include_sensitive=role.ctx.has("clients.view_sensitive")
         ),
+        "scan_units": scan_units,
+        "scan_cost_credits": credits.action_cost(ENTERPRISE_DOC_SCAN_ACTION_KEY, scan_units),
         "scan_pricing": _document_scan_pricing(db, organization.id),
+    }
+
+
+def _fetch_document_bytes_or_error(doc: models.EnterpriseClientDocument, *, purpose: str) -> bytes:
+    """The stored file's bytes for a scan / read: 410 when the blob is gone (re-upload),
+    502 when storage is unreachable (retry). `purpose` words the 410 ("scanned", "read")."""
+    try:
+        return enterprise_storage.fetch_document(doc.storage_key)
+    except enterprise_storage.DocumentNotFound:
+        logger.warning("Document blob missing (document_id=%s, purpose=%s)", doc.id, purpose)
+        raise HTTPException(
+            status_code=410,
+            detail=f"This document's file is no longer available and can't be {purpose}. Please re-upload it.",
+        )
+    except Exception:
+        logger.exception("Failed to fetch document (document_id=%s, purpose=%s)", doc.id, purpose)
+        raise HTTPException(status_code=502, detail="Could not retrieve the document right now. Please try again.")
+
+
+@router.post("/clients/{client_id}/documents/{document_id}/read")
+def enterprise_read_client_document(
+    client_id: int,
+    document_id: int,
+    request: Request,
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_active_user),
+):
+    """"Read now": run the free AI reading on a stored document that was not read — the
+    month's reads allowance was used up (or AI was paused) when it was uploaded, or the
+    read failed. Spends reads from the allowance exactly like an upload does.
+
+    Same capability as uploading (reading is what an upload does for free), and NOT
+    credits.spend: reads are a plan allowance, not a wallet debit. The reads are consumed
+    HERE, before the background read starts, so an allowance that cannot cover the document
+    answers a clean 402 naming the refresh date and the paid alternative; the worker gives
+    them back if the read itself fails.
+    """
+    _, organization, role = _require_enterprise_membership(
+        db=db, user=current_user, request=request, require_capability="documents.upload",
+    )
+    client = _get_org_client_or_404(db, organization.id, client_id, ctx=role.ctx)
+    _enforce_rate_limit_or_429(
+        request, scope="enterprise.document_read",
+        limit=ENTERPRISE_DOC_READ_RATE_LIMIT,
+        window_seconds=ENTERPRISE_DOC_READ_RATE_WINDOW_SECONDS,
+        extra_key=str(current_user.id),
+    )
+    Doc = models.EnterpriseClientDocument
+    doc = (
+        db.query(Doc)
+        .filter(
+            Doc.id == int(document_id),
+            Doc.client_id == client.id,
+            Doc.organization_id == organization.id,
+        )
+        .first()
+    )
+    if not doc:
+        raise HTTPException(status_code=404, detail="Document not found.")
+    if not _document_can_read_now(doc):
+        if doc.read_status == DOC_READ_PENDING:
+            raise HTTPException(status_code=409, detail="Rilono AI is already reading this document.")
+        raise HTTPException(status_code=409, detail="Rilono AI has already read this document.")
+    if not gemini_service.is_ai_configured():
+        raise HTTPException(status_code=503, detail="Document reading isn't available right now.")
+    # AI paused refuses before the file is even fetched — same gate as every AI path.
+    billing.enforce_ai_access_or_402(db, organization.id)
+
+    data = _fetch_document_bytes_or_error(doc, purpose="read")
+    units = gemini_service.enterprise_read_units(
+        data, doc.original_filename, doc.mime_type or "", max_blocks=ENTERPRISE_DOC_READ_MAX_BLOCKS,
+    )
+
+    # Claim the document ATOMICALLY before consuming: a conditional UPDATE from the state we
+    # just judged readable, so two clicks (two tabs, two staff) cannot both pass the check
+    # above and spend the reads twice. The loser gets the same 409 as a read in flight.
+    previous_status = doc.read_status
+    if previous_status is None:
+        status_match = Doc.read_status.is_(None)
+    else:
+        status_match = Doc.read_status == previous_status
+    claimed = (
+        db.query(Doc)
+        .filter(Doc.id == doc.id, status_match)
+        .update({"read_status": DOC_READ_PENDING}, synchronize_session=False)
+    )
+    if not claimed:
+        db.rollback()
+        raise HTTPException(status_code=409, detail="Rilono AI is already reading this document.")
+
+    # Grants a period that rolled since the last request first (so a new month's first read
+    # is not refused against last month's count), then consumes all-or-nothing under the
+    # wallet row lock. Committed together with the claim below.
+    reads = credits.reads_state(db, organization.id)
+    if not credits.consume_reads(db, organization.id, units, commit=False):
+        # Put the document back exactly as it was; the period grant above is kept.
+        db.query(Doc).filter(Doc.id == doc.id).update(
+            {"read_status": previous_status}, synchronize_session=False,
+        )
+        db.commit()
+        raise HTTPException(status_code=402, detail=_reads_exhausted_detail(reads, units))
+    db.commit()
+
+    reads_taken = 0 if reads.get("unlimited") else int(units)
+    _start_document_processing(
+        doc.id, data, doc.original_filename, doc.mime_type,
+        validate=False,
+        prepaid_reads={
+            "organization_id": organization.id,
+            "reads": reads_taken,
+            "period_key": reads.get("period_key"),
+        },
+    )
+    db.refresh(doc)
+    return {
+        "message": "Rilono AI is reading this document.",
+        "permissions": _enterprise_permissions_for_role(role),
+        "document": _serialize_client_document(
+            doc, include_sensitive=role.ctx.has("clients.view_sensitive")
+        ),
+        "reads_used": reads_taken,
+        "reads": credits.reads_state(db, organization.id, read_only=True),
     }
 
 
@@ -12086,16 +12921,27 @@ def _deep_scan_count(db: Session, organization_id: int, client_id: int) -> int:
 
 
 def _deep_scan_pricing(db: Session, organization_id: int, client_id: int) -> dict:
-    """What the NEXT scan of this client will cost. Each client's first scan is free,
-    bounded by the org's monthly free-scan budget (anti-farming — see enterprise_credits)."""
+    """What the NEXT scan of this client will cost, and what one scan covers.
+
+    Since 2026-10-22 there are no free scans by default (credits.DEEP_SCAN_FREE_SCANS_PER_CLIENT
+    = 0): every scan costs the flat deep_scan price. The free-scan fields stay because the knob
+    survives for promotions — when it is on, each client's first N scans are free, bounded by
+    the org's monthly free-scan budget (anti-farming — see enterprise_credits). While AI is
+    paused deep_scan_free_budget_left answers 0, so no scan is ever advertised as free then.
+    `max_documents` is the cap the audit actually reads (enterprise_ai.DEEP_SCAN_MAX_DOCUMENTS,
+    the newest documents when a dossier holds more)."""
     scans_run = _deep_scan_count(db, organization_id, client_id)
     free_remaining = max(0, credits.DEEP_SCAN_FREE_SCANS_PER_CLIENT - scans_run)
     if free_remaining and credits.deep_scan_free_budget_left(db, organization_id) <= 0:
         free_remaining = 0
     return {
         "cost_credits": credits.action_cost("deep_scan"),
+        "price_label": _action_price_label("deep_scan"),
         "free_remaining": free_remaining,
         "next_scan_free": free_remaining > 0,
+        "free_scans_per_client": max(0, int(credits.DEEP_SCAN_FREE_SCANS_PER_CLIENT)),
+        "max_documents": int(enterprise_ai.DEEP_SCAN_MAX_DOCUMENTS),
+        "can_afford": free_remaining > 0 or credits.can_afford(db, organization_id, "deep_scan"),
     }
 
 
@@ -12163,9 +13009,10 @@ def enterprise_client_deep_scan(
     current_user: models.User = Depends(get_current_active_user),
 ):
     """Premium AI action: Rilono AI strictly audits the client's ENTIRE dossier —
-    profile, stage case records, document contents, notes, emails, universities,
-    interview results and payments — and stores the structured result as history.
-    Each client's first scan is free; after that it's credit-billed."""
+    profile, stage case records, the contents of up to enterprise_ai.DEEP_SCAN_MAX_DOCUMENTS
+    documents, notes, emails, universities, interview results and payments — and stores the
+    structured result as history. Credit-billed at the flat deep_scan price per scan (free
+    scans exist only when ENTERPRISE_DEEP_SCAN_FREE_SCANS_PER_CLIENT is switched on)."""
     _, organization, role = _require_enterprise_membership(
         db=db, user=current_user, request=request, require_capability=("ai.deepscan", "credits.spend")
     )
@@ -12179,11 +13026,15 @@ def enterprise_client_deep_scan(
 
     if not enterprise_ai.is_ai_configured():
         raise HTTPException(status_code=503, detail="Deep Scan isn't available right now.")
+    # AI paused refuses EVERY scan before any model call — a promotional free scan included
+    # (the free path below never calls enforce_action_or_402, so it needs the gate itself).
+    billing.enforce_ai_access_or_402(db, organization.id)
 
-    # Each client's first scan is free (counted from STORED scans — failures store
-    # nothing, so they never burn the freebie), bounded by the org's monthly free-scan
-    # budget so client create→scan→delete churn can't farm unlimited free audits.
-    # Paid runs are hard-blocked before spending any Gemini tokens.
+    # Free scans only when the promotional knob is on: each client's first N scans
+    # (counted from STORED scans — failures store nothing, so they never burn the
+    # freebie), bounded by the org's monthly free-scan budget so client
+    # create→scan→delete churn can't farm unlimited free audits. Paid runs are
+    # hard-blocked before spending any Gemini tokens.
     is_free = (
         _deep_scan_count(db, organization.id, client.id) < credits.DEEP_SCAN_FREE_SCANS_PER_CLIENT
         and credits.deep_scan_free_budget_left(db, organization.id) > 0
@@ -12267,7 +13118,10 @@ def enterprise_client_deep_scan(
         "credits_charged": charged,
         "was_free": is_free,
         "pricing": _deep_scan_pricing(db, organization.id, client.id),
-        "wallet": credits.wallet_state(db, organization.id, currency=_resolve_charge_currency(None, organization)),
+        "wallet": credits.wallet_state(
+            db, organization.id,
+            currency=_resolve_charge_currency(None, organization, db=db, request=request),
+        ),
     }
 
 
@@ -12277,7 +13131,9 @@ def enterprise_client_deep_scan(
 # Two things make this different from the B2C SOP generator: the draft is grounded in a
 # CONSULTANCY's dossier for the client (case records, documents, shortlist, notes), and
 # the deliverable is a formatted Word file the office actually hands over. Generation and
-# refinement each cost one credit; re-downloading a stored draft is free (no model call).
+# refinement are each billed at the writing_studio price (credits.ACTIONS — 5 credits since
+# 2026-10-22; never restate the number here or in copy); re-downloading a stored draft is free
+# (no model call).
 # ===========================================================================
 
 WRITING_STUDIO_ACTION_KEY = "writing_studio"
@@ -12308,9 +13164,11 @@ class EnterpriseWritingRefineRequest(BaseModel):
 
 
 def _writing_pricing(db: Session, organization_id: int) -> dict:
+    """One draft or one refinement, each at the flat writing_studio price."""
     cost = credits.action_cost(WRITING_STUDIO_ACTION_KEY)
     return {
         "cost_credits": cost,
+        "price_label": _action_price_label(WRITING_STUDIO_ACTION_KEY),
         "can_afford": credits.can_afford(db, organization_id, WRITING_STUDIO_ACTION_KEY),
     }
 
@@ -12552,7 +13410,10 @@ def enterprise_client_writing_generate(
         "credits_charged": charged,
         "coverage": result.get("coverage") or {},
         "pricing": _writing_pricing(db, organization.id),
-        "wallet": credits.wallet_state(db, organization.id, currency=_resolve_charge_currency(None, organization)),
+        "wallet": credits.wallet_state(
+            db, organization.id,
+            currency=_resolve_charge_currency(None, organization, db=db, request=request),
+        ),
     }
 
 
@@ -12637,7 +13498,10 @@ def enterprise_client_writing_refine(
         "draft": enterprise_writing.serialize_draft(draft),
         "credits_charged": charged,
         "pricing": _writing_pricing(db, organization.id),
-        "wallet": credits.wallet_state(db, organization.id, currency=_resolve_charge_currency(None, organization)),
+        "wallet": credits.wallet_state(
+            db, organization.id,
+            currency=_resolve_charge_currency(None, organization, db=db, request=request),
+        ),
     }
 
 
@@ -12724,6 +13588,24 @@ ENTERPRISE_INTERVIEW_RATE_LIMIT = int(os.getenv("ENTERPRISE_INTERVIEW_RATE_LIMIT
 ENTERPRISE_INTERVIEW_RATE_WINDOW_SECONDS = int(os.getenv("ENTERPRISE_INTERVIEW_RATE_WINDOW_SECONDS", "300"))
 
 
+# A paid interview runs in a SERVER-SIDE session (EnterpriseInterviewSession): start creates
+# it (and charges once), every answer is appended to ITS transcript, and the one feedback
+# report completes it. An in-progress session nobody has touched for this long is marked
+# "abandoned" (lazily, when the org next starts one) and accepts no more turns — the same
+# window as the public link's verification session, so a session can never outlive the
+# browser session that drives it.
+ENTERPRISE_INTERVIEW_ABANDON_HOURS = max(
+    1, int(os.getenv("ENTERPRISE_INTERVIEW_ABANDON_HOURS", "3") or "3"),
+)
+INTERVIEW_STATUS_IN_PROGRESS = "in_progress"
+INTERVIEW_STATUS_COMPLETED = "completed"
+INTERVIEW_STATUS_ABANDONED = "abandoned"
+# Transcript turns a legacy client may still post. Ignored (the server's transcript is the
+# only one used) but bounded, because validation runs before any auth or rate limit — and the
+# capped interview never legitimately has more than ~2 x MAX_INTERVIEW_QUESTIONS turns.
+_INTERVIEW_LEGACY_HISTORY_MAX = 100
+
+
 class EnterpriseInterviewTurn(BaseModel):
     role: str = Field(..., max_length=16)
     content: str = Field(..., max_length=8000)
@@ -12731,13 +13613,141 @@ class EnterpriseInterviewTurn(BaseModel):
 
 class EnterpriseInterviewChatRequest(BaseModel):
     message: Optional[str] = Field(default=None, max_length=4000)
-    history: Optional[list[EnterpriseInterviewTurn]] = None
     start: bool = False
+    # Required for every turn after the start: the session start returned.
+    session_id: Optional[int] = Field(default=None, ge=1)
+    mode: Optional[str] = Field(default=None, max_length=12)
+    # IGNORED since server-side sessions (2026-10-22) — accepted only so a cached SPA that
+    # still sends it gets a clear "start a new interview" answer instead of a 422.
+    history: Optional[list[EnterpriseInterviewTurn]] = Field(
+        default=None, max_length=_INTERVIEW_LEGACY_HISTORY_MAX,
+    )
 
 
 class EnterpriseInterviewFeedbackRequest(BaseModel):
-    history: list[EnterpriseInterviewTurn] = Field(..., min_length=1)
-    mode: str = Field(default="chat", max_length=12)
+    session_id: Optional[int] = Field(default=None, ge=1)
+    mode: Optional[str] = Field(default=None, max_length=12)
+    # IGNORED (see EnterpriseInterviewChatRequest.history).
+    history: Optional[list[EnterpriseInterviewTurn]] = Field(
+        default=None, max_length=_INTERVIEW_LEGACY_HISTORY_MAX,
+    )
+
+
+def _interview_mode(raw: Optional[str], default: str = "chat") -> str:
+    value = (raw or "").strip().lower()
+    if value in ("voice", "chat"):
+        return value
+    return default
+
+
+def _interview_transcript(session: models.EnterpriseInterviewSession) -> list:
+    """The session's stored transcript (oldest first) — the ONLY history a turn or the
+    feedback report is ever built from; whatever the browser holds is display state."""
+    try:
+        value = _json.loads(session.transcript) if session.transcript else []
+    except Exception:
+        value = []
+    return [t for t in value if isinstance(t, dict)] if isinstance(value, list) else []
+
+
+def _store_interview_transcript(session: models.EnterpriseInterviewSession, transcript: list) -> None:
+    # Bounded by the question cap (≤ ~2 x MAX_INTERVIEW_QUESTIONS turns of ≤ 4,000 chars of
+    # answer each), so this never truncates a real session; the slice stays as a backstop.
+    session.transcript = _json.dumps(transcript)[:400000]
+
+
+def _interview_officer_closed(transcript: list) -> Optional[dict]:
+    """The officer's closing turn (its decision), if the officer has ended the interview."""
+    for turn in reversed(transcript):
+        if str(turn.get("role") or "").strip().lower() in ("officer", "model", "assistant", "ai"):
+            if turn.get("finished") is True:
+                return turn
+            return None
+    return None
+
+
+def _interview_has_answer(transcript: list) -> bool:
+    return any(
+        str(t.get("role") or "").strip().lower() == "user" and str(t.get("content") or "").strip()
+        for t in transcript
+    )
+
+
+def _interview_session_stale(session: models.EnterpriseInterviewSession) -> bool:
+    last = _utc_naive(session.updated_at) or _utc_naive(session.created_at)
+    if last is None:
+        return False
+    return last < datetime.utcnow() - timedelta(hours=ENTERPRISE_INTERVIEW_ABANDON_HOURS)
+
+
+def _abandon_stale_interview_sessions(db: Session, organization_id: int) -> None:
+    """Lazily retire this org's in-progress sessions nobody has touched within the window
+    (the browser was closed mid-interview). Run when a new session starts; the caller
+    commits. Abandoned sessions stay stored (they were charged) but are never listed as
+    interviews, never take another turn and never get a feedback report."""
+    S = models.EnterpriseInterviewSession
+    cutoff = datetime.now(dt_timezone.utc) - timedelta(hours=ENTERPRISE_INTERVIEW_ABANDON_HOURS)
+    db.query(S).filter(
+        S.organization_id == int(organization_id),
+        S.status == INTERVIEW_STATUS_IN_PROGRESS,
+        func.coalesce(S.updated_at, S.created_at) < cutoff,
+    ).update({"status": INTERVIEW_STATUS_ABANDONED}, synchronize_session=False)
+
+
+def _interview_session_for_turn_or_error(
+    db: Session,
+    query,
+    *,
+    not_found_detail: str,
+    for_feedback: bool = False,
+) -> models.EnterpriseInterviewSession:
+    """Load (row-locked) the in-progress session a turn / the feedback report belongs to.
+
+    The lock is held through the model call on purpose: two answers sent at once (two tabs,
+    a double-click) then run one after the other on the SAME stored transcript instead of
+    both appending to a stale copy and one silently overwriting the other. It is one
+    session's row, not a hot one — only that session's own requests ever wait on it.
+    """
+    session = query.with_for_update().first()
+    if session is None:
+        raise HTTPException(status_code=404, detail=not_found_detail)
+    if session.status == INTERVIEW_STATUS_COMPLETED:
+        raise HTTPException(
+            status_code=409,
+            detail=("The feedback report for this interview has already been generated."
+                    if for_feedback else "This interview has finished. Start a new interview to practise again."),
+        )
+    if session.status != INTERVIEW_STATUS_IN_PROGRESS or _interview_session_stale(session):
+        if session.status == INTERVIEW_STATUS_IN_PROGRESS:
+            session.status = INTERVIEW_STATUS_ABANDONED
+            db.commit()
+        raise HTTPException(
+            status_code=409,
+            detail="This interview session has expired. Start a new interview to practise again.",
+        )
+    return session
+
+
+def _interview_turn_payload(turn: dict, session: models.EnterpriseInterviewSession) -> dict:
+    return {
+        "reply": turn["reply"],
+        "finished": bool(turn["finished"]),
+        "decision": turn.get("decision"),
+        "session_id": session.id,
+        "questions_asked": int(session.questions_asked or 0),
+        "max_questions": int(turn.get("max_questions") or enterprise_interview.MAX_INTERVIEW_QUESTIONS),
+        "forced_close": bool(turn.get("forced_close")),
+    }
+
+
+def _officer_turn_record(turn: dict) -> dict:
+    """How an officer reply is stored. The closing turn carries finished/decision, which
+    is also what count_officer_questions uses to not count it as a question."""
+    record = {"role": "officer", "content": turn["reply"]}
+    if turn.get("finished"):
+        record["finished"] = True
+        record["decision"] = turn.get("decision")
+    return record
 
 
 def _recent_client_notes(db: Session, client_id: int, limit: int = 6):
@@ -12771,13 +13781,13 @@ def _serialize_interview_session(s: models.EnterpriseInterviewSession, include_d
         "conducted_by_name": s.conducted_by_name,
         "mode": s.mode,
         "verdict": s.verdict,
+        "status": s.status or INTERVIEW_STATUS_COMPLETED,
+        "questions_asked": int(s.questions_asked or 0),
+        "credits_charged": int(s.credits_charged or 0),
         "created_at": _iso(s.created_at),
     }
     if include_detail:
-        try:
-            data["transcript"] = _json.loads(s.transcript) if s.transcript else []
-        except Exception:
-            data["transcript"] = []
+        data["transcript"] = _interview_transcript(s)
         data["feedback"] = s.feedback
     return data
 
@@ -12790,6 +13800,16 @@ def enterprise_interview_chat(
     db: Session = Depends(get_db),
     current_user: models.User = Depends(get_current_active_user),
 ):
+    """One step of a STAFF-run mock interview.
+
+    start=true opens a server-side session: the officer's opening turn runs FIRST, and only
+    when it succeeds is the session stored and the interview charged (a free staff preview
+    while any remain, then the mock_interview price) — a failed start costs nothing. Every
+    later turn names that `session_id`; the officer sees the SERVER's transcript (whatever
+    history the browser holds is ignored), and at MAX_INTERVIEW_QUESTIONS the officer
+    closes with a decision instead of asking another question, after which the session
+    takes no more answers — only its one feedback report.
+    """
     _, organization, role = _require_enterprise_membership(db=db, user=current_user, request=request, require_capability=("interviews.run", "credits.spend"))
     client = _get_org_client_or_404(db, organization.id, client_id, ctx=role.ctx)
     _enforce_rate_limit_or_429(
@@ -12799,44 +13819,120 @@ def enterprise_interview_chat(
     if not enterprise_interview.is_ai_configured():
         raise HTTPException(status_code=503, detail="The mock interview isn't available right now.")
 
-    is_start = bool(payload.start)
-    # A STAFF-run interview is a preview/test tool — the self-serve link a student takes
-    # is the real product. Staff get a few free previews per org, then it costs the normal
-    # mock_interview price. Hard-block before any tokens are spent if unaffordable.
-    if is_start:
+    if payload.start:
+        # A STAFF-run interview is a preview/test tool — the self-serve link a student takes
+        # is the real product. Staff get a few free previews per org, then it costs the normal
+        # mock_interview price. 402 (AI paused, or unaffordable) before any tokens are spent.
         credits.enforce_staff_interview_or_402(db, organization.id)
+        try:
+            turn = enterprise_interview.run_interview_turn(
+                client=client,
+                organization=organization,
+                recent_notes=_recent_client_notes(db, client.id),
+                documents=_recent_client_documents(db, client.id),
+                history=[],
+                message="",
+                is_start=True,
+                questions_asked=0,
+            )
+        except Exception:
+            logger.exception("Mock interview start failed (org_id=%s, client_id=%s)", organization.id, client.id)
+            raise HTTPException(status_code=502, detail="The interviewer ran into a problem. Please try again.")
 
-    history = [t.model_dump() for t in (payload.history or [])]
+        _abandon_stale_interview_sessions(db, organization.id)
+        session = models.EnterpriseInterviewSession(
+            organization_id=organization.id,
+            client_id=client.id,
+            conducted_by_user_id=current_user.id,
+            conducted_by_name=current_user.full_name or current_user.email,
+            mode=_interview_mode(payload.mode),
+            status=INTERVIEW_STATUS_IN_PROGRESS,
+            questions_asked=int(turn.get("questions_asked") or 0),
+            credits_charged=0,
+        )
+        _store_interview_transcript(session, [_officer_turn_record(turn)])
+        db.add(session)
+        db.flush()
+        # Charge only now that the officer has actually opened — and in the SAME commit as
+        # the session row, so a session never exists unpaid nor a charge without a session.
+        meter = credits.consume_staff_interview(
+            db, organization.id,
+            user=current_user, reference_id=client.id,
+            description=f"Mock interview (staff preview) — {client.full_name}",
+            commit=False,
+        )
+        session.credits_charged = int(meter.get("charged") or 0)
+        db.commit()
+        db.refresh(session)
+
+        response_payload = _interview_turn_payload(turn, session)
+        response_payload.update({
+            "permissions": _enterprise_permissions_for_role(role),
+            "credits_charged": meter["charged"],
+            "was_preview": meter["was_preview"],
+            "previews_remaining": meter["previews_remaining"],
+            "wallet": credits.wallet_state(
+                db, organization.id,
+                currency=_resolve_charge_currency(None, organization, db=db, request=request),
+            ),
+        })
+        return response_payload
+
+    if not payload.session_id:
+        raise HTTPException(
+            status_code=400,
+            detail="This interview session has expired. Start a new interview to practise again.",
+        )
+    S = models.EnterpriseInterviewSession
+    session = _interview_session_for_turn_or_error(
+        db,
+        db.query(S).filter(
+            S.id == int(payload.session_id),
+            S.organization_id == organization.id,
+            S.client_id == client.id,
+            S.invite_id.is_(None),  # a self-serve (public link) session is the client's own
+        ),
+        not_found_detail="Interview session not found.",
+    )
+    transcript = _interview_transcript(session)
+    if _interview_officer_closed(transcript):
+        raise HTTPException(
+            status_code=409,
+            detail="The officer has already ended this interview — generate the feedback report.",
+        )
+    # Turns are included in the session's one charge, but each is still a model call: AI
+    # paused (trial ended / plan lapsed mid-interview) stops the next one.
+    billing.enforce_ai_access_or_402(db, organization.id)
+
+    message = (payload.message or "").strip()
     try:
         turn = enterprise_interview.run_interview_turn(
             client=client,
             organization=organization,
             recent_notes=_recent_client_notes(db, client.id),
             documents=_recent_client_documents(db, client.id),
-            history=history,
-            message=payload.message or "",
-            is_start=is_start,
+            history=transcript,
+            message=message,
+            is_start=False,
+            questions_asked=int(session.questions_asked or 0),
         )
     except Exception:
         logger.exception("Mock interview turn failed (org_id=%s, client_id=%s)", organization.id, client.id)
         raise HTTPException(status_code=502, detail="The interviewer ran into a problem. Please try again.")
 
-    response_payload = {
-        "reply": turn["reply"],
-        "finished": turn["finished"],
-        "decision": turn["decision"],
-        "permissions": _enterprise_permissions_for_role(role),
-    }
-    if is_start:
-        meter = credits.consume_staff_interview(
-            db, organization.id,
-            user=current_user, reference_id=client.id,
-            description=f"Mock interview (staff preview) — {client.full_name}",
-        )
-        response_payload["credits_charged"] = meter["charged"]
-        response_payload["was_preview"] = meter["was_preview"]
-        response_payload["previews_remaining"] = meter["previews_remaining"]
-        response_payload["wallet"] = credits.wallet_state(db, organization.id, currency=_resolve_charge_currency(None, organization))
+    # The same stand-in run_interview_turn sends the model for an empty answer, so the stored
+    # transcript reads exactly as the officer saw it.
+    transcript.append({"role": "user", "content": message[:3000] or "(no answer given)"})
+    transcript.append(_officer_turn_record(turn))
+    _store_interview_transcript(session, transcript)
+    session.questions_asked = int(turn.get("questions_asked") or session.questions_asked or 0)
+    if payload.mode:
+        session.mode = _interview_mode(payload.mode, session.mode or "chat")
+    db.commit()
+    db.refresh(session)
+
+    response_payload = _interview_turn_payload(turn, session)
+    response_payload["permissions"] = _enterprise_permissions_for_role(role)
     return response_payload
 
 
@@ -12848,6 +13944,8 @@ def enterprise_interview_feedback(
     db: Session = Depends(get_db),
     current_user: models.User = Depends(get_current_active_user),
 ):
+    """The session's ONE feedback report, built from the server's transcript; generating it
+    completes the session (a second request is a 409, never a second model call)."""
     _, organization, role = _require_enterprise_membership(db=db, user=current_user, request=request, require_capability=("interviews.run", "credits.spend"))
     client = _get_org_client_or_404(db, organization.id, client_id, ctx=role.ctx)
     _enforce_rate_limit_or_429(
@@ -12856,11 +13954,34 @@ def enterprise_interview_feedback(
     )
     if not enterprise_interview.is_ai_configured():
         raise HTTPException(status_code=503, detail="Feedback isn't available right now.")
+    if not payload.session_id:
+        raise HTTPException(
+            status_code=400,
+            detail="This interview session has expired. Start a new interview to practise again.",
+        )
 
-    history = [t.model_dump() for t in payload.history]
+    S = models.EnterpriseInterviewSession
+    session = _interview_session_for_turn_or_error(
+        db,
+        db.query(S).filter(
+            S.id == int(payload.session_id),
+            S.organization_id == organization.id,
+            S.client_id == client.id,
+            S.invite_id.is_(None),
+        ),
+        not_found_detail="Interview session not found.",
+        for_feedback=True,
+    )
+    transcript = _interview_transcript(session)
+    if not _interview_has_answer(transcript):
+        raise HTTPException(status_code=400, detail="Answer at least one question first.")
+    billing.enforce_ai_access_or_402(db, organization.id)
+
+    closing = _interview_officer_closed(transcript)
     try:
         feedback = enterprise_interview.generate_interview_feedback(
-            client=client, organization=organization, history=history,
+            client=client, organization=organization, history=transcript,
+            officer_decision=(closing or {}).get("decision"),
             documents=_recent_client_documents(db, client.id),
         )
     except Exception:
@@ -12868,17 +13989,11 @@ def enterprise_interview_feedback(
         raise HTTPException(status_code=502, detail="Could not generate feedback. Please try again.")
 
     verdict = enterprise_interview.extract_verdict(feedback)
-    session = models.EnterpriseInterviewSession(
-        organization_id=organization.id,
-        client_id=client.id,
-        conducted_by_user_id=current_user.id,
-        conducted_by_name=current_user.full_name or current_user.email,
-        mode=("voice" if payload.mode == "voice" else "chat"),
-        transcript=_json.dumps(history)[:400000],
-        feedback=feedback,
-        verdict=verdict,
-    )
-    db.add(session)
+    session.feedback = feedback
+    session.verdict = verdict
+    session.status = INTERVIEW_STATUS_COMPLETED
+    if payload.mode:
+        session.mode = _interview_mode(payload.mode, session.mode or "chat")
     db.commit()
     db.refresh(session)
 
@@ -12888,6 +14003,14 @@ def enterprise_interview_feedback(
         "session": _serialize_interview_session(session),
         "permissions": _enterprise_permissions_for_role(role),
     }
+
+
+def _completed_interview_filter():
+    """Sessions that count as interviews: completed ones. Rows from before server-side
+    sessions were only ever saved once finished, and their status column was backfilled
+    "completed" (NULL is accepted too, defensively)."""
+    S = models.EnterpriseInterviewSession
+    return or_(S.status == INTERVIEW_STATUS_COMPLETED, S.status.is_(None))
 
 
 @router.get("/clients/{client_id}/interview/sessions")
@@ -12901,7 +14024,12 @@ def enterprise_interview_sessions(
     client = _get_org_client_or_404(db, organization.id, client_id, ctx=role.ctx)
     rows = (
         db.query(models.EnterpriseInterviewSession)
-        .filter(models.EnterpriseInterviewSession.client_id == client.id)
+        .filter(
+            models.EnterpriseInterviewSession.client_id == client.id,
+            # Only finished interviews are history: an in-progress or abandoned session has
+            # no report and would read as a blank row.
+            _completed_interview_filter(),
+        )
         .order_by(models.EnterpriseInterviewSession.created_at.desc(), models.EnterpriseInterviewSession.id.desc())
         .all()
     )
@@ -12965,16 +14093,30 @@ class PublicInterviewVerifyRequest(BaseModel):
 
 
 class PublicInterviewChatRequest(BaseModel):
+    # The verified-email session (from /verify): proves the browser holds a live invite.
     session_token: str = Field(..., min_length=10, max_length=4000)
     message: Optional[str] = Field(default=None, max_length=4000)
-    history: Optional[list[EnterpriseInterviewTurn]] = None
     start: bool = False
+    # The interview RUN this turn belongs to, as returned by the start. Required on every
+    # turn after the start (and for the feedback report).
+    run_token: Optional[str] = Field(default=None, min_length=16, max_length=200)
+    mode: Optional[str] = Field(default=None, max_length=12)
+    # IGNORED since server-side sessions (2026-10-22); bounded because this endpoint is
+    # unauthenticated and validation runs before the rate limit.
+    history: Optional[list[EnterpriseInterviewTurn]] = Field(
+        default=None, max_length=_INTERVIEW_LEGACY_HISTORY_MAX,
+    )
 
 
 class PublicInterviewFeedbackRequest(BaseModel):
     session_token: str = Field(..., min_length=10, max_length=4000)
-    history: list[EnterpriseInterviewTurn] = Field(..., min_length=1)
-    mode: str = Field(default="chat", max_length=12)
+    run_token: Optional[str] = Field(default=None, min_length=16, max_length=200)
+    mode: Optional[str] = Field(default=None, max_length=12)
+    # IGNORED: the transcript and the officer's decision come from the server's session (a
+    # client-sent decision could fold "Visa Approved" into the copy staff read).
+    history: Optional[list[EnterpriseInterviewTurn]] = Field(
+        default=None, max_length=_INTERVIEW_LEGACY_HISTORY_MAX,
+    )
     decision: Optional[str] = Field(default=None, max_length=20)
 
 
@@ -13274,8 +14416,52 @@ def _public_load_invite_context(db: Session, session_token: str):
     return invite, client, org
 
 
+def _public_interview_session_or_error(
+    db: Session,
+    invite: models.EnterpriseInterviewInvite,
+    run_token: Optional[str],
+    *,
+    for_feedback: bool = False,
+) -> models.EnterpriseInterviewSession:
+    """The public-link session the browser's run token names, row-locked (see
+    _interview_session_for_turn_or_error). The token is looked up by its hash and must
+    belong to THIS invite: a run token from another link, or a guessed session id, can
+    never drive (and spend on) somebody else's interview."""
+    token = (run_token or "").strip()
+    if not token:
+        raise HTTPException(
+            status_code=400,
+            detail="This interview session has expired. Please start a new interview.",
+        )
+    S = models.EnterpriseInterviewSession
+    return _interview_session_for_turn_or_error(
+        db,
+        db.query(S).filter(
+            S.run_token_hash == hash_token(token),
+            S.invite_id == invite.id,
+            S.organization_id == invite.organization_id,
+            S.client_id == invite.client_id,
+        ),
+        not_found_detail="This interview session is no longer active. Please start a new interview.",
+        for_feedback=for_feedback,
+    )
+
+
+_PUBLIC_INTERVIEW_UNAVAILABLE = "This mock interview isn't available right now. Please contact your consultancy."
+
+
 @router.post("/public/interview/chat")
 def public_interview_chat(payload: PublicInterviewChatRequest, request: Request, db: Session = Depends(get_db)):
+    """One step of a self-serve mock interview (the client's emailed link).
+
+    start=true: the officer's opening turn runs FIRST. Only once it has succeeded is one of
+    the link's interviews consumed (a conditional UPDATE, so a parallel start can never take
+    more than the link allows), the org charged the mock_interview price, and the session
+    stored with a fresh RUN TOKEN — all in ONE commit. A failed start therefore costs neither
+    a credit nor one of the client's interviews (it used to charge first and never refund).
+    The raw run token is returned once; only its hash is stored. Every later turn presents
+    it, and the officer sees the server's transcript, never the browser's history.
+    """
     _enforce_rate_limit_or_429(
         request=request, scope="enterprise.interview_public",
         limit=ENTERPRISE_PUBLIC_RATE_LIMIT, window_seconds=ENTERPRISE_PUBLIC_RATE_WINDOW,
@@ -13287,41 +14473,114 @@ def public_interview_chat(payload: PublicInterviewChatRequest, request: Request,
     if payload.start:
         if _interview_invite_remaining(invite) <= 0:
             raise HTTPException(status_code=403, detail="You've used all your mock interviews for this link.")
-        # Meter the org's wallet — a self-serve interview costs the same 20 credits as a
-        # staff-run one, so the "send to student" links can't be used to run Gemini for free.
+        # Client-facing wording throughout: the client cannot choose a plan or top up, and
+        # the consultancy's billing state is not theirs to read.
+        billing.enforce_ai_access_or_402(db, org.id, client_facing=True)
+        # Meter the org's wallet — a self-serve interview costs the same as a staff-run one,
+        # so the "send to student" links can't be used to run Gemini for free.
         if not credits.can_afford(db, org.id, "mock_interview"):
-            raise HTTPException(
-                status_code=402,
-                detail="This mock interview isn't available right now. Please contact your consultancy.",
+            raise HTTPException(status_code=402, detail=_PUBLIC_INTERVIEW_UNAVAILABLE)
+        try:
+            turn = enterprise_interview.run_interview_turn(
+                client=client, organization=org, recent_notes=[],  # never leak staff notes to the client
+                documents=_recent_client_documents(db, client.id),  # the applicant's own documents
+                history=[], message="", is_start=True, questions_asked=0,
             )
-        invite.used_count = int(invite.used_count or 0) + 1  # a start consumes one interview
-        db.commit()
-        credits.charge_action(
-            db, org.id, "mock_interview",
-            reference_type="client", reference_id=client.id,
-            description=f"Mock interview (self-serve) — {client.full_name}", commit=True,
-        )
+        except Exception:
+            logger.exception("Public interview start failed (invite=%s)", invite.id)
+            raise HTTPException(status_code=502, detail="The interviewer ran into a problem. Please try again.")
 
-    history = [t.model_dump() for t in (payload.history or [])]
+        # Claim one of the link's interviews atomically — only while one is left and the
+        # link is still live (a revoke may have landed during the opening turn).
+        Inv = models.EnterpriseInterviewInvite
+        claimed = db.query(Inv).filter(
+            Inv.id == invite.id,
+            Inv.revoked.is_(False),
+            func.coalesce(Inv.used_count, 0) < func.coalesce(Inv.allowed_count, 0),
+        ).update({"used_count": func.coalesce(Inv.used_count, 0) + 1}, synchronize_session=False)
+        if not claimed:
+            db.rollback()
+            raise HTTPException(status_code=403, detail="You've used all your mock interviews for this link.")
+
+        _abandon_stale_interview_sessions(db, org.id)
+        run_token = _secrets.token_urlsafe(32)
+        session = models.EnterpriseInterviewSession(
+            organization_id=org.id, client_id=client.id, conducted_by_user_id=None,
+            conducted_by_name=f"{client.full_name} (self · via link)",
+            mode=_interview_mode(payload.mode),
+            status=INTERVIEW_STATUS_IN_PROGRESS,
+            questions_asked=int(turn.get("questions_asked") or 0),
+            credits_charged=0,
+            invite_id=invite.id,
+            run_token_hash=hash_token(run_token),
+        )
+        _store_interview_transcript(session, [_officer_turn_record(turn)])
+        db.add(session)
+        db.flush()
+        try:
+            credits.charge_action(
+                db, org.id, "mock_interview",
+                reference_type="client", reference_id=client.id,
+                description=f"Mock interview (self-serve) — {client.full_name}",
+                client_facing=True, commit=False,
+            )
+        except HTTPException:
+            # The wallet emptied (or AI paused) during the opening turn: roll back the claim
+            # and the session together, and keep the staff-facing top-up copy away from the
+            # client.
+            db.rollback()
+            raise HTTPException(status_code=402, detail=_PUBLIC_INTERVIEW_UNAVAILABLE)
+        session.credits_charged = int(credits.action_cost("mock_interview") or 0)
+        db.commit()
+        db.refresh(session)
+        db.refresh(invite)
+
+        response_payload = _interview_turn_payload(turn, session)
+        response_payload.pop("session_id", None)  # the browser holds the run token, never an id
+        response_payload["run_token"] = run_token
+        response_payload["remaining"] = _interview_invite_remaining(invite)
+        return response_payload
+
+    session = _public_interview_session_or_error(db, invite, payload.run_token)
+    transcript = _interview_transcript(session)
+    if _interview_officer_closed(transcript):
+        raise HTTPException(
+            status_code=409,
+            detail="The officer has already ended this interview — your feedback report is next.",
+        )
+    billing.enforce_ai_access_or_402(db, org.id, client_facing=True)
+
+    message = (payload.message or "").strip()
     try:
         turn = enterprise_interview.run_interview_turn(
             client=client, organization=org, recent_notes=[],  # never leak staff notes to the client
             documents=_recent_client_documents(db, client.id),  # the applicant's own documents
-            history=history, message=payload.message or "", is_start=bool(payload.start),
+            history=transcript, message=message, is_start=False,
+            questions_asked=int(session.questions_asked or 0),
         )
     except Exception:
         logger.exception("Public interview turn failed (invite=%s)", invite.id)
         raise HTTPException(status_code=502, detail="The interviewer ran into a problem. Please try again.")
-    return {
-        "reply": turn["reply"],
-        "finished": turn["finished"],
-        "decision": turn["decision"],
-        "remaining": _interview_invite_remaining(invite),
-    }
+
+    transcript.append({"role": "user", "content": message[:3000] or "(no answer given)"})
+    transcript.append(_officer_turn_record(turn))
+    _store_interview_transcript(session, transcript)
+    session.questions_asked = int(turn.get("questions_asked") or session.questions_asked or 0)
+    if payload.mode:
+        session.mode = _interview_mode(payload.mode, session.mode or "chat")
+    db.commit()
+    db.refresh(session)
+
+    response_payload = _interview_turn_payload(turn, session)
+    response_payload.pop("session_id", None)
+    response_payload["remaining"] = _interview_invite_remaining(invite)
+    return response_payload
 
 
 @router.post("/public/interview/feedback")
 def public_interview_feedback(payload: PublicInterviewFeedbackRequest, request: Request, db: Session = Depends(get_db)):
+    """The run's ONE feedback report (completes the session; a second request is a 409).
+    Built from the server's transcript and the officer's own recorded decision."""
     _enforce_rate_limit_or_429(
         request=request, scope="enterprise.interview_public",
         limit=ENTERPRISE_PUBLIC_RATE_LIMIT, window_seconds=ENTERPRISE_PUBLIC_RATE_WINDOW,
@@ -13329,13 +14588,18 @@ def public_interview_feedback(payload: PublicInterviewFeedbackRequest, request: 
     if not enterprise_interview.is_ai_configured():
         raise HTTPException(status_code=503, detail="Feedback isn't available right now.")
     invite, client, org = _public_load_invite_context(db, payload.session_token)
+    session = _public_interview_session_or_error(db, invite, payload.run_token, for_feedback=True)
+    transcript = _interview_transcript(session)
+    if not _interview_has_answer(transcript):
+        raise HTTPException(status_code=400, detail="Answer at least one question first.")
+    billing.enforce_ai_access_or_402(db, org.id, client_facing=True)
 
-    history = [t.model_dump() for t in payload.history]
-    raw_decision = (payload.decision or "").strip().lower()
-    officer_decision = raw_decision if raw_decision in ("approved", "refused") else None
+    officer_decision = (_interview_officer_closed(transcript) or {}).get("decision")
+    if officer_decision not in ("approved", "refused"):
+        officer_decision = None
     try:
         feedback = enterprise_interview.generate_interview_feedback(
-            client=client, organization=org, history=history, officer_decision=officer_decision,
+            client=client, organization=org, history=transcript, officer_decision=officer_decision,
             documents=_recent_client_documents(db, client.id),  # the applicant's own documents
         )
     except Exception:
@@ -13350,13 +14614,11 @@ def public_interview_feedback(payload: PublicInterviewFeedbackRequest, request: 
         f"**Officer's decision (simulated): Visa {decision_label}**\n\n" + feedback
         if decision_label else feedback
     )
-    session = models.EnterpriseInterviewSession(
-        organization_id=org.id, client_id=client.id, conducted_by_user_id=None,
-        conducted_by_name=f"{client.full_name} (self · via link)",
-        mode=("voice" if payload.mode == "voice" else "chat"),
-        transcript=_json.dumps(history)[:400000], feedback=stored_feedback, verdict=verdict,
-    )
-    db.add(session)
+    session.feedback = stored_feedback
+    session.verdict = verdict
+    session.status = INTERVIEW_STATUS_COMPLETED
+    if payload.mode:
+        session.mode = _interview_mode(payload.mode, session.mode or "chat")
     # Mark the invite as having a completed interview so staff can see the student
     # actually finished it (used_count only tells us they *started*).
     invite.completed_count = int(invite.completed_count or 0) + 1
@@ -13807,6 +15069,7 @@ async def public_document_request_upload(
         mime_type=(file.content_type or None),
         uploaded_by_user_id=None,
         uploaded_by_name=f"{client.full_name} (uploaded via secure link)",
+        read_status=DOC_READ_PENDING,
     )
     db.add(doc)
     db.flush()
@@ -13827,8 +15090,10 @@ async def public_document_request_upload(
             reference_type="client", reference_id=client.id, commit=True,
         )
 
-    # Extract text in the background so the AI copilot can read the new document. The
-    # billed scan deliberately does NOT run here: this endpoint is reached by a student
+    # Read the text in the background so the AI copilot can use the new document — against
+    # the org's monthly reads allowance like any upload (stored "not_read" once it is used
+    # up or AI is paused; the client's upload succeeds either way and staff can "Read now").
+    # The billed scan deliberately does NOT run here: this endpoint is reached by a student
     # holding an emailed link, with no authenticated member and no capability check, so
     # auto-scanning would let an outsider spend the agency's credits at will (and, by
     # re-uploading, without limit). Staff scan these from the document card instead.
@@ -14331,7 +15596,11 @@ def _build_client_portal_payload(db: Session, share: models.EnterpriseClientPort
     )
     interviews_done = (
         db.query(func.count(models.EnterpriseInterviewSession.id))
-        .filter(models.EnterpriseInterviewSession.client_id == client.id)
+        .filter(
+            models.EnterpriseInterviewSession.client_id == client.id,
+            # A started-but-unfinished (or abandoned) session is not an interview "done".
+            _completed_interview_filter(),
+        )
         .scalar()
     ) or 0
 
@@ -14634,16 +15903,21 @@ def public_portal_data(payload: PublicPortalDataRequest, request: Request, db: S
 # staff notes; the client only sees their own CRM profile and documents.
 # ===========================================================================
 
-ENTERPRISE_COPILOT_INVITE_EXPIRES_DAYS = int(os.getenv("ENTERPRISE_COPILOT_INVITE_EXPIRES_DAYS", "30"))
+# What a NEW link allows comes from the price list's own constants (credits reads the same
+# env vars, ENTERPRISE_COPILOT_INVITE_EXPIRES_DAYS / _MESSAGES): this router used to read them
+# with its own default of 100 messages while the price list promised 5 for the same 30
+# credits, so the counter a client hit and the promise could silently disagree. Links issued
+# before 2026-10-22 keep the allowance stored on their row.
+ENTERPRISE_COPILOT_INVITE_EXPIRES_DAYS = credits.COPILOT_CLIENT_DAYS
 ENTERPRISE_COPILOT_SESSION_HOURS = int(os.getenv("ENTERPRISE_COPILOT_SESSION_HOURS", "24"))
-ENTERPRISE_COPILOT_INVITE_MESSAGES = int(os.getenv("ENTERPRISE_COPILOT_INVITE_MESSAGES", "100"))
+ENTERPRISE_COPILOT_INVITE_MESSAGES = credits.COPILOT_CLIENT_MESSAGES
 # Wrong guesses allowed across the WHOLE life of one link, however many codes are
 # sent. The per-code cap resets on every resend and the rate limits key on the
 # caller's IP, so without this a leaked link is a 30-day brute-force budget that
 # only grows with the attacker's address pool. 30 guesses against a 900k code
 # space is a ~0.003% chance; a client who genuinely fumbles asks staff to resend.
 ENTERPRISE_COPILOT_MAX_TOTAL_CODE_ATTEMPTS = int(os.getenv("ENTERPRISE_COPILOT_MAX_TOTAL_CODE_ATTEMPTS", "30"))
-COPILOT_CLIENT_ACTION_KEY = "copilot_client"
+COPILOT_CLIENT_ACTION_KEY = credits.COPILOT_CLIENT_ACTION_KEY
 
 
 class PublicCopilotVerifyRequest(BaseModel):
@@ -14721,11 +15995,14 @@ def _serialize_copilot_invite_status(invite: models.EnterpriseCopilotInvite | No
 
 
 def _copilot_invite_config() -> dict:
-    """What a NEW invite would cost/allow — shown in the staff send modal."""
+    """What a NEW invite would cost/allow — shown in the staff send modal. Every number is
+    the price list's (credits.COPILOT_CLIENT_* and the copilot_client action), so the modal,
+    the price list and the link's own counter always agree."""
     return {
         "allowed_messages": ENTERPRISE_COPILOT_INVITE_MESSAGES,
         "expires_days": ENTERPRISE_COPILOT_INVITE_EXPIRES_DAYS,
         "cost_credits": credits.action_cost(COPILOT_CLIENT_ACTION_KEY),
+        "price_label": _action_price_label(COPILOT_CLIENT_ACTION_KEY),
     }
 
 
@@ -15135,6 +16412,10 @@ def public_copilot_chat(payload: PublicCopilotChatRequest, request: Request, db:
     remaining = _copilot_invite_remaining(invite)
     if remaining <= 0:
         raise HTTPException(status_code=403, detail="You've used all the messages included with your copilot. Please contact your consultancy.")
+    # The org's AI is paused (trial ended / plan lapsed): every turn is a model call billed
+    # to the org, so it stops here — before the free guardrail and before a message is
+    # reserved — in words the CLIENT can act on (they cannot choose the consultancy's plan).
+    billing.enforce_ai_access_or_402(db, org.id, client_facing=True)
 
     message = (payload.message or "").strip()
     if not message:
@@ -15553,7 +16834,10 @@ def enterprise_course_finder_recommend(
         "permissions": _enterprise_permissions_for_role(role),
         "rec": _serialize_course_finder_rec(rec_row),
         "credits_charged": charged,
-        "wallet": credits.wallet_state(db, organization.id, currency=_resolve_charge_currency(None, organization)),
+        "wallet": credits.wallet_state(
+            db, organization.id,
+            currency=_resolve_charge_currency(None, organization, db=db, request=request),
+        ),
     }
 
 
@@ -17141,6 +18425,7 @@ def _copy_lead_files_to_client(
             mime_type=row.mime_type,
             uploaded_by_user_id=None,
             uploaded_by_name=f"{client.full_name} (attached to their enquiry)",
+            read_status=DOC_READ_PENDING,
         )
         db.add(doc)
         db.flush()
@@ -17501,6 +18786,9 @@ def enterprise_mark_lead_converted(
     _, organization, role = _require_lead_access(db, current_user, request, capability="clients.create")
     lead = _get_org_lead_or_404(db, organization.id, lead_id)
     client = _get_org_client_or_404(db, organization.id, payload.client_id, ctx=role.ctx)
+    # No open-file limit check HERE, on purpose: the conversion's "add" already happened when
+    # the client was created through POST /clients, which enforced it. Checking again would
+    # count one new file twice and could refuse to link a client that already exists.
     lead.status = "converted"
     lead.converted_client_id = client.id
     jobs = _copy_lead_files_to_client(db, organization=organization, lead=lead, client=client)

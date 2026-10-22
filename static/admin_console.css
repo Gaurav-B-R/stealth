@@ -358,8 +358,10 @@ body {
 }
 
 /* ---- Refund form ---- */
-.refund-tabs {
+.refund-tabs,
+.billing-tabs {
     display: inline-flex;
+    flex-wrap: wrap;
     gap: 0.3rem;
     padding: 0.25rem;
     border-radius: 12px;
@@ -367,7 +369,8 @@ body {
     margin-bottom: 0.9rem;
 }
 
-.refund-tab {
+.refund-tab,
+.billing-tab {
     border: 0;
     background: transparent;
     color: #475569;
@@ -378,7 +381,8 @@ body {
     cursor: pointer;
 }
 
-.refund-tab.active {
+.refund-tab.active,
+.billing-tab.active {
     background: #ffffff;
     color: #0f172a;
     box-shadow: 0 1px 3px rgba(15, 23, 42, 0.12);
@@ -395,8 +399,44 @@ body {
     grid-column: 1 / -1;
 }
 
-.refund-mode.hidden {
+.refund-mode.hidden,
+.billing-mode.hidden {
     display: none;
+}
+
+/* `display: flex` on .coupon-field outranks the UA's [hidden] rule — restore it, so the
+   offline-payment form can hide the INR-settlement field for an INR payment. */
+.coupon-field[hidden] {
+    display: none;
+}
+
+/* ---- Billing controls: result of the last save (with any server warnings) ---- */
+.billing-notice {
+    border-radius: 12px;
+    padding: 0.65rem 0.85rem;
+    margin-bottom: 0.85rem;
+    font-size: 0.84rem;
+    line-height: 1.45;
+}
+
+.billing-notice p {
+    margin: 0;
+    font-weight: 600;
+}
+
+.billing-notice ul {
+    margin: 0.35rem 0 0;
+    padding-left: 1.1rem;
+}
+
+.billing-notice.success {
+    background: rgba(16, 185, 129, 0.12);
+    color: #065f46;
+}
+
+.billing-notice.info {
+    background: rgba(245, 158, 11, 0.14);
+    color: #92400e;
 }
 
 .refund-danger {

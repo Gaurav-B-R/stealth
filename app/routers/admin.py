@@ -2,6 +2,7 @@ import calendar
 import json
 import os
 import logging
+import re
 import secrets
 import string
 from collections import defaultdict
@@ -2644,7 +2645,9 @@ def enterprise_account_details_admin(
 ):
     """Full account snapshot for one enterprise org — wallet balance, lifetime
     credits purchased/spent, recent Razorpay purchases (with any discount applied),
-    recent credit usage, and the configured discount codes. Read-only."""
+    plan payments (checkout and offline), the admin-set billing facts (Branch Packs,
+    overrides, demo bonus, trial end), recent credit usage, and the configured discount
+    codes. Read-only."""
     _enforce_rate_limit_or_429(
         request=request,
         scope="admin.enterprise.account.details",
@@ -2861,6 +2864,18 @@ def enterprise_account_details_admin(
         money.normalize_currency(row[0], strict=False)
         for row in db.query(SP.currency).filter(SP.organization_id == org.id).distinct().all()
     })
+    # --- plan payments (checkout, renewals and offline/invoice payments), newest first ---
+    plan_payment_rows = (
+        db.query(SP)
+        .filter(SP.organization_id == org.id)
+        .order_by(desc(SP.created_at), desc(SP.id))
+        .limit(25)
+        .all()
+    )
+    plan_payment_names = _user_names(db, {p.created_by_user_id for p in plan_payment_rows})
+    plan_payments = [_serialize_plan_payment(p, plan_payment_names) for p in plan_payment_rows]
+    subscription_state = enterprise_billing.build_subscription_state(db, org.id, read_only=True)
+
     # Revenue-status foreign payments that `_settled_inr` scored as 0 because Razorpay's
     # INR settlement figure has not landed on the row. They are missing from
     # credit_revenue/infra_revenue/plan_revenue/total_paid, so the count has to travel
@@ -2902,7 +2917,11 @@ def enterprise_account_details_admin(
         # Which tier this org is on, its caps, and where it sits against them. The console
         # showed only the retired infra fee before, so a founder looking at an account had
         # no way to see what it actually pays every month.
-        "subscription": enterprise_billing.build_subscription_state(db, org.id, read_only=True),
+        "subscription": subscription_state,
+        # The admin-set facts behind `subscription` (stored packs/overrides even where they
+        # don't currently apply, the demo bonus, trial end) plus what the console's billing
+        # controls offer. Read-only, like everything on this endpoint.
+        "billing_controls": _billing_controls_state(db, org.id, subscription_state),
         # Every *_paise total here is INR SETTLEMENT (base_amount_paise), which is what
         # makes it summable at all. `currency` says so explicitly so the console never has
         # to infer it. The refund-derived figures go null when they can't be stated in one
@@ -2936,6 +2955,11 @@ def enterprise_account_details_admin(
         "credit_value_inr": enterprise_credits.paise_to_rupees(enterprise_credits.PAISE_PER_CREDIT),
         "razorpay_enabled": enterprise_refunds.razorpay_enabled(),
         "purchases": purchases,
+        # Plan payments of every provider — Razorpay checkout, mandate renewals AND the
+        # offline ones recorded below (Payment Link / bank transfer / invoice). `purchases`
+        # stays credit top-ups only: its rows are what the refund form refunds through
+        # Razorpay, and an offline plan payment has no gateway charge to refund.
+        "plan_payments": plan_payments,
         "recent_activity": recent_activity,
         "coupons": coupons,
         "refunds": refunds,
@@ -3101,7 +3125,11 @@ def create_enterprise_account_coupon_admin(
     code = enterprise_coupons.normalize_code(payload.code)
     if not code:
         raise HTTPException(status_code=400, detail="Enter a discount code (letters, numbers, - or _).")
-    percent = enterprise_coupons.parse_percent_off(payload.percent_off)
+    # validate_, not parse_: parse clamps silently (a typed 40 would be saved as 40 and then
+    # quietly applied at the ENTERPRISE_COUPON_MAX_PERCENT cap at checkout), so the admin
+    # would believe they had promised a customer a discount the checkout never gives. Refuse
+    # above the cap with a 400 the console shows next to the field instead.
+    percent = enterprise_coupons.validate_percent_off_for_admin(payload.percent_off)
     applies_to = enterprise_coupons.normalize_applies_to(payload.applies_to)
     max_redemptions = enterprise_coupons.parse_max_redemptions(payload.max_redemptions)
 
@@ -3159,7 +3187,10 @@ def update_enterprise_account_coupon_admin(
 
     provided = payload.model_dump(exclude_unset=True)
     if "percent_off" in provided and provided["percent_off"] is not None:
-        coupon.percent_off = enterprise_coupons.parse_percent_off(provided["percent_off"])
+        # Same cap check as create. A legacy code stored above the cap is left as it is when
+        # the percent is not part of this edit (pausing it must not require re-pricing it);
+        # checkout applies such a code at the cap regardless.
+        coupon.percent_off = enterprise_coupons.validate_percent_off_for_admin(provided["percent_off"])
     if "applies_to" in provided and provided["applies_to"] is not None:
         coupon.applies_to = enterprise_coupons.normalize_applies_to(provided["applies_to"])
     if "max_redemptions" in provided:
@@ -3314,6 +3345,975 @@ def send_enterprise_account_coupon_email_admin(
         "failed": failed,
         "recipients": [email for email, _ in recipients],
         "message": f"Promotion email sent to {sent} recipient{'s' if sent != 1 else ''}.",
+    }
+
+
+# ===========================================================================
+# Billing controls (pricing v2, 2026-10-22): offline plan payments, credit adjustments and
+# the demo-call bonus, per-org limit overrides.
+#
+# CAPABILITY: all three are `delete`-level — the console's Admin role, the same bar as
+# refunds. Each one creates value (plan time, credits, a bigger allowance) WITHOUT money
+# passing through the gateway, which is exactly why the goodwill credit refund is already
+# delete-level. An Editor can still create a coupon (a capped percent off a real payment);
+# an Editor cannot hand out plan time or credits.
+#
+# AUDIT: the durable record is the row each action writes — the verified payment row
+# (provider + reference + created_by_user_id) and the credit-ledger row (created_by_name,
+# shown to the customer too) — plus one structured `logger.info` line per change naming the
+# acting admin, the same pattern as refunds. Override changes have no table of their own
+# yet, so their before/after lives in that log line and in the response.
+# ===========================================================================
+
+
+def _admin_int_env(env_key: str, default_value: int) -> int:
+    """A positive integer from the environment. Blank, non-numeric or < 1 falls back to the
+    default rather than disabling the guard it configures."""
+    raw = os.getenv(env_key, "").strip()
+    if not raw:
+        return default_value
+    try:
+        value = int(raw)
+    except ValueError:
+        return default_value
+    return value if value >= 1 else default_value
+
+
+# Typo guards, not business limits: each stops a mis-keyed number (an extra zero, rupees
+# typed into a paise field) before it becomes plan time or credits. Env-overridable for the
+# rare genuine deal above them.
+ADMIN_OFFLINE_PAYMENT_MAX_MINOR = _admin_int_env(
+    "ENTERPRISE_ADMIN_OFFLINE_PAYMENT_MAX_MINOR", 100_000_000  # ₹10,00,000 in paise
+)
+ADMIN_CREDIT_ADJUST_MAX = _admin_int_env(
+    "ENTERPRISE_ADMIN_CREDIT_ADJUST_MAX", enterprise_refunds.MAX_CREDIT_REFUND
+)
+ADMIN_MAX_BRANCH_PACKS = _admin_int_env("ENTERPRISE_ADMIN_MAX_BRANCH_PACKS", 100)
+ADMIN_OVERRIDE_MAX = _admin_int_env("ENTERPRISE_ADMIN_OVERRIDE_MAX", 1_000_000)
+ADMIN_MAX_TRIAL_DAYS = _admin_int_env("ENTERPRISE_ADMIN_MAX_TRIAL_DAYS", 365)
+ADMIN_REASON_MAX = 200
+ADMIN_NOTE_MAX = 500
+
+# How a plan payment reached us outside Razorpay checkout. Stored verbatim in
+# EnterpriseSubscriptionPayment.provider, so every revenue reader can tell them apart from
+# gateway charges ("razorpay") without a new column.
+OFFLINE_PAYMENT_PROVIDERS = {
+    "payment_link": "Payment Link",
+    "bank_transfer": "Bank transfer",
+    "invoice": "Invoice",
+}
+_PLAN_PAYMENT_PROVIDER_LABELS = {"razorpay": "Razorpay checkout", **OFFLINE_PAYMENT_PROVIDERS}
+
+# An offline payment's reference is stored as its razorpay_order_id with this prefix. That
+# column is NOT NULL and UNIQUE, so the reference inherits a database-level "recorded once"
+# guarantee — the idempotency key — and the prefix keeps it from ever colliding with a real
+# Razorpay order id ("order_…"). Customer receipts print razorpay_order_id as the payment
+# reference, which then reads "offline:<UTR>": still the number on their bank statement.
+OFFLINE_ORDER_PREFIX = "offline:"
+# No spaces: a reference is compared as a key, and "UTR 123" vs "UTR123" being two different
+# payments is how one transfer gets recorded twice.
+_OFFLINE_REFERENCE_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._/#:\-]{2,79}$")
+_RAZORPAY_PAYMENT_ID_RE = re.compile(r"^pay_[A-Za-z0-9]{6,40}$")
+_YEARLY_CYCLE_WORDS = {"yearly", "annual", "annually"}
+
+# field -> (subscription column, minimum, maximum). Seats and open files start at 1: an
+# override of 0 would lock out every login / every new file, which is never what "set the
+# limit" means (and -1, the UNLIMITED marker, would be clamped to 0 by billing._override).
+# Credits and reads may be 0 (a deal with no AI allowance). included_credits shares the
+# credit-adjustment cap because it MINTS that many credits every period.
+_OVERRIDE_FIELDS = {
+    "max_seats": ("override_max_seats", 1, ADMIN_OVERRIDE_MAX),
+    "max_clients": ("override_max_clients", 1, ADMIN_OVERRIDE_MAX),
+    "included_credits": ("override_included_credits", 0, ADMIN_CREDIT_ADJUST_MAX),
+    "monthly_reads": ("override_monthly_reads", 0, ADMIN_OVERRIDE_MAX),
+}
+_OVERRIDE_LABELS = {
+    "branch_packs": "Branch Packs",
+    "max_seats": "Staff seats",
+    "max_clients": "Open files",
+    "included_credits": "AI credits per period",
+    "monthly_reads": "AI reads per period",
+    "trial_ends_at": "Trial end",
+}
+
+
+def _naive_utc(value):
+    """A stored timestamp as naive UTC. Postgres hands timezone=True columns back aware,
+    SQLite and freshly assigned values come back naive — compare them only after this."""
+    if value is None:
+        return None
+    if getattr(value, "tzinfo", None) is not None:
+        return value.astimezone(timezone.utc).replace(tzinfo=None)
+    return value
+
+
+def _user_names(db: Session, user_ids) -> dict:
+    ids = {int(uid) for uid in user_ids if uid}
+    if not ids:
+        return {}
+    return {
+        int(uid): (full_name or email)
+        for uid, full_name, email in (
+            db.query(models.User.id, models.User.full_name, models.User.email)
+            .filter(models.User.id.in_(ids))
+            .all()
+        )
+    }
+
+
+def _serialize_plan_payment(p: models.EnterpriseSubscriptionPayment, names: dict) -> dict:
+    """One plan payment for the console. Every *_minor field is minor units of `currency`
+    (formatted with it); only `base_amount_paise` is INR settlement."""
+    cur = money.normalize_currency(p.currency, strict=False)
+    plan_meta = enterprise_billing.get_plan(p.plan) or {}
+    provider = str(p.provider or "razorpay").strip().lower()
+    order_id = str(p.razorpay_order_id or "")
+    if order_id.startswith(OFFLINE_ORDER_PREFIX):
+        reference = order_id[len(OFFLINE_ORDER_PREFIX):]
+    else:
+        reference = p.razorpay_payment_id or order_id or None
+    amount = int(p.amount_paise or 0)
+    tax = int(p.tax_paise or 0)
+    subtotal = int(p.subtotal_paise) if p.subtotal_paise is not None else amount - tax
+    refunded = int(p.refunded_amount_paise or 0)
+    return {
+        "id": int(p.id),
+        "plan": p.plan,
+        "plan_label": plan_meta.get("label") or p.plan,
+        "billing_cycle": p.billing_cycle or "monthly",
+        "provider": provider,
+        "provider_label": _PLAN_PAYMENT_PROVIDER_LABELS.get(provider, provider.replace("_", " ").title()),
+        "is_offline": provider in OFFLINE_PAYMENT_PROVIDERS,
+        "reference": reference,
+        "currency": cur,
+        "amount_minor": amount,
+        "amount_display": money.format_money(amount, cur),
+        "subtotal_minor": subtotal,
+        "subtotal_display": money.format_money(subtotal, cur),
+        "tax_minor": tax,
+        "tax_display": money.format_money(tax, cur) if tax else None,
+        "tax_label": p.tax_label,
+        "tax_percent": float(p.tax_percent) if p.tax_percent is not None else None,
+        "base_amount_paise": int(p.base_amount_paise) if p.base_amount_paise is not None else None,
+        "settled_inr_display": (
+            enterprise_credits.format_inr(p.base_amount_paise) if p.base_amount_paise is not None else None
+        ),
+        "is_international": bool(p.is_international),
+        "included_credits": int(p.included_credits or 0),
+        "coupon_code": p.coupon_code,
+        "coupon_percent_off": float(p.coupon_percent_off) if p.coupon_percent_off is not None else None,
+        "original_amount_display": (
+            money.format_money(p.original_amount_paise, cur) if p.original_amount_paise else None
+        ),
+        "refunded_amount_minor": refunded,
+        "refunded_amount_display": money.format_money(refunded, cur) if refunded else None,
+        "status": p.status,
+        "created_by_name": names.get(int(p.created_by_user_id)) if p.created_by_user_id else None,
+        "created_at": _admin_iso(p.created_at),
+        "verified_at": _admin_iso(p.verified_at),
+    }
+
+
+def _billing_controls_state(db: Session, organization_id: int, state: dict) -> dict:
+    """What the console's billing controls need: the RAW admin-set facts (stored Branch Packs
+    and overrides even where they don't currently apply — `subscription` reports only what
+    applies), the demo bonus, the trial end, and the choices/caps for each form.
+
+    Read-only: subscription_snapshot / effective_limits never create rows, which is what
+    keeps a Viewer's GET of this page from initialising billing for the org."""
+    sub = enterprise_billing.subscription_snapshot(db, organization_id)
+    limits = enterprise_billing.effective_limits(db, organization_id)
+    plan = enterprise_billing.PLANS.get(limits.get("plan")) or {}
+    demo_at = getattr(sub, "demo_bonus_granted_at", None)
+    bonus = int(enterprise_billing.TRIAL_DEMO_BONUS_CREDITS or 0)
+    currencies = list(money.supported_charge_currencies())
+    paid_keys = [k for k in enterprise_billing.PLAN_ORDER if k in enterprise_billing.PAID_PLAN_KEYS]
+
+    # List totals for the offline-payment form's "expected amount" hint. Priced by the same
+    # checkout_quote the self-serve checkout uses, so the hint can never disagree with what
+    # the customer would have been charged online.
+    price_list = []
+    for key in paid_keys:
+        for cycle in ("monthly", "yearly"):
+            for code in currencies:
+                quote = enterprise_billing.checkout_quote(key, code, billing_cycle=cycle)
+                if quote["currency"] != code or quote["list_minor"] <= 0:
+                    continue
+                price_list.append({
+                    "plan": key,
+                    "billing_cycle": cycle,
+                    "currency": code,
+                    "list_minor": quote["list_minor"],
+                    "tax_minor": quote["tax_minor"],
+                    "total_minor": quote["total_minor"],
+                    "total_display": quote["total_display"],
+                })
+
+    return {
+        "billing_enabled": not enterprise_billing.ENTERPRISE_FREE,
+        "stored_plan": enterprise_billing.normalize_plan_key(sub.plan),
+        "status": sub.status,
+        "current_period_end": _admin_iso(sub.current_period_end),
+        "trial_ends_at": _admin_iso(sub.trial_ends_at),
+        "trial_domain_blocked": bool(getattr(sub, "trial_domain_blocked", False)),
+        "has_mandate": bool(sub.razorpay_subscription_id),
+        "branch_packs": max(0, int(getattr(sub, "branch_packs", 0) or 0)),
+        "branch_packs_applied": int(limits.get("branch_packs") or 0),
+        "branch_pack": enterprise_billing.branch_pack_facts(),
+        "overrides": {
+            field: (int(getattr(sub, column)) if getattr(sub, column, None) is not None else None)
+            for field, (column, _low, _high) in _OVERRIDE_FIELDS.items()
+        },
+        "overrides_applied": bool(limits.get("overrides_applied")),
+        # The plan's own numbers — what a blank override field falls back to.
+        "plan_defaults": {
+            "max_seats": plan.get("max_seats"),
+            "max_clients": plan.get("max_clients"),
+            "included_credits": plan.get("included_credits"),
+            "monthly_reads": plan.get("max_reads"),
+        } if plan else None,
+        "effective_limits": {
+            key: limits.get(key) for key in ("max_seats", "max_clients", "included_credits", "monthly_reads")
+        },
+        "demo_bonus_credits": bonus,
+        "demo_bonus_granted_at": _admin_iso(demo_at),
+        "demo_bonus_available": bonus > 0 and demo_at is None,
+        "plans": [{"key": k, "label": enterprise_billing.PLANS[k]["label"]} for k in paid_keys],
+        "providers": [{"key": k, "label": v} for k, v in OFFLINE_PAYMENT_PROVIDERS.items()],
+        "currencies": currencies,
+        "default_currency": state.get("currency") or money.DEFAULT_CURRENCY,
+        # Self-serve yearly may be off; an offline yearly sale is still allowed (see the
+        # offline-payment endpoint), so the form always offers it and says which is which.
+        "yearly_enabled": enterprise_billing.yearly_enabled(),
+        "period_days": {
+            "monthly": enterprise_billing.period_days_for("monthly"),
+            "yearly": enterprise_billing.period_days_for("yearly"),
+        },
+        "price_list": price_list,
+        "caps": {
+            "offline_payment_max_minor": ADMIN_OFFLINE_PAYMENT_MAX_MINOR,
+            "credit_adjust_max": ADMIN_CREDIT_ADJUST_MAX,
+            "branch_packs_max": ADMIN_MAX_BRANCH_PACKS,
+            "override_max": ADMIN_OVERRIDE_MAX,
+            "trial_days_max": ADMIN_MAX_TRIAL_DAYS,
+        },
+    }
+
+
+def _locked_subscription(db: Session, organization_id: int) -> models.EnterpriseSubscription:
+    """The org's subscription row, created if missing, then row-locked for a
+    read-modify-write. populate_existing() matters: get_or_create already put the row in the
+    identity map, and without it the locked SELECT would hand back the pre-lock values — two
+    offline payments recorded together would both stack onto the same old period end and
+    one period would vanish (see enterprise_credits.get_wallet_for_update)."""
+    sub = enterprise_billing.get_or_create_org_subscription(db, organization_id, commit=False)
+    return (
+        db.query(models.EnterpriseSubscription)
+        .filter(models.EnterpriseSubscription.id == sub.id)
+        .with_for_update()
+        .populate_existing()
+        .one()
+    )
+
+
+def _offline_billing_cycle(raw) -> str:
+    word = str(raw or "monthly").strip().lower()
+    if word in {"monthly", "month"}:
+        return "monthly"
+    if word in _YEARLY_CYCLE_WORDS:
+        return "yearly"
+    raise HTTPException(status_code=400, detail="Billing cycle must be monthly or yearly.")
+
+
+def _offline_reference(raw) -> str:
+    reference = str(raw or "").strip()
+    if not _OFFLINE_REFERENCE_RE.match(reference):
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "Enter the payment reference (UTR, pay_… id or invoice number): 3–80 letters, "
+                "digits or . _ / # : - and no spaces."
+            ),
+        )
+    return reference
+
+
+def _offline_tax(amount_minor: int, tax_minor, currency: str) -> tuple[int, int, Decimal, str | None]:
+    """(subtotal, tax, tax_percent, tax_label) inside a TOTAL received of `amount_minor`."""
+    if tax_minor is None:
+        # Not stated: the amount received is tax-inclusive at TODAY's rate, backed out with
+        # the same money.* helpers checkout prices with — so ENTERPRISE_GST_PERCENT=0 records
+        # no tax line at all, and a non-INR (zero-rated) payment never gets one.
+        subtotal = money.tax_inclusive_net_minor(amount_minor, currency)
+        tax = amount_minor - subtotal
+        if tax <= 0:
+            return amount_minor, 0, Decimal(0), None
+        return subtotal, tax, money.tax_percent_for(currency), money.tax_label_for(currency)
+    tax = int(tax_minor)
+    if tax < 0 or tax >= amount_minor:
+        raise HTTPException(
+            status_code=400,
+            detail="Tax must be zero or more, and less than the amount received.",
+        )
+    subtotal = amount_minor - tax
+    if tax == 0:
+        return subtotal, 0, Decimal(0), None
+    # A STATED tax records the rate it actually represents (an invoice raised at an older
+    # rate must not be restamped with today's), and keeps its label even while the configured
+    # rate is 0 — the row says what was collected, not what we would charge now.
+    percent = (Decimal(tax) * 100 / Decimal(subtotal)).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+    if percent > 100:
+        raise HTTPException(
+            status_code=400,
+            detail="That tax is more than the taxable amount itself — check the figures.",
+        )
+    return subtotal, tax, percent, (money.tax_label_for(currency) or ("GST" if currency == "INR" else "Tax"))
+
+
+def _find_offline_payment(db: Session, order_key: str, razorpay_payment_id: str | None):
+    """An existing plan payment this reference would duplicate. Case-insensitive on the
+    reference ("inv-7" and "INV-7" are one invoice); exact on a Razorpay pay_ id, which is
+    case-sensitive and may already sit on a CHECKOUT row if the customer paid online too."""
+    SP = models.EnterpriseSubscriptionPayment
+    clauses = [func.lower(SP.razorpay_order_id) == order_key.lower()]
+    if razorpay_payment_id:
+        clauses.append(SP.razorpay_payment_id == razorpay_payment_id)
+    return db.query(SP).filter(or_(*clauses)).order_by(SP.id.asc()).first()
+
+
+def _offline_payment_response(
+    db: Session,
+    organization_id: int,
+    row: models.EnterpriseSubscriptionPayment,
+    *,
+    duplicate: bool,
+    message: str,
+    warnings: list[str],
+    period: dict | None = None,
+    credits_granted: int = 0,
+    credits_synced: bool = True,
+) -> dict:
+    return {
+        "duplicate": duplicate,
+        "message": message,
+        "warnings": warnings,
+        "payment": _serialize_plan_payment(row, _user_names(db, {row.created_by_user_id})),
+        "period": period,
+        "credits_granted": int(credits_granted or 0),
+        "credits_synced": credits_synced,
+        "subscription": enterprise_billing.build_subscription_state(db, organization_id, read_only=True),
+        "wallet": enterprise_credits.wallet_state(db, organization_id, read_only=True),
+    }
+
+
+@router.post("/enterprise/accounts/{organization_id}/offline-payment")
+@console_section("enterprise", "delete")
+def record_enterprise_offline_payment_admin(
+    request: Request,
+    organization_id: int,
+    payload: schemas.AdminEnterpriseOfflinePaymentRequest,
+    current_user: models.User = Depends(get_current_admin_user),
+    _: None = Depends(require_admin_turnstile_proof),
+    db: Session = Depends(get_db),
+):
+    """Record a plan payment that arrived outside Razorpay checkout (Payment Link, NEFT/RTGS,
+    invoice) and give the customer what they paid for: a verified payment row, the plan
+    active, its period extended, and this period's credits/reads granted.
+
+    IDEMPOTENT ON `reference`: replaying the same payment (a double-submit, a retried request)
+    answers 200 with `duplicate: true` and extends nothing; the same reference with different
+    terms, or on another account, is a 409 — one bank transfer is one payment."""
+    _enforce_rate_limit_or_429(
+        request=request,
+        scope="admin.enterprise.offline_payment",
+        limit=ADMIN_ENDPOINT_RATE_LIMIT,
+        window_seconds=ADMIN_ENDPOINT_RATE_WINDOW_SECONDS,
+        extra_key=f"user:{current_user.id}",
+    )
+    org = _get_enterprise_org_or_404(db, organization_id)
+    if enterprise_billing.ENTERPRISE_FREE:
+        raise HTTPException(
+            status_code=400,
+            detail="Billing is switched off (ENTERPRISE_FREE), so there is no plan to activate.",
+        )
+
+    # --- validate everything before touching a row ---
+    plan = enterprise_billing.get_plan(payload.plan)
+    if not plan or plan["key"] not in enterprise_billing.PAID_PLAN_KEYS:
+        labels = [
+            enterprise_billing.PLANS[k]["label"]
+            for k in enterprise_billing.PLAN_ORDER if k in enterprise_billing.PAID_PLAN_KEYS
+        ]
+        raise HTTPException(status_code=400, detail=f"Choose a paid plan: {', '.join(labels)}.")
+    plan_key = plan["key"]
+    # NOT billing.normalize_billing_cycle: that is the SELF-SERVE sales gate, and it turns
+    # "yearly" into "monthly" while ENTERPRISE_YEARLY_ENABLED is off. A yearly invoice is a
+    # deal staff closed by hand that the customer has already paid in full; recording it as
+    # a month would silently take back eleven months they bought.
+    cycle = _offline_billing_cycle(payload.billing_cycle)
+    provider = str(payload.provider or "").strip().lower()
+    if provider not in OFFLINE_PAYMENT_PROVIDERS:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Payment method must be one of: {', '.join(OFFLINE_PAYMENT_PROVIDERS)}.",
+        )
+    reference = _offline_reference(payload.reference)
+    try:
+        currency = money.normalize_currency(payload.currency or money.DEFAULT_CURRENCY, strict=True)
+    except money.UnsupportedCurrency:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Currency must be one of {', '.join(money.supported_charge_currencies())}.",
+        )
+    amount = int(payload.amount_minor)
+    if amount <= 0:
+        raise HTTPException(status_code=400, detail="Amount received must be greater than zero.")
+    if amount > ADMIN_OFFLINE_PAYMENT_MAX_MINOR:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"That is more than {money.format_money(ADMIN_OFFLINE_PAYMENT_MAX_MINOR, currency)} — "
+                f"amounts are in {currency} minor units (paise/cents). "
+                "Raise ENTERPRISE_ADMIN_OFFLINE_PAYMENT_MAX_MINOR for a genuine deal this size."
+            ),
+        )
+    subtotal, tax, tax_percent, tax_label = _offline_tax(amount, payload.tax_minor, currency)
+
+    # Settlement. Revenue readers sum base_amount_paise (INR settlement) and nothing else, so
+    # a non-INR row without it would be "counted, not summed" forever — there is no gateway
+    # webhook coming to fill it in for an offline payment. Hence it is required up front.
+    if currency == "INR":
+        if payload.settled_inr_minor is not None and int(payload.settled_inr_minor) != amount:
+            raise HTTPException(
+                status_code=400,
+                detail="An INR payment settles at its own amount — leave the INR settlement empty.",
+            )
+        base_minor, fx_rate, international = amount, Decimal(1), False
+    else:
+        settled = int(payload.settled_inr_minor or 0)
+        if settled <= 0:
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    f"Enter the INR amount that settled for this {currency} payment (from the bank "
+                    "credit advice or the Razorpay settlement) — revenue totals only add INR."
+                ),
+            )
+        if settled > ADMIN_OFFLINE_PAYMENT_MAX_MINOR:
+            raise HTTPException(
+                status_code=400,
+                detail=f"The INR settlement is more than {enterprise_credits.format_inr(ADMIN_OFFLINE_PAYMENT_MAX_MINOR)}.",
+            )
+        base_minor = settled
+        fx_rate = (Decimal(settled) / Decimal(amount)).quantize(Decimal("0.000001"), rounding=ROUND_HALF_UP)
+        international = True
+    note = (payload.note or "").strip() or None
+    if note and len(note) > ADMIN_NOTE_MAX:
+        raise HTTPException(status_code=400, detail=f"Keep the note under {ADMIN_NOTE_MAX} characters.")
+
+    # A Razorpay Payment Link payment carries a real pay_ id. Storing it in the UNIQUE
+    # razorpay_payment_id column too means the same Razorpay payment can never be honoured
+    # twice — not as two offline rows, and not as an offline row on top of a checkout.
+    rzp_payment_id = (
+        reference if provider == "payment_link" and _RAZORPAY_PAYMENT_ID_RE.match(reference) else None
+    )
+    order_key = f"{OFFLINE_ORDER_PREFIX}{reference}"
+    quote = enterprise_billing.checkout_quote(plan_key, currency, billing_cycle=cycle)
+    list_total = quote["total_minor"] if quote["currency"] == currency and quote["list_minor"] > 0 else None
+
+    def _replay(existing) -> dict:
+        # Release the subscription lock and drop anything this request flushed; the earlier
+        # recording already did the work.
+        db.rollback()
+        same = (
+            int(existing.organization_id) == int(org.id)
+            and str(existing.provider or "") in OFFLINE_PAYMENT_PROVIDERS
+            and enterprise_billing.normalize_plan_key(existing.plan) == plan_key
+            and (existing.billing_cycle or "monthly") == cycle
+            and int(existing.amount_paise or 0) == amount
+            and money.normalize_currency(existing.currency, strict=False) == currency
+        )
+        if not same:
+            raise HTTPException(
+                status_code=409,
+                detail=(
+                    f"Reference {reference} is already recorded (payment #{existing.id}, account "
+                    f"#{existing.organization_id}, {existing.plan} {existing.billing_cycle}, "
+                    f"{money.format_money(existing.amount_paise, money.normalize_currency(existing.currency, strict=False))}). "
+                    "Each payment can be recorded once — check the reference."
+                ),
+            )
+        when = _naive_utc(existing.verified_at or existing.created_at)
+        return _offline_payment_response(
+            db, org.id, existing,
+            duplicate=True,
+            message=(
+                f"Already recorded{(' on ' + when.date().isoformat()) if when else ''} — "
+                "the plan was not extended again."
+            ),
+            warnings=[],
+        )
+
+    sub = _locked_subscription(db, org.id)
+    # Checked AFTER taking the lock: a double-submitted form serialises on the row, and the
+    # second request then sees the first one's committed payment instead of racing it.
+    existing = _find_offline_payment(db, order_key, rzp_payment_id)
+    if existing is not None:
+        return _replay(existing)
+
+    now = datetime.utcnow()
+    previous_plan = enterprise_billing.normalize_plan_key(sub.plan)
+    previous_status = sub.status
+    previous_end = _naive_utc(sub.current_period_end)
+    period_days = enterprise_billing.period_days_for(cycle)
+    # Stacks exactly like checkout (/billing/verify): time already paid for is never lost,
+    # and a lapsed org starts from today rather than from a period end in the past.
+    start = previous_end if (previous_end and previous_end > now) else now
+    new_end = start + timedelta(days=period_days)
+    sub.plan = plan_key
+    sub.status = "active"
+    sub.current_period_end = new_end
+
+    row = models.EnterpriseSubscriptionPayment(
+        organization_id=org.id,
+        created_by_user_id=current_user.id,
+        provider=provider,
+        plan=plan_key,
+        billing_cycle=cycle,
+        amount_paise=amount,
+        subtotal_paise=subtotal,
+        tax_paise=tax,
+        tax_percent=tax_percent,
+        tax_label=tax_label,
+        currency=currency,
+        base_amount_paise=base_minor,
+        base_currency="INR",
+        fx_rate_used=fx_rate,
+        is_international=international,
+        price_book_version=money.PRICE_BOOK_VERSION,
+        razorpay_order_id=order_key,
+        razorpay_payment_id=rzp_payment_id,
+        status="verified",
+        # The list price, recorded only when the deal was BELOW it (a negotiated discount),
+        # so the console's "was …" reads true. An invoice above list (Branch Packs billed on
+        # it) has no "was".
+        original_amount_paise=(
+            quote["list_minor"] if list_total is not None and subtotal < quote["list_minor"] else None
+        ),
+        verified_at=now,
+    )
+    db.add(row)
+    try:
+        db.flush()
+    except IntegrityError:
+        # Lost a race on the unique reference (another account, or a case variant).
+        db.rollback()
+        existing = _find_offline_payment(db, order_key, rzp_payment_id)
+        if existing is not None:
+            return _replay(existing)
+        raise HTTPException(status_code=409, detail=f"Reference {reference} is already recorded.")
+    # The allowance this payment opens, as THIS org gets it (overrides and Branch Packs
+    # included), snapshotted like a checkout row so a later change can't rewrite history.
+    row.included_credits = int(enterprise_billing.effective_limits(db, org.id).get("included_credits") or 0)
+    db.commit()
+    db.refresh(row)
+
+    # The money is in and the plan is active whatever happens here; a failed grant is
+    # retried lazily on the org's next wallet read, so it is reported, not raised.
+    credits_granted = 0
+    credits_synced = True
+    try:
+        txn = enterprise_credits.sync_plan_credits(db, org.id, commit=True)
+        credits_granted = int(txn.credits) if txn is not None else 0
+    except Exception:
+        db.rollback()
+        credits_synced = False
+        logger.exception("offline-payment: credit grant failed for org %s", org.id)
+
+    logger.info(
+        "Admin %s recorded an offline %s plan payment for org %s: ref=%s plan=%s cycle=%s "
+        "amount_minor=%s %s tax_minor=%s settled_inr=%s; plan %s/%s -> %s/active, period_end %s -> %s; "
+        "payment_id=%s credits_granted=%s note=%r",
+        current_user.id, provider, org.id, reference, plan_key, cycle, amount, currency, tax,
+        base_minor, previous_plan, previous_status, plan_key, previous_end, new_end, row.id,
+        credits_granted, note,
+    )
+
+    warnings: list[str] = []
+    if sub.razorpay_subscription_id and not sub.cancel_at_period_end and str(
+        sub.mandate_status or ""
+    ).lower() not in {"cancelled", "completed"}:
+        warnings.append(
+            "This account also has an auto-renewing Razorpay mandate, which keeps charging on its "
+            "own schedule. Cancel it if this payment replaces it."
+        )
+    if list_total is not None and amount != list_total:
+        warnings.append(
+            f"The amount differs from the list price for {plan['label']} ({cycle}): "
+            f"{money.format_money(list_total, currency)} including tax."
+        )
+    if not credits_synced:
+        warnings.append(
+            "The plan is active, but this period's credits could not be granted just now; "
+            "they will be granted on the account's next visit."
+        )
+    return _offline_payment_response(
+        db, org.id, row,
+        duplicate=False,
+        message=(
+            f"Recorded {money.format_money(amount, currency)} ({OFFLINE_PAYMENT_PROVIDERS[provider]}, "
+            f"{reference}). {plan['label']} is active until {new_end.date().isoformat()}."
+        ),
+        warnings=warnings,
+        period={
+            "previous_end": _admin_iso(previous_end),
+            "current_period_end": _admin_iso(new_end),
+            "days_added": period_days,
+            "previous_plan": previous_plan,
+            "previous_status": previous_status,
+        },
+        credits_granted=credits_granted,
+        credits_synced=credits_synced,
+    )
+
+
+def _serialize_credit_txn(txn: models.EnterpriseCreditTransaction | None) -> dict | None:
+    if txn is None:
+        return None
+    return {
+        "id": txn.id,
+        "type": txn.type,
+        "credits": int(txn.credits),
+        "balance_after": int(txn.balance_after),
+        "description": txn.description,
+        "created_by_name": txn.created_by_name,
+        "created_at": _admin_iso(txn.created_at),
+    }
+
+
+@router.post("/enterprise/accounts/{organization_id}/credits/adjust")
+@console_section("enterprise", "delete")
+def adjust_enterprise_account_credits_admin(
+    request: Request,
+    organization_id: int,
+    payload: schemas.AdminEnterpriseCreditAdjustRequest,
+    current_user: models.User = Depends(get_current_admin_user),
+    _: None = Depends(require_admin_turnstile_proof),
+    db: Session = Depends(get_db),
+):
+    """Move an org's credit balance by hand.
+
+    kind="adjustment": a signed delta with a required reason (it becomes the ledger line the
+    customer sees). A deduction is capped at the live balance — the wallet never goes
+    negative — and the response says how much actually moved.
+
+    kind="demo_call_bonus": the trial's one-time demo-call bonus
+    (ENTERPRISE_TRIAL_DEMO_BONUS_CREDITS). Once per org, guarded by a durable stamp; a second
+    grant answers 200 with already_granted=true and moves nothing."""
+    _enforce_rate_limit_or_429(
+        request=request,
+        scope="admin.enterprise.credits.adjust",
+        limit=ADMIN_ENDPOINT_RATE_LIMIT,
+        window_seconds=ADMIN_ENDPOINT_RATE_WINDOW_SECONDS,
+        extra_key=f"user:{current_user.id}",
+    )
+    org = _get_enterprise_org_or_404(db, organization_id)
+    kind = str(payload.kind or "adjustment").strip().lower()
+    reason = (payload.reason or "").strip()
+    if len(reason) > ADMIN_REASON_MAX:
+        raise HTTPException(status_code=400, detail=f"Keep the reason under {ADMIN_REASON_MAX} characters.")
+
+    if kind == "demo_call_bonus":
+        bonus = int(enterprise_billing.TRIAL_DEMO_BONUS_CREDITS or 0)
+        if bonus <= 0:
+            raise HTTPException(
+                status_code=400,
+                detail="The demo-call bonus is switched off (ENTERPRISE_TRIAL_DEMO_BONUS_CREDITS=0).",
+            )
+        # The bonus size is configuration, not a per-click choice. Refusing a different number
+        # beats silently granting 50 to an admin who typed 100 and believes they gave 100.
+        if payload.credits is not None and int(payload.credits) != bonus:
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    f"The demo-call bonus is fixed at {bonus} credits — use a credit adjustment "
+                    "for a different amount."
+                ),
+            )
+        granted = enterprise_credits.grant_demo_call_bonus(db, org.id, user=current_user)
+        if not granted:
+            db.rollback()
+            stamp = _naive_utc(
+                getattr(enterprise_billing.subscription_snapshot(db, org.id), "demo_bonus_granted_at", None)
+            )
+            return {
+                "kind": kind,
+                "granted": 0,
+                "already_granted": True,
+                "granted_at": _admin_iso(stamp),
+                "message": (
+                    f"The demo-call bonus was already granted"
+                    f"{(' on ' + stamp.date().isoformat()) if stamp else ''} — it can be given once per account."
+                ),
+                "transaction": None,
+                "wallet": enterprise_credits.wallet_state(db, org.id, read_only=True),
+            }
+        logger.info(
+            "Admin %s granted the %s-credit demo-call bonus to org %s (reason=%r)",
+            current_user.id, granted, org.id, reason or None,
+        )
+        txn = (
+            db.query(models.EnterpriseCreditTransaction)
+            .filter(
+                models.EnterpriseCreditTransaction.organization_id == org.id,
+                models.EnterpriseCreditTransaction.reference_type == "demo_call_bonus",
+            )
+            .order_by(desc(models.EnterpriseCreditTransaction.id))
+            .first()
+        )
+        return {
+            "kind": kind,
+            "granted": int(granted),
+            "already_granted": False,
+            "granted_at": _admin_iso(datetime.utcnow()),
+            "message": f"Granted the {granted:,}-credit demo-call bonus.",
+            "transaction": _serialize_credit_txn(txn),
+            "wallet": enterprise_credits.wallet_state(db, org.id, read_only=True),
+        }
+
+    if kind != "adjustment":
+        raise HTTPException(status_code=400, detail="Adjustment kind must be adjustment or demo_call_bonus.")
+    requested = int(payload.credits or 0)
+    if requested == 0:
+        raise HTTPException(
+            status_code=400,
+            detail="Enter a non-zero number of credits (negative to deduct).",
+        )
+    if abs(requested) > ADMIN_CREDIT_ADJUST_MAX:
+        raise HTTPException(
+            status_code=400,
+            detail=f"A single adjustment can move at most {ADMIN_CREDIT_ADJUST_MAX:,} credits.",
+        )
+    if len(reason) < 3:
+        raise HTTPException(
+            status_code=400,
+            detail="Give a reason — it is the line the customer sees in their credit history.",
+        )
+    # Row-locked so a deduction computes its cap from the balance a concurrent spend has
+    # not already moved (apply_adjustment itself reads an unlocked row).
+    wallet = enterprise_credits.get_wallet_for_update(db, org.id)
+    if requested < 0 and int(wallet.balance_credits or 0) <= 0:
+        db.rollback()
+        raise HTTPException(status_code=400, detail="This account has no credits to deduct.")
+    txn, applied = enterprise_credits.apply_adjustment(
+        db, org.id, requested,
+        txn_type="adjustment",
+        description=f"Rilono adjustment — {reason}",
+        reference_type="admin_adjustment",
+        user=current_user,
+        commit=False,
+    )
+    db.commit()
+    db.refresh(txn)
+    logger.info(
+        "Admin %s adjusted credits for org %s: requested=%s applied=%s balance_after=%s reason=%r",
+        current_user.id, org.id, requested, applied, txn.balance_after, reason,
+    )
+    if applied == requested:
+        message = (
+            f"Added {applied:,} credits." if applied > 0 else f"Deducted {-applied:,} credits."
+        )
+    else:
+        message = (
+            f"Deducted {-applied:,} credits — capped at the balance; the wallet can't go below zero."
+        )
+    return {
+        "kind": kind,
+        "requested": requested,
+        "applied": int(applied),
+        "capped": int(applied) != requested,
+        "message": message,
+        "transaction": _serialize_credit_txn(txn),
+        "wallet": enterprise_credits.wallet_state(db, org.id, read_only=True),
+    }
+
+
+def _overrides_snapshot(sub: models.EnterpriseSubscription) -> dict:
+    out = {"branch_packs": max(0, int(getattr(sub, "branch_packs", 0) or 0))}
+    for field, (column, _low, _high) in _OVERRIDE_FIELDS.items():
+        value = getattr(sub, column, None)
+        out[field] = int(value) if value is not None else None
+    out["trial_ends_at"] = _admin_iso(_naive_utc(sub.trial_ends_at))
+    return out
+
+
+def _validated_override(field: str, value, low: int, high: int):
+    if value is None:
+        return None  # null = back to the plan's own number
+    value = int(value)
+    if value < low or value > high:
+        raise HTTPException(
+            status_code=400,
+            detail=f"{_OVERRIDE_LABELS[field]} must be between {low:,} and {high:,}, or empty for the plan default.",
+        )
+    return value
+
+
+def _parse_trial_end(raw) -> datetime:
+    text = str(raw or "").strip()
+    try:
+        if len(text) == 10:
+            # A bare date means the END of that day (UTC): "trial until 30 Nov" must still
+            # work on 30 Nov, not stop at its first minute.
+            day = date.fromisoformat(text)
+            value = datetime(day.year, day.month, day.day, 23, 59, 59)
+        else:
+            value = _naive_utc(datetime.fromisoformat(text.replace("Z", "+00:00")))
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Trial end must be a date like 2026-11-30.")
+    now = datetime.utcnow()
+    if value <= now:
+        raise HTTPException(status_code=400, detail="The trial end must be in the future.")
+    if value > now + timedelta(days=ADMIN_MAX_TRIAL_DAYS):
+        raise HTTPException(
+            status_code=400,
+            detail=f"A trial can be set at most {ADMIN_MAX_TRIAL_DAYS} days ahead.",
+        )
+    return value
+
+
+@router.put("/enterprise/accounts/{organization_id}/overrides")
+@console_section("enterprise", "delete")
+def update_enterprise_account_overrides_admin(
+    request: Request,
+    organization_id: int,
+    payload: schemas.AdminEnterpriseOverridesRequest,
+    current_user: models.User = Depends(get_current_admin_user),
+    _: None = Depends(require_admin_turnstile_proof),
+    db: Session = Depends(get_db),
+):
+    """Set per-org Branch Packs, limit overrides and the trial end.
+
+    PARTIAL update — only fields present in the body change. An override REPLACES the plan's
+    number (null = back to the plan default); Branch Packs add on top of a PAID plan
+    (enterprise_billing._limits_for). A raised credit/read allowance lands immediately as
+    the difference (enterprise_credits.sync_plan_credits); a lowered one takes nothing back
+    and simply applies from the next period."""
+    _enforce_rate_limit_or_429(
+        request=request,
+        scope="admin.enterprise.overrides",
+        limit=ADMIN_ENDPOINT_RATE_LIMIT,
+        window_seconds=ADMIN_ENDPOINT_RATE_WINDOW_SECONDS,
+        extra_key=f"user:{current_user.id}",
+    )
+    org = _get_enterprise_org_or_404(db, organization_id)
+    provided = payload.model_dump(exclude_unset=True)
+    if not provided:
+        raise HTTPException(status_code=400, detail="Nothing to change — send at least one field.")
+
+    # Validate every field BEFORE touching the row, so one bad value never half-applies the rest.
+    updates: dict = {}
+    for field, (column, low, high) in _OVERRIDE_FIELDS.items():
+        if field in provided:
+            updates[column] = _validated_override(field, provided[field], low, high)
+    if "branch_packs" in provided:
+        packs = 0 if provided["branch_packs"] is None else int(provided["branch_packs"])
+        if packs < 0 or packs > ADMIN_MAX_BRANCH_PACKS:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Branch Packs must be between 0 and {ADMIN_MAX_BRANCH_PACKS}.",
+            )
+        updates["branch_packs"] = packs
+    if "trial_ends_at" in provided:
+        if provided["trial_ends_at"] is None:
+            raise HTTPException(
+                status_code=400,
+                detail="Send a date to change the trial end — it can't be cleared.",
+            )
+        updates["trial_ends_at"] = _parse_trial_end(provided["trial_ends_at"])
+
+    sub = _locked_subscription(db, org.id)
+    before = _overrides_snapshot(sub)
+    limits_before = enterprise_billing.effective_limits(db, org.id)
+    for column, value in updates.items():
+        setattr(sub, column, value)
+    after = _overrides_snapshot(sub)
+    changes = {key: {"before": before[key], "after": after[key]} for key in after if before[key] != after[key]}
+    limits_after = enterprise_billing.effective_limits(db, org.id)
+    db.commit()
+
+    credits_granted = 0
+    credits_synced = True
+    if changes:
+        try:
+            txn = enterprise_credits.sync_plan_credits(db, org.id, commit=True)
+            credits_granted = int(txn.credits) if txn is not None else 0
+        except Exception:
+            db.rollback()
+            credits_synced = False
+            logger.exception("overrides: allowance sync failed for org %s", org.id)
+        logger.info(
+            "Admin %s changed billing overrides for org %s: %s (credits_granted=%s)",
+            current_user.id, org.id, json.dumps(changes, default=str, sort_keys=True), credits_granted,
+        )
+
+    effective = {
+        key: {"before": limits_before.get(key), "after": limits_after.get(key)}
+        for key in ("max_seats", "max_clients", "included_credits", "monthly_reads")
+        if limits_before.get(key) != limits_after.get(key)
+    }
+    warnings: list[str] = []
+    plan_key = limits_after.get("plan")
+    if enterprise_billing.ENTERPRISE_FREE:
+        warnings.append(
+            "Billing is switched off (ENTERPRISE_FREE): every limit is unlimited, so these values "
+            "only take effect once billing is on."
+        )
+    else:
+        if after["branch_packs"] and plan_key not in enterprise_billing.PAID_PLAN_KEYS:
+            label = (enterprise_billing.PLANS.get(plan_key) or {}).get("label") or plan_key
+            warnings.append(
+                f"Branch Packs apply only while a paid plan is active — this account is on {label}, "
+                f"so the {after['branch_packs']} pack(s) take effect when it subscribes."
+            )
+        if not limits_after.get("overrides_applied") and any(
+            after[field] is not None for field in _OVERRIDE_FIELDS
+        ):
+            warnings.append(
+                "This account's paid plan has lapsed, so overrides are not applied until it renews."
+            )
+        lowered = [
+            _OVERRIDE_LABELS[key] for key in ("included_credits", "monthly_reads")
+            if key in effective and int(effective[key]["after"] or 0) < int(effective[key]["before"] or 0)
+        ]
+        if lowered:
+            warnings.append(
+                f"Lower allowance ({', '.join(lowered).lower()}): it applies from the next period — "
+                "nothing already granted this period is taken back."
+            )
+        if "trial_ends_at" in changes and plan_key in enterprise_billing.PAID_PLAN_KEYS:
+            warnings.append(
+                "This account is on a paid plan; the trial date only matters if that plan lapses."
+            )
+    if changes and not credits_synced:
+        warnings.append(
+            "Saved, but the raised allowance could not be granted just now; it will be granted on "
+            "the account's next visit."
+        )
+
+    return {
+        "changed": bool(changes),
+        "changes": changes,
+        "effective_changes": effective,
+        "overrides": after,
+        "credits_granted": credits_granted,
+        "credits_synced": credits_synced,
+        "warnings": warnings,
+        "message": (
+            f"Saved: {', '.join(_OVERRIDE_LABELS[key] for key in changes)}." if changes else "Nothing changed."
+        ),
+        "subscription": enterprise_billing.build_subscription_state(db, org.id, read_only=True),
+        "wallet": enterprise_credits.wallet_state(db, org.id, read_only=True),
     }
 
 

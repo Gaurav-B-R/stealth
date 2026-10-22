@@ -217,6 +217,46 @@ class AdminEnterpriseRefundRequest(BaseModel):
     clawback_credits: Optional[int] = None  # credits to deduct from the wallet (default suggested)
 
 
+class AdminEnterpriseOfflinePaymentRequest(BaseModel):
+    """A plan payment that reached Rilono outside Razorpay checkout (Payment Link, NEFT/RTGS,
+    invoice). Recording it activates the plan and extends its period exactly like a checkout.
+
+    Every money field is an INTEGER IN THE MINOR UNIT OF `currency` (paise for INR, cents for
+    USD) — the same rule as AdminEnterpriseRefundRequest, for the same reason: a float of
+    "rupees" is a currency assumption baked into a field name."""
+    plan: str                                 # starter | growth (Team) | scale (Multi-branch)
+    billing_cycle: str = "monthly"            # monthly | yearly (yearly allowed for invoice sales)
+    amount_minor: int                         # TOTAL received, tax included
+    currency: str = "INR"
+    reference: str                            # UTR / pay_… id / invoice no. — unique; the idempotency key
+    provider: str = "bank_transfer"           # payment_link | bank_transfer | invoice
+    tax_minor: Optional[int] = None           # tax inside amount_minor; omitted = derived from the GST rate
+    # INR that actually settled for a non-INR payment (bank credit advice / Razorpay
+    # settlement). Required for non-INR, because revenue totals only ever sum INR settlement.
+    settled_inr_minor: Optional[int] = None
+    note: Optional[str] = None
+
+
+class AdminEnterpriseCreditAdjustRequest(BaseModel):
+    kind: str = "adjustment"                  # adjustment | demo_call_bonus
+    # Signed for an adjustment (negative deducts, capped at the balance). Ignored-or-checked
+    # for the demo bonus, whose size is fixed by ENTERPRISE_TRIAL_DEMO_BONUS_CREDITS.
+    credits: Optional[int] = None
+    reason: Optional[str] = None
+
+
+class AdminEnterpriseOverridesRequest(BaseModel):
+    """Per-org limit overrides. PARTIAL: only the fields present in the body change.
+    For the four limits an explicit null resets to the plan's own number; branch_packs null
+    means 0. trial_ends_at is an ISO date (YYYY-MM-DD, end of that day UTC) or datetime."""
+    branch_packs: Optional[int] = None
+    max_seats: Optional[int] = None
+    max_clients: Optional[int] = None         # open files
+    included_credits: Optional[int] = None    # AI credits per period
+    monthly_reads: Optional[int] = None       # AI reads per period
+    trial_ends_at: Optional[str] = None
+
+
 class AdminCompanyFinanceSummary(BaseModel):
     total_invested_usd: float = 0
     total_returns_usd: float = 0

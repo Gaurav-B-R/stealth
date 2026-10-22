@@ -799,10 +799,13 @@ def generate_ai_response(
         provider = "none"
         # Live interview TURNS (mock officer / prep coach) must feel fast — real officers reply
         # in seconds — WITHOUT losing the sharp, subtle cross-examination that makes the mock
-        # valuable. The 25-40s latency came from the general-chat default (3.1-pro), a heavy
-        # *thinking* model that deliberates before every reply. We default turns to 2.5-pro: a
-        # strong reasoner (keeps the intelligent probing) but far lighter latency than 3.1-pro's
-        # extended thinking. Tune via env: RILONO_INTERVIEW_MODEL=gemini-2.5-flash for max speed.
+        # valuable. Turns used to lead with gemini-2.5-pro for its lighter latency, but Gemini
+        # 2.5 was retired on Vertex on 2026-10-20: every turn then paid for TWO failing attempts
+        # (2.5-pro, 2.5-flash) before reaching a live model. The chain now starts on a live
+        # model: 3.1-pro-preview (the strong reasoner the cross-examination depends on), then
+        # 3.5-flash and 3.1-flash-lite as progressively cheaper/faster fallbacks so a 3.1 Pro
+        # outage degrades the officer instead of failing the turn. If turn latency matters more
+        # than probing depth, set RILONO_INTERVIEW_MODEL=gemini-3.5-flash.
         # The one-time final REPORT (source "mock_interview_report") is NOT matched here, so its
         # deep analysis stays on the smart default model, with latency hidden behind the report
         # progress bar.
@@ -816,7 +819,7 @@ def generate_ai_response(
                 candidates_env="RILONO_INTERVIEW_MODEL_CANDIDATES",
                 # `gemini-3.1-pro` (bare) is NOT served by v1beta and 404s — see the warning in
                 # gemini_service.DEFAULT_GEMINI_MODEL. Only live ids belong in a candidate chain.
-                defaults=["gemini-2.5-pro", "gemini-2.5-flash", "gemini-3.1-pro-preview"],
+                defaults=["gemini-3.1-pro-preview", "gemini-3.5-flash", "gemini-3.1-flash-lite"],
             )
             # max_output_tokens is NOT a length limit on what the officer SAYS — on these thinking
             # models it also has to cover the private reasoning that happens before the reply, and
