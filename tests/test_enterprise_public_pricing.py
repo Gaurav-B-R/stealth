@@ -279,7 +279,9 @@ def test_cards_still_render_under_the_enterprise_free_kill_switch(monkeypatch):
 # Tax and yearly wording
 # ---------------------------------------------------------------------------
 
-def test_gst_wording_present_while_gst_is_charged():
+def test_gst_wording_present_while_gst_is_charged(monkeypatch):
+    # The shipped default is 0% (not GST-registered); pin the registered rate explicitly.
+    monkeypatch.setattr(money, "GST_PERCENT", Decimal(18))
     tokens = epp.build_tokens()
     assert tokens["ENT_TAX_NOTE"] == "+ GST"
     assert tokens["ENT_TAX_SUFFIX"] == " + GST"

@@ -232,7 +232,7 @@ This does not mark contacts as unsubscribed in Resend. Notification opt-outs sta
 The enterprise plans, limits, AI credit prices, monthly AI reading allowance, tax and currency rules are set by `ENTERPRISE_*` environment variables. All of them have defaults (pricing v2, 2026-10-22), and customer-facing copy is generated from them. The ones you are most likely to touch:
 
 ```bash
-ENTERPRISE_GST_PERCENT=18             # GST on INR plan prices; 0 = no tax and no "+ GST" anywhere
+ENTERPRISE_GST_PERCENT=0              # GST on INR plan prices; default 0 (not GST-registered), set 18 once registered
 ENTERPRISE_YEARLY_ENABLED=false       # sell yearly plans (10x monthly, "2 months free"); off until the reading quality check passes
 ENTERPRISE_AI_PAUSE_ON_EXPIRY=true    # pause every AI feature when the trial ends or a paid plan lapses
 ENTERPRISE_FILE_LIMIT_GRACE_DAYS=14   # days an org may stay over its open-file limit; 0 = hard cap

@@ -89,9 +89,22 @@ def test_prices_are_owner_chosen_not_converted():
 # Tax: GST on INR only
 # ---------------------------------------------------------------------------
 
-def test_gst_applies_to_inr_only():
-    if not money.tax_applies("INR"):
-        pytest.skip("ENTERPRISE_GST_PERCENT=0 in this environment")
+@pytest.fixture
+def gst_registered(monkeypatch):
+    """ENTERPRISE_GST_PERCENT=18 — the configuration once Rilono is GST-registered. The
+    shipped default is 0, so the tax-charged path is pinned here rather than inherited."""
+    monkeypatch.setattr(money, "GST_PERCENT", Decimal(18))
+
+
+def test_shipped_default_charges_no_gst(monkeypatch):
+    # Rilono is not GST-registered (owner decision 2026-10-22): with nothing configured, no
+    # tax is charged and nothing says "+ GST".
+    monkeypatch.delenv("ENTERPRISE_GST_PERCENT", raising=False)
+    assert money.DEFAULT_GST_PERCENT == 0
+    assert money._gst_percent_from_env() == 0
+
+
+def test_gst_applies_to_inr_only(gst_registered):
     for product in PLAN_PRODUCTS:
         for code in money.LAUNCH_CHARGE_CURRENCIES:
             quote = money.quote_with_tax(money.price_minor(product, code), code)
@@ -106,7 +119,7 @@ def test_gst_applies_to_inr_only():
                 assert quote["total_minor"] == quote["subtotal_minor"]
 
 
-def test_inr_gst_rounds_half_up_to_the_paisa():
+def test_inr_gst_rounds_half_up_to_the_paisa(gst_registered):
     subtotal = money.price_minor("plan_starter", "INR")
     expected = money.gst_minor(subtotal, "INR")
     # 18% of the book value, rounded half-up — ₹1,499 → ₹269.82 → 26,982 paise with the
@@ -162,11 +175,14 @@ def test_gst_env_parsing_honours_zero_and_survives_typos(monkeypatch):
     assert money._gst_percent_from_env() == 0
     monkeypatch.setenv("ENTERPRISE_GST_PERCENT", "12.5")
     assert money._gst_percent_from_env() == Decimal("12.5")
+    monkeypatch.setenv("ENTERPRISE_GST_PERCENT", "18")
+    assert money._gst_percent_from_env() == 18
+    # A typo falls back to the code default (0 while unregistered), never crashes import.
     for junk in ("eighteen", "-5", "250", "nan"):
         monkeypatch.setenv("ENTERPRISE_GST_PERCENT", junk)
-        assert money._gst_percent_from_env() == 18
+        assert money._gst_percent_from_env() == money.DEFAULT_GST_PERCENT
     monkeypatch.delenv("ENTERPRISE_GST_PERCENT")
-    assert money._gst_percent_from_env() == 18
+    assert money._gst_percent_from_env() == money.DEFAULT_GST_PERCENT
 
 
 # ---------------------------------------------------------------------------

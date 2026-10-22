@@ -32,10 +32,13 @@ and the default render describes the US entity, which settles in USD):
 
 from __future__ import annotations
 
+import logging
 import os
 import re
 from decimal import Decimal, ROUND_HALF_UP
 from typing import Optional
+
+logger = logging.getLogger(__name__)
 
 
 class UnsupportedCurrency(ValueError):
@@ -448,7 +451,11 @@ def yearly_minor(monthly_minor: int) -> int:
 #      LUT), and the credit top-ups / Visa Pass are priced tax-inclusive and are not
 #      touched by any of this — only products passed through `quote_with_tax` are taxed.
 #
-# 18% is the standard Indian SaaS rate. Env-overridable so a rate change is config, not a
+# DEFAULT_GST_PERCENT is 0 because Rilono is not GST-registered yet (owner decision,
+# 2026-10-22): an unregistered supplier may not collect GST at all (CGST s.32), so the safe
+# default is "no tax" and a forgotten env var can never start charging it. Once registered,
+# change DEFAULT_GST_PERCENT to 18 (the standard Indian SaaS rate) or set
+# ENTERPRISE_GST_PERCENT=18 on the service. Env-overridable so a rate change is config, not a
 # redeploy. `PRICE_BOOK_VERSION` covers the ex-tax numbers; the rate is stamped onto the
 # payment row separately so an old invoice stays reconstructable after a rate change.
 #
@@ -458,18 +465,27 @@ def yearly_minor(monthly_minor: int) -> int:
 # no "+ GST" in any copy. Everything that renders tax wording must therefore ask
 # tax_applies()/tax_note() rather than assuming INR means GST. The parse below exists for
 # the same reason: the old `os.getenv(...) or "18"` was fine for "0" (a non-empty string)
-# but a typo crashed the whole app at import; a bad value now falls back to 18 rather than
-# taking billing down, while "0" is honoured exactly.
+# but a typo crashed the whole app at import; a bad value now falls back to
+# DEFAULT_GST_PERCENT (logged) rather than taking billing down, while "0" is honoured exactly.
+# Falling back to the code default — not to a hardcoded 18 — keeps ONE place that says
+# whether Rilono charges GST: while unregistered a typo must not start collecting tax.
+DEFAULT_GST_PERCENT = Decimal(0)
+
+
 def _gst_percent_from_env() -> Decimal:
     raw = os.getenv("ENTERPRISE_GST_PERCENT", "").strip()
     if not raw:
-        return Decimal(18)
+        return DEFAULT_GST_PERCENT
     try:
         value = Decimal(raw)
     except Exception:
-        return Decimal(18)
-    if not value.is_finite() or value < 0 or value > 100:
-        return Decimal(18)
+        value = None
+    if value is None or not value.is_finite() or value < 0 or value > 100:
+        logger.error(
+            "ENTERPRISE_GST_PERCENT=%r is not a percentage between 0 and 100; using the "
+            "default %s%%.", raw, DEFAULT_GST_PERCENT,
+        )
+        return DEFAULT_GST_PERCENT
     return value
 
 
