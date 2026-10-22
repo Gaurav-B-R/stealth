@@ -1,4 +1,4 @@
-"""Invariants for the multi-currency B2B plan price book (2026-08-17).
+"""Invariants for the multi-currency B2B plan price book (2026-08-17, re-cut 2026-10-22).
 
 The three Enterprise tiers were INR-only until the pricing page grew a currency
 selector that the Enterprise card ignored. These tests pin the rules that made the
@@ -6,8 +6,14 @@ change safe, so a later edit that half-reverts them (a ladder entry dropped by a
 override, GST leaking onto an export, preview and checkout resolving currencies
 differently) breaks the build instead of a customer's invoice.
 
+2026-10-22: INR column re-cut to ₹1,499 / ₹3,999 / ₹9,999 (other ladders unchanged),
+yearly = exactly 10× monthly in every currency, and ENTERPRISE_GST_PERCENT=0 must remove
+every tax line and every "+ GST".
+
 Run: cd web_app && python3 -m pytest tests/test_money_plans.py
 """
+
+from decimal import Decimal
 
 import pytest
 
@@ -42,6 +48,34 @@ def test_plan_price_options_cover_the_full_ladder():
             assert option["display"]
 
 
+def test_inr_plan_prices_match_the_2026_10_22_card():
+    # Defaults only (no env override in the test env). The foreign ladders did NOT move.
+    assert money.PRICE_BOOK["plan_starter"]["INR"] == 149_900     # ₹1,499
+    assert money.PRICE_BOOK["plan_growth"]["INR"] == 399_900      # ₹3,999 (Team)
+    assert money.PRICE_BOOK["plan_scale"]["INR"] == 999_900       # ₹9,999 (Multi-branch)
+    assert money.PRICE_BOOK["plan_starter"]["USD"] == 3_900
+    assert money.PRICE_BOOK["plan_growth"]["USD"] == 8_900
+    assert money.PRICE_BOOK["plan_scale"]["USD"] == 19_500
+    assert money.PRICE_BOOK_VERSION >= "2026-10-22"
+
+
+def test_scale_renewal_stays_under_the_rbi_emandate_limit_even_with_gst():
+    # ₹15,000 is the RBI ceiling for an e-mandate debit without extra authentication.
+    quote = money.quote_with_tax(money.price_minor("plan_scale", "INR"), "INR")
+    assert quote["total_minor"] < 1_500_000
+
+
+def test_yearly_is_exactly_ten_months_in_every_currency():
+    assert money.YEARLY_PRICE_MONTHS == 10
+    for product, key in zip(PLAN_PRODUCTS, PAID_PLAN_KEYS):
+        for code in money.LAUNCH_CHARGE_CURRENCIES:
+            monthly = money.price_minor(product, code)
+            assert billing.plan_price_minor(key, code, "yearly") == monthly * 10
+    assert billing.plan_price_minor("starter", "INR", "yearly") == 1_499_000   # ₹14,990
+    assert billing.plan_price_minor("growth", "INR", "yearly") == 3_999_000    # ₹39,990
+    assert billing.plan_price_minor("scale", "INR", "yearly") == 9_999_000     # ₹99,990
+
+
 def test_prices_are_owner_chosen_not_converted():
     # The book must hold distinct per-currency numbers, not one INR figure reused.
     for product in PLAN_PRODUCTS:
@@ -56,6 +90,8 @@ def test_prices_are_owner_chosen_not_converted():
 # ---------------------------------------------------------------------------
 
 def test_gst_applies_to_inr_only():
+    if not money.tax_applies("INR"):
+        pytest.skip("ENTERPRISE_GST_PERCENT=0 in this environment")
     for product in PLAN_PRODUCTS:
         for code in money.LAUNCH_CHARGE_CURRENCIES:
             quote = money.quote_with_tax(money.price_minor(product, code), code)
@@ -73,7 +109,7 @@ def test_gst_applies_to_inr_only():
 def test_inr_gst_rounds_half_up_to_the_paisa():
     subtotal = money.price_minor("plan_starter", "INR")
     expected = money.gst_minor(subtotal, "INR")
-    # 18% of the book value, rounded half-up — ₹2,999 → ₹539.82 → 53,982 paise with the
+    # 18% of the book value, rounded half-up — ₹1,499 → ₹269.82 → 26,982 paise with the
     # default book, but computed from the live book so env overrides stay honest.
     from decimal import Decimal, ROUND_HALF_UP
     manual = int(
@@ -82,6 +118,55 @@ def test_inr_gst_rounds_half_up_to_the_paisa():
         )
     )
     assert expected == manual
+
+
+@pytest.fixture
+def no_gst(monkeypatch):
+    """ENTERPRISE_GST_PERCENT=0 — the unregistered-supplier configuration."""
+    monkeypatch.setattr(money, "GST_PERCENT", Decimal(0))
+
+
+def test_gst_zero_removes_the_tax_line_and_its_label(no_gst):
+    for product in PLAN_PRODUCTS:
+        subtotal = money.price_minor(product, "INR")
+        quote = money.quote_with_tax(subtotal, "INR")
+        assert quote["tax_minor"] == 0
+        assert quote["tax_percent"] == 0
+        # A "GST" label at 0% is exactly the "+ GST" an unregistered supplier must not print.
+        assert quote["tax_label"] is None
+        assert quote["total_minor"] == subtotal
+    assert money.tax_note("INR") == ""
+    assert money.tax_applies("INR") is False
+    assert money.tax_inclusive_net_minor(118_000, "INR") == 118_000
+
+
+def test_gst_zero_removes_plus_gst_from_every_plan_card_and_quote(no_gst):
+    if billing.ENTERPRISE_FREE:
+        pytest.skip("billing disabled via ENTERPRISE_FREE")
+    for plan in billing.public_plans_payload("INR"):
+        assert "GST" not in (plan["price_note"] or "")
+        assert plan["tax_label"] is None
+        assert plan["tax_minor"] == 0
+        assert plan["total_minor"] == plan["monthly_minor"]
+        assert not any("GST" in f for f in plan["features"])
+    for key in PAID_PLAN_KEYS:
+        quote = billing.checkout_quote(key, "INR")
+        assert quote["tax_note"] == ""
+        assert quote["total_minor"] == quote["list_minor"]
+    # With no GST the top tier renews at its list price, well under the RBI limit.
+    assert billing.checkout_quote("scale", "INR")["total_minor"] == 999_900
+
+
+def test_gst_env_parsing_honours_zero_and_survives_typos(monkeypatch):
+    monkeypatch.setenv("ENTERPRISE_GST_PERCENT", "0")
+    assert money._gst_percent_from_env() == 0
+    monkeypatch.setenv("ENTERPRISE_GST_PERCENT", "12.5")
+    assert money._gst_percent_from_env() == Decimal("12.5")
+    for junk in ("eighteen", "-5", "250", "nan"):
+        monkeypatch.setenv("ENTERPRISE_GST_PERCENT", junk)
+        assert money._gst_percent_from_env() == 18
+    monkeypatch.delenv("ENTERPRISE_GST_PERCENT")
+    assert money._gst_percent_from_env() == 18
 
 
 # ---------------------------------------------------------------------------
@@ -135,7 +220,7 @@ def test_public_plans_payload_quotes_the_requested_currency(code):
         assert [o["currency"] for o in plan["price_options"]] == list(
             money.LAUNCH_CHARGE_CURRENCIES
         )
-        if code == "INR":
+        if code == "INR" and money.tax_applies("INR"):
             assert plan["tax_label"] == "GST"
             assert plan["price_note"] == "+ GST"
         else:

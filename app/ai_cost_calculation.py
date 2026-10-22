@@ -33,14 +33,25 @@ RATE_BASIS_DESCRIPTION = (
 # Exact model identifiers only. Values are USD per million tokens, for the
 # complete prompt <=200,000 / >200,000. Cached tokens remain part of that prompt.
 # Both official pages list identical standard Pro rates for every input modality.
+#
+# Optional entry flags (absent = False):
+#   global_only  — only the Vertex GLOBAL endpoint rate is listed; a Vertex event from a
+#                  regional endpoint is unavailable rather than valued at the global rate.
+#   text_only    — only text/image/video input rates are known. An event whose input
+#                  modality counters show AUDIO tokens is unavailable (never valued at the
+#                  text rate); one with no modality evidence is valued as text, flagged.
+#   unreconciled — the rate comes from public price lists, not yet checked against a Google
+#                  invoice; every event valued on it is "partial" with a coverage reason.
 RATE_CATALOG = {
+    # Retired on Vertex 2026-10-20 (no longer in any candidate chain) — kept so the
+    # historical ledger rows they produced still value.
     "gemini-2.5-pro": {
         "input": ("1.25", "2.50"), "output": ("10.00", "15.00"),
         "cache": ("0.125", "0.25"), "audio": None,
     },
     "gemini-3.1-pro-preview": {
         "input": ("2.00", "4.00"), "output": ("12.00", "18.00"),
-        "cache": ("0.20", "0.40"), "audio": None,
+        "cache": ("0.20", "0.40"), "audio": None, "global_only": True,
     },
     "gemini-2.5-flash": {
         "input": ("0.30", "0.30"), "output": ("2.50", "2.50"),
@@ -48,6 +59,28 @@ RATE_CATALOG = {
         "audio_cache": ("0.10", "0.10"),
     },
 }
+
+# The cheap chain (gemini_service.CHEAP_MODEL_CANDIDATES) and the app-wide Flash fallbacks.
+# Taken from public price lists in Oct 2026 — standard tier, flat across context length,
+# cache at 10% of input as for the rest of the current lineup. They are NOT part of the
+# verified snapshot above and must be checked against the Google invoice; until then every
+# event they value says so ("unreconciled"). Each -preview id is listed explicitly
+# (exact-match catalog, no aliasing): the 2026-07 invoice billed
+# gemini-3.1-flash-lite-preview, which the GA id replaced at the same price.
+_UNRECONCILED_FLASH_RATES = {
+    "gemini-3.1-flash-lite": {"input": "0.25", "output": "1.50", "cache": "0.025"},
+    "gemini-3.5-flash": {"input": "1.50", "output": "9.00", "cache": "0.15"},
+    "gemini-3.5-flash-lite": {"input": "0.30", "output": "2.50", "cache": "0.03"},
+}
+for _model_name, _rates in _UNRECONCILED_FLASH_RATES.items():
+    for _model_id_variant in (_model_name, f"{_model_name}-preview"):
+        RATE_CATALOG[_model_id_variant] = {
+            "input": (_rates["input"], _rates["input"]),
+            "output": (_rates["output"], _rates["output"]),
+            "cache": (_rates["cache"], _rates["cache"]),
+            "audio": None, "text_only": True, "global_only": True, "unreconciled": True,
+        }
+del _model_name, _rates, _model_id_variant
 
 _MILLION = Decimal(1_000_000)
 _NON_AUDIO = frozenset({"TEXT", "IMAGE", "VIDEO"})
@@ -213,10 +246,12 @@ def calculate_event(event) -> dict:
     if not context.get("service_tier"):
         result["assumptions"].append("valued_at_standard_list_rates_service_tier_not_retained")
         result["coverage_reasons"].append("service_tier_not_retained_standard_rates_used")
-    if model == "gemini-3.1-pro-preview" and provider == "vertex" and context.get("location") not in {None, "", "global"}:
+    if rate.get("global_only") and provider == "vertex" and context.get("location") not in {None, "", "global"}:
         return _unavailable(result, "region_rate_not_verified")
-    if model == "gemini-3.1-pro-preview" and provider == "vertex" and not context.get("location"):
+    if rate.get("global_only") and provider == "vertex" and not context.get("location"):
         result["coverage_reasons"].append("region_not_retained_standard_global_rates_used")
+    if rate.get("unreconciled"):
+        result["coverage_reasons"].append("rate_from_public_price_list_not_invoice_reconciled")
 
     prompt = _integer(_get(event, "prompt_tokens"))
     cached = _integer(_get(event, "cached_tokens"))
@@ -250,6 +285,19 @@ def calculate_event(event) -> dict:
         # The old table's defaults cannot distinguish an absent response from an
         # explicitly reported zero. New records carry the raw provider metadata.
         return _unavailable(result, "legacy_zero_usage_unverified")
+
+    if rate.get("text_only") and prompt:
+        # The model's audio-input rate is not in the catalog. Use the provider's own
+        # modality counters (or the request's recorded modalities) to prove the input had no
+        # audio; audio evidence makes the event unavailable rather than under-valued.
+        modalities = _modality_counts(raw, "prompt_tokens_details", prompt)
+        if modalities is None and _get(raw, "prompt_tokens_details"):
+            return _unavailable(result, "modality_counters_inconsistent")
+        modalities = modalities or _context_modality_counts(context, prompt)
+        if modalities is not None and modalities["audio"]:
+            return _unavailable(result, "audio_rate_not_verified")
+        if modalities is None:
+            result["coverage_reasons"].append("input_modality_not_recorded_text_rates_used")
 
     large = int(prompt > 200_000)
     result["context_tier"] = "over_200k" if large else "up_to_200k"

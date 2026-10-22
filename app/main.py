@@ -81,6 +81,7 @@ from app.schema_patch import (
     ensure_users_username_nullable,
     ensure_course_catalog_tables,
     ensure_enterprise_lead_tables,
+    ensure_enterprise_pricing_v2_columns,
 )
 from app.document_catalog import ensure_default_document_type_catalog
 from app.au_universities import seed_au_universities
@@ -331,6 +332,9 @@ def startup_backfill_subscriptions():
     ensure_international_payment_columns()
     ensure_enterprise_coupons_table()
     ensure_enterprise_payment_coupon_columns()
+    # Must run AFTER ensure_enterprise_crm_tables and ensure_enterprise_credit_tables — it
+    # patches subscriptions, wallets, client documents and interview sessions.
+    ensure_enterprise_pricing_v2_columns()
     ensure_enterprise_calendar_table()
     ensure_enterprise_calendar_attachment_table()
     ensure_enterprise_calendar_reminder_runs_table()

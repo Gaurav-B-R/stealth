@@ -7,6 +7,7 @@ from typing import Any, Optional
 import boto3
 from botocore.config import Config
 from pydantic import BaseModel, ValidationError
+from sqlalchemy import and_, exists, func, not_
 from sqlalchemy.exc import IntegrityError
 
 from app import models
@@ -174,6 +175,42 @@ def _is_user_due(user, run_date, now_utc: datetime) -> bool:
         return True
     cadence = DAILY_AI_NOTIFIER_DORMANT_CADENCE_DAYS
     return run_date.toordinal() % cadence == int(user.id) % cadence
+
+
+def _consumer_account_clause():
+    """SQL predicate for "this user is a B2C (consumer) student account", used to keep
+    Rilono Enterprise (B2B) accounts out of the daily scan.
+
+    Enterprise staff have no student journey here — no profile snapshot worth reading, no
+    visa timeline to nudge — yet every scan of one still costs a profile-snapshot rebuild,
+    an R2 write, R2 reads and a Gemini call billed to the B2C bucket (pricing-model review,
+    Phase 0 "stop the daily notifier scanning enterprise staff accounts"). An account is
+    treated as enterprise when EITHER:
+      * users.is_enterprise_account is set (workspace owners and org-created invitees —
+        the same flag that blocks them from the consumer app), OR
+      * it holds ANY active enterprise_organization_members row. This deliberately also
+        covers a pre-existing B2C user who later joined a team (who keeps consumer access
+        and so has the flag unset): once they work inside a workspace the daily student
+        nudges stop. Deactivating the membership (is_active=False — the gate the member
+        model documents; `status` only records why) puts them back on the schedule.
+    Platform admins/developers are NOT exempt, unlike app.auth.is_enterprise_only_account:
+    that exemption exists so staff can still LOG IN to the admin console; it is no reason
+    to spend a daily Gemini call on a staff account that belongs to a workspace.
+
+    Applied in SQL rather than per row so an enterprise account is never even loaded —
+    nothing downstream (snapshot refresh, R2, Gemini, email) can run for it, and the
+    dormancy cadence below only ever sees consumer accounts. `isnot(True)` (not `== False`)
+    so a NULL flag on a legacy row counts as consumer, on both PostgreSQL and SQLite; the
+    membership test is a correlated NOT EXISTS so a user in several orgs is still one row."""
+    member = models.EnterpriseOrganizationMember
+    has_active_membership = exists().where(
+        member.user_id == models.User.id,
+        member.is_active.is_(True),
+    )
+    return and_(
+        models.User.is_enterprise_account.isnot(True),
+        not_(has_active_membership),
+    )
 
 
 def _is_due_for_today(now_utc: datetime) -> bool:
@@ -380,9 +417,17 @@ def _load_profile_raw_json(user_id: int, r2_client) -> str:
 def _process_single_user(user_id: int, model: Any, model_name: str, r2_client) -> bool:
     session = SessionLocal()
     try:
+        # Re-check the consumer-only rule here, not just in the run's candidate query: a run
+        # walks every due account one Gemini call at a time, so a user who joins a workspace
+        # (or is flagged enterprise) after the listing must still be dropped BEFORE the
+        # snapshot refresh below writes to R2.
         user = (
             session.query(models.User)
-            .filter(models.User.id == user_id, models.User.is_active.is_(True))
+            .filter(
+                models.User.id == user_id,
+                models.User.is_active.is_(True),
+                _consumer_account_clause(),
+            )
             .first()
         )
         if not user:
@@ -515,11 +560,22 @@ def run_daily_ai_notification_job(force: bool = False) -> dict:
         model, provider = _build_gemini_model(MODEL_NAME)
         r2_client = _build_r2_client()
 
+        # Enterprise (B2B) accounts are excluded in SQL — see _consumer_account_clause. They
+        # are filtered BEFORE the dormancy cadence and the USER_LIMIT slice, so they neither
+        # count as "dormant deferred" nor use up a slot a student account should get.
         user_rows = (
             db.query(models.User.id, models.User.created_at, models.User.first_login_at, models.User.last_login_at)
-            .filter(models.User.is_active.is_(True))
+            .filter(models.User.is_active.is_(True), _consumer_account_clause())
             .order_by(models.User.id.asc())
             .all()
+        )
+        # Reported only (log + result) so the admin "run now" output shows the skip is
+        # working; one COUNT, nothing about those accounts is loaded.
+        users_skipped_enterprise = int(
+            db.query(func.count(models.User.id))
+            .filter(models.User.is_active.is_(True), not_(_consumer_account_clause()))
+            .scalar()
+            or 0
         )
         # Dormant accounts are only scanned on their fortnightly day — see _is_user_due.
         # Applied to forced (admin "run now") runs too: re-running today must not turn
@@ -530,7 +586,8 @@ def run_daily_ai_notification_job(force: bool = False) -> dict:
             user_ids = user_ids[:DAILY_AI_NOTIFIER_USER_LIMIT]
         print(
             f"Daily AI notifier: {len(user_ids)} account(s) due today, "
-            f"{users_skipped_dormant} dormant account(s) deferred to their fortnightly scan"
+            f"{users_skipped_dormant} dormant account(s) deferred to their fortnightly scan, "
+            f"{users_skipped_enterprise} enterprise account(s) skipped"
         )
 
         users_scanned = 0
@@ -555,6 +612,7 @@ def run_daily_ai_notification_job(force: bool = False) -> dict:
             "model": MODEL_NAME,
             "users_scanned": users_scanned,
             "users_skipped_dormant": users_skipped_dormant,
+            "users_skipped_enterprise": users_skipped_enterprise,
             "notifications_sent": notifications_sent,
         }
     except Exception as exc:  # noqa: BLE001

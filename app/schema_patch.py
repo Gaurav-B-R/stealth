@@ -3960,3 +3960,93 @@ def ensure_enterprise_lead_tables():
             "DROP INDEX IF EXISTS uq_enterprise_lead_forms_token",
         ):
             conn.execute(text(stmt))
+
+
+# Every column the 2026-10-22 B2B pricing model added, per table. Module-level so the tests
+# can assert the patch and the SQLAlchemy models agree column-for-column. DDL fragments use
+# placeholders for the two dialect differences that matter here:
+#   {ts}         TIMESTAMP on sqlite, TIMESTAMPTZ on postgres (the models are timezone=True;
+#                a plain TIMESTAMP on postgres would silently drop the offset on write).
+#   {bool_false} 0 on sqlite, FALSE on postgres.
+_PRICING_V2_COLUMNS: dict[str, tuple[tuple[str, str], ...]] = {
+    "enterprise_subscriptions": (
+        ("files_over_limit_since", "{ts}"),
+        ("branch_packs", "INTEGER NOT NULL DEFAULT 0"),
+        ("override_max_seats", "INTEGER"),
+        ("override_max_clients", "INTEGER"),
+        ("override_included_credits", "INTEGER"),
+        ("override_monthly_reads", "INTEGER"),
+        ("demo_bonus_granted_at", "{ts}"),
+        ("trial_domain_blocked", "BOOLEAN NOT NULL DEFAULT {bool_false}"),
+    ),
+    "enterprise_credit_wallets": (
+        # NULL period + 0/0 reads as "this period's reading allowance has not been granted
+        # yet", so the first wallet access after deploy grants it — the intended behaviour,
+        # exactly like the plan_credits_* columns before them.
+        ("reads_period", "VARCHAR"),
+        ("reads_granted", "INTEGER NOT NULL DEFAULT 0"),
+        ("reads_used", "INTEGER NOT NULL DEFAULT 0"),
+    ),
+    "enterprise_client_documents": (
+        # NULL = legacy/unknown. Deliberately NOT backfilled to "read" from extracted_text:
+        # an empty extraction is indistinguishable from a failed one, and guessing would
+        # hide the "Read now" action on exactly the documents that need it.
+        ("read_status", "VARCHAR"),
+        ("read_blocks", "INTEGER NOT NULL DEFAULT 0"),
+    ),
+    "enterprise_interview_sessions": (
+        # DEFAULT 'completed' fills every existing row: before server-side sessions, a row
+        # was only ever written once the interview had finished, and the session lists now
+        # show completed rows only — any other default would make the history vanish.
+        ("status", "VARCHAR NOT NULL DEFAULT 'completed'"),
+        ("questions_asked", "INTEGER NOT NULL DEFAULT 0"),
+        ("credits_charged", "INTEGER NOT NULL DEFAULT 0"),
+        ("invite_id", "INTEGER"),
+        ("run_token_hash", "VARCHAR"),
+        ("updated_at", "{ts}"),
+    ),
+}
+
+# Same names create_all() derives from `index=True` on the models, so a table built either
+# way ends up with exactly one copy of each index.
+_PRICING_V2_INDEXES: tuple[tuple[str, str], ...] = (
+    ("enterprise_interview_sessions",
+     "CREATE INDEX IF NOT EXISTS ix_enterprise_interview_sessions_run_token_hash "
+     "ON enterprise_interview_sessions(run_token_hash)"),
+    ("enterprise_interview_sessions",
+     "CREATE INDEX IF NOT EXISTS ix_enterprise_interview_sessions_invite_id "
+     "ON enterprise_interview_sessions(invite_id)"),
+)
+
+
+def ensure_enterprise_pricing_v2_columns():
+    """Columns for the 2026-10-22 B2B pricing model (open-file grace, Branch Packs, per-org
+    overrides, one-trial-per-domain, the monthly reading allowance, per-document read
+    status, and server-side mock-interview sessions).
+
+    Additive and idempotent on sqlite and postgres: each column is added only if missing,
+    nothing is dropped or rewritten, and every NOT NULL column carries a default so existing
+    rows are valid the moment it lands. Must run AFTER ensure_enterprise_crm_tables (which
+    creates subscriptions, documents and interview sessions) and ensure_enterprise_credit_tables
+    (wallets); a table that does not exist yet is skipped, since create_all builds it with
+    these columns already.
+    """
+    is_sqlite = engine.dialect.name == "sqlite"
+    fill = {
+        "ts": "TIMESTAMP" if is_sqlite else "TIMESTAMPTZ",
+        "bool_false": "0" if is_sqlite else "FALSE",
+    }
+    with engine.begin() as conn:
+        for table, columns in _PRICING_V2_COLUMNS.items():
+            if not _table_exists(conn, table):
+                continue
+            existing = _get_table_columns(conn, table)
+            for col, ddl in columns:
+                if col in existing:
+                    continue
+                conn.execute(text(
+                    f"ALTER TABLE {table} ADD COLUMN {col} {ddl.format(**fill)}"
+                ))
+        for table, stmt in _PRICING_V2_INDEXES:
+            if _table_exists(conn, table):
+                conn.execute(text(stmt))

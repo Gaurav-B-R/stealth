@@ -65,6 +65,17 @@ PRICING_PER_MILLION = {
     # Based on Gemini 3 Pro list pricing (≤200k context) — cross-check the invoice.
     "gemini-3.1-pro": (2.00, 12.00),
     "gemini-3-pro": (2.00, 12.00),
+    # The cheap chain (gemini_service.CHEAP_MODEL_CANDIDATES) and the app-wide fallbacks.
+    # Rates taken from public price lists in Oct 2026 (standard tier, text/image/video
+    # input) — they MUST be checked against the next Google invoice before anyone quotes a
+    # margin off them. Substring matching covers the -preview ids (the 2026-07 invoice
+    # billed gemini-3.1-flash-lite-preview, now replaced by the GA id at the same price);
+    # longest-key-wins keeps "gemini-3.5-flash-lite" off the "gemini-3.5-flash" rate.
+    "gemini-3.1-flash-lite": (0.25, 1.50),
+    "gemini-3.5-flash-lite": (0.30, 2.50),
+    "gemini-3.5-flash": (1.50, 9.00),
+    # Retired models (2.5 on 2026-10-20; 2.0/1.5 earlier). Never in a candidate chain any
+    # more — kept so historical ledger rows keep their price.
     "gemini-2.5-pro": (1.25, 10.00),
     "gemini-2.5-flash-lite": (0.10, 0.40),
     "gemini-2.5-flash": (0.30, 2.50),
@@ -743,6 +754,7 @@ SOURCE_LABELS = {
     "mock_interview_tts": "Mock interview — officer neural voice (TTS)",
     "document_ai": "Document AI (validation & extraction)",
     "enterprise_document_scan": "Document scan & validate (per document, billed)",
+    "enterprise_document_read": "Upload reading — monthly AI reads allowance (enterprise)",
     "student_ai_chat": "Student AI chat (website)",
     "student_mock_interview": "Mock interview conversation",
     "student_interview_report": "Mock interview feedback report",

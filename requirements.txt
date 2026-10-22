@@ -32,3 +32,6 @@ openpyxl>=3.1.2
 # /usr/share/zoneinfo already; pinning the wheel means a slim one can't silently strip
 # it and leave every office zone unvalidatable.
 tzdata>=2024.1
+# Enterprise upload reading splits long PDFs into 15-page blocks (one "read" each) so a
+# 200-page bank statement is read in capped, metered pieces instead of one unbounded call.
+pypdf>=4

@@ -773,6 +773,14 @@ class EnterpriseClientDocument(Base):
     # "Validated by Rilono AI".
     manually_accepted_at = Column(DateTime(timezone=True), nullable=True)
     manually_accepted_by = Column(String, nullable=True)
+    # Free AI READING of the upload (text extraction for the assistant/Deep Scan), metered
+    # against the org's monthly reads allowance. Separate from validation_status, which is
+    # the PAID document check: a document can be stored-but-not-read and still be checked.
+    # "read" | "not_read" (allowance exhausted or AI paused — the file IS stored; staff can
+    #   "Read now" later) | "pending" | "failed" | NULL (legacy row / unknown).
+    read_status = Column(String, nullable=True)
+    # Reads this document consumed (ceil(pages / 15)), so a re-read is auditable.
+    read_blocks = Column(Integer, nullable=False, default=0, server_default="0")
     uploaded_by_user_id = Column(Integer, ForeignKey("users.id"), nullable=True, index=True)
     uploaded_by_name = Column(String, nullable=True)
     created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False, index=True)
@@ -912,7 +920,14 @@ class EnterpriseClientWritingDraft(Base):
 
 
 class EnterpriseInterviewSession(Base):
-    """A completed AI mock visa interview for a client (transcript + feedback)."""
+    """An AI mock visa interview for a client (transcript + feedback).
+
+    Since 2026-10-22 this is also the SERVER-SIDE session a paid interview runs in: start
+    creates the row ("in_progress") and charges once, every turn appends to THIS transcript
+    (client-sent history is ignored, so a browser cannot replay or extend a session for
+    free), and the single feedback report completes it. Rows written before that are
+    finished interviews, which is why `status` defaults to "completed".
+    """
     __tablename__ = "enterprise_interview_sessions"
 
     id = Column(Integer, primary_key=True, index=True)
@@ -924,7 +939,21 @@ class EnterpriseInterviewSession(Base):
     transcript = Column(Text, nullable=True)  # JSON list of {role, content}
     feedback = Column(Text, nullable=True)
     verdict = Column(String, nullable=True)
+    # in_progress | completed | abandoned. Default "completed" so every legacy row (all of
+    # which were saved only once finished) stays in the completed-sessions lists.
+    status = Column(String, nullable=False, default="completed", server_default="completed")
+    questions_asked = Column(Integer, nullable=False, default=0, server_default="0")
+    credits_charged = Column(Integer, nullable=False, default=0, server_default="0")
+    # The public self-serve link this session ran under (NULL for staff-run sessions).
+    invite_id = Column(
+        Integer, ForeignKey("enterprise_interview_invites.id", ondelete="SET NULL"),
+        nullable=True, index=True,
+    )
+    # Hash of the per-run capability token the public link's browser holds instead of the
+    # session id, so a guessed id cannot drive someone else's paid session.
+    run_token_hash = Column(String, nullable=True, index=True)
     created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False, index=True)
+    updated_at = Column(DateTime(timezone=True), onupdate=func.now())
 
     client = relationship("EnterpriseClient", back_populates="interview_sessions")
 
@@ -1320,6 +1349,29 @@ class EnterpriseSubscription(Base):
     # Last mandate state Razorpay reported (active|halted|paused|cancelled|completed). A
     # halted mandate means the card is failing and dunning has started.
     mandate_status = Column(String, nullable=True)
+    # --- Pricing v2 (2026-10-22): plans sized by OPEN files -----------------------------
+    # When the org first went above its open-file limit (enterprise_billing's 14-day grace
+    # clock). NULL = not over, or over but no add has been attempted since. Read as stale
+    # whenever the org is back at/below the limit, and cleared on the next add — so a
+    # stamp left over from an earlier overage can never cut a later grace period short.
+    files_over_limit_since = Column(DateTime(timezone=True), nullable=True)
+    # Branch Packs sold by invoice (admin-set): each adds a fixed block of open files, seats,
+    # monthly credits and reads on top of the plan — see enterprise_billing.effective_limits.
+    branch_packs = Column(Integer, nullable=False, default=0, server_default="0")
+    # Per-org admin overrides. NULL = the plan's own number; a value REPLACES it (Branch Packs
+    # then add on top). Kept on the subscription rather than a side table because every
+    # limit read already loads this row.
+    override_max_seats = Column(Integer, nullable=True)
+    override_max_clients = Column(Integer, nullable=True)        # open files
+    override_included_credits = Column(Integer, nullable=True)   # credits per period
+    override_monthly_reads = Column(Integer, nullable=True)      # AI reads per period
+    # Durable once-per-org marker for the trial's "demo call" credit bonus. A timestamp, not
+    # a flag on the wallet's grant key, for the same reason as plan_credits_once_at: the key
+    # is overwritten on every period change and would let the bonus be granted again.
+    demo_bonus_granted_at = Column(DateTime(timezone=True), nullable=True)
+    # Set at signup when another org already used a free trial on the owner's company email
+    # domain: the org is created with its trial already ended and no sandbox credits/reads.
+    trial_domain_blocked = Column(Boolean, nullable=False, default=False, server_default="0")
     created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
     updated_at = Column(DateTime(timezone=True), onupdate=func.now())
 
@@ -1412,7 +1464,8 @@ class EnterpriseCreditWallet(Base):
     """'Rilono Credits' wallet for an organization — the AI metering unit (1 credit = ₹10).
 
     Credits reach the wallet two ways, and both land in the SAME `balance_credits`:
-      * INCLUDED with the org's plan — 1,000/3,500/10,000 granted every billing period
+      * INCLUDED with the org's plan — the tier's monthly allowance (150/450/1,200 by
+        default, plus Branch Packs/overrides) granted every billing period
         (see app/enterprise_billing.py PLANS and enterprise_credits.sync_plan_credits).
       * PURCHASED as a top-up pack via Razorpay, for overage.
 
@@ -1441,7 +1494,7 @@ class EnterpriseCreditWallet(Base):
     # How much of THIS period's grant is still unspent. Debits decrement it alongside
     # balance_credits (floored at 0, so spending purchased credits never drives it
     # negative). At rollover this remainder is clawed back before the next grant, which is
-    # what makes "1,000/month" mean 1,000 per month rather than 12,000 by December.
+    # what makes "150/month" mean 150 per month rather than 1,800 by December.
     plan_credits_remaining = Column(Integer, nullable=False, default=0, server_default="0")
     # When the ONE-TIME allowance (the sandbox's demo credits) was handed out. Durable, because
     # plan_credits_period only remembers the latest key: sandbox -> paid -> lapse cycles it back
@@ -1469,6 +1522,14 @@ class EnterpriseCreditWallet(Base):
     # could farm unlimited free Gemini audits. 'YYYY-MM' window + count used in it.
     deep_scan_free_month = Column(String, nullable=True)
     deep_scan_free_used = Column(Integer, nullable=False, default=0)
+    # --- Monthly AI reading allowance (free upload text extraction) ---------------------
+    # Not credits: a plan includes N "reads" per period (one read = one 15-page block of an
+    # upload), granted lazily on the same period key as the credit allowance. A counter
+    # pair instead of ledger rows because reads are never bought, refunded or carried over:
+    # a period roll sets granted to the new allowance and used back to 0.
+    reads_period = Column(String, nullable=True)
+    reads_granted = Column(Integer, nullable=False, default=0, server_default="0")
+    reads_used = Column(Integer, nullable=False, default=0, server_default="0")
     created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
     updated_at = Column(DateTime(timezone=True), onupdate=func.now())
 

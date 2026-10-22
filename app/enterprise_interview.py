@@ -14,6 +14,7 @@ clients' data.
 """
 
 import logging
+import os
 import re
 from datetime import datetime
 from typing import Optional
@@ -27,6 +28,38 @@ from app.utils import gemini_service as gemini_utils
 logger = logging.getLogger(__name__)
 
 MAX_HISTORY_TURNS = 40
+
+
+def _int_env(env_key: str, default_value: int, minimum: int = 1) -> int:
+    """Env-overridable integer; a blank, malformed or below-minimum value keeps the default."""
+    raw = os.getenv(env_key, "").strip()
+    if not raw:
+        return default_value
+    try:
+        value = int(raw)
+    except ValueError:
+        return default_value
+    return value if value >= minimum else default_value
+
+
+# The most officer QUESTIONS one mock-interview session may ask. A session is sold at one
+# flat credit price (credits action "mock_interview": the questions + ONE feedback report),
+# and every turn re-sends the whole growing transcript, so an unbounded interview is an
+# unbounded, superlinear bill on a fixed price. Before this cap the only stop was the
+# prompt's "roughly 8-12 questions" — advice the model was free to ignore, and a
+# client-driven loop of answers could keep a paid session going forever. The cap is
+# enforced on the SERVER's count of the transcript (count_officer_questions): at the cap,
+# run_interview_turn makes the officer deliver the closing decision instead of another
+# question. It also has to stay under MAX_HISTORY_TURNS / 2 so the officer still sees every
+# question it asked when it decides.
+MAX_INTERVIEW_QUESTIONS = min(
+    _int_env("ENTERPRISE_INTERVIEW_MAX_QUESTIONS", 12),
+    MAX_HISTORY_TURNS // 2,
+)
+# The prompt's lower bound for a natural interview length (the cap is the upper bound).
+_MIN_NATURAL_QUESTIONS = 8
+
+_OFFICER_ROLES = frozenset({"model", "assistant", "ai", "officer"})
 
 
 # Per-destination officer persona — what a real officer for that country probes.
@@ -199,11 +232,23 @@ def _documents_context_block(documents: list) -> str:
     )
 
 
+def _question_budget_rule(max_questions: Optional[int] = None) -> str:
+    """The prompt's interview-length rule, worded from the SAME cap the server enforces —
+    a prompt that said "8-12" over a cap of 10 would have the officer planning questions it
+    will never be allowed to ask."""
+    cap = max(1, int(max_questions or MAX_INTERVIEW_QUESTIONS))
+    low = min(_MIN_NATURAL_QUESTIONS, cap)
+    if low >= cap:
+        return f"Ask at most {cap} question{'s' if cap != 1 else ''} in total — never more."
+    return f"Ask roughly {low}–{cap} questions in total, and never more than {cap}."
+
+
 def build_interview_system_prompt(
     client: models.EnterpriseClient,
     organization: models.EnterpriseOrganization,
     recent_notes: list,
     documents: Optional[list] = None,
+    max_questions: Optional[int] = None,
 ) -> str:
     persona = _officer_persona(client.destination_country_code)
     context = _client_context_block(client, recent_notes)
@@ -235,7 +280,7 @@ def build_interview_system_prompt(
         "- Be professional and polite but firm and appropriately skeptical. Do not be unrealistically "
         "friendly or hand the applicant an easy pass.\n"
         "- Begin by greeting the applicant briefly and asking your first question.\n"
-        "- Ask roughly 8–12 questions in total. When you have enough information to reach a "
+        f"- {_question_budget_rule(max_questions)} When you have enough information to reach a "
         "decision, OR the applicant indicates they want to stop, END the interview yourself — do "
         "not keep asking questions afterwards.\n"
         "- To end, give a brief in-character closing (1–2 sentences) that clearly states your "
@@ -297,6 +342,61 @@ def parse_completion(text: str) -> tuple[str, bool, Optional[str]]:
     return cleaned, True, decision
 
 
+def _is_closing_turn(turn: dict) -> bool:
+    """An officer turn that ended the interview (the decision), not a question."""
+    if turn.get("finished") is True or turn.get("decision") in ("approved", "refused"):
+        return True
+    return bool(_COMPLETION_RE.search(str(turn.get("content") or "")))
+
+
+def count_officer_questions(transcript: Optional[list]) -> int:
+    """How many questions the officer has asked in `transcript` (a list of
+    {"role", "content"} turns, oldest first).
+
+    Every non-empty officer turn counts as ONE question, except a closing turn (marked
+    finished / with a decision, or still carrying the completion tag). Counting turns
+    rather than "?" characters is deliberate: the prompt makes every officer turn "a brief
+    reaction plus a single question", but officers ask in imperatives as often as not
+    ("Walk me through your sponsor's income."), and a "?"-count would let a session run
+    past its paid cap on exactly those. Pass the SERVER-side transcript — a client-sent
+    history could simply omit turns to reset the count.
+    """
+    asked = 0
+    for turn in transcript or []:
+        if not isinstance(turn, dict):
+            continue
+        role = str(turn.get("role") or "").strip().lower()
+        if role not in _OFFICER_ROLES:
+            continue
+        if not str(turn.get("content") or "").strip():
+            continue
+        if _is_closing_turn(turn):
+            continue
+        asked += 1
+    return asked
+
+
+# Fallback when the officer ignores the cap instruction and asks yet another question:
+# the session still has to end on a closing, so the reply is replaced with this.
+_CAP_CLOSING_FALLBACK = (
+    "Thank you — that's all the questions I have for you today. This interview is now complete."
+)
+_REFUSAL_HINTS = ("unable to approve", "cannot approve", "can't approve", "not able to approve",
+                  "won't be able to approve", "not approve", "refuse", "refusing", "deny", "denied",
+                  "reject")
+
+
+def _infer_decision(text: str) -> Optional[str]:
+    """Best-effort decision from a closing that forgot its tag. None when it is unclear —
+    the feedback pass then judges the transcript on its own."""
+    lowered = (text or "").lower()
+    if any(hint in lowered for hint in _REFUSAL_HINTS):
+        return "refused"
+    if "approve" in lowered or "approval" in lowered or "granted" in lowered:
+        return "approved"
+    return None
+
+
 def run_interview_turn(
     *,
     client: models.EnterpriseClient,
@@ -306,17 +406,43 @@ def run_interview_turn(
     message: str,
     is_start: bool = False,
     documents: Optional[list] = None,
+    questions_asked: Optional[int] = None,
+    max_questions: Optional[int] = None,
 ) -> dict:
-    """One officer turn. Returns {'reply', 'finished', 'decision'}.
+    """One officer turn. Returns {'reply', 'finished', 'decision', 'questions_asked',
+    'max_questions', 'forced_close'}.
 
     'finished' is True when the officer has ended the interview; 'decision' is then
-    'approved' or 'refused'. If is_start, the model opens the interview.
+    'approved' or 'refused' (None only if a forced closing stated no clear decision). If
+    is_start, the model opens the interview.
+
+    `questions_asked` is how many questions the officer has ALREADY asked this session —
+    the server's stored count; when omitted it is counted from `history` with
+    count_officer_questions. Once it reaches `max_questions` (default
+    MAX_INTERVIEW_QUESTIONS), this turn is the officer's closing decision, never another
+    question ('forced_close' True): the instruction is put to the model, and a reply that
+    still fails to close is closed by the server. The returned 'questions_asked' is the
+    count AFTER this turn, ready to store back on the session.
     """
+    # Same ceiling as MAX_INTERVIEW_QUESTIONS: past MAX_HISTORY_TURNS / 2 the officer would
+    # decide without seeing its own first questions.
+    cap = max(1, min(int(max_questions or MAX_INTERVIEW_QUESTIONS), MAX_HISTORY_TURNS // 2))
+    try:
+        asked = int(questions_asked) if questions_asked is not None else count_officer_questions(history)
+    except (TypeError, ValueError):
+        asked = count_officer_questions(history)
+    asked = max(0, asked)
+    # Opening a session always asks the first question; every later turn at the cap closes.
+    force_close = (not is_start) and asked >= cap
+
     if not is_ai_configured():
         return {
             "reply": "The mock interview isn't available right now — Rilono AI isn't configured on the server.",
             "finished": False,
             "decision": None,
+            "questions_asked": asked,
+            "max_questions": cap,
+            "forced_close": False,
         }
 
     if is_start:
@@ -326,8 +452,17 @@ def run_interview_turn(
         )
     else:
         user_message = (message or "").strip()[:3000] or "(no answer given)"
+    if force_close:
+        # Same bracketed-stage-direction convention as the opening turn. The tag
+        # instruction is restated because this turn MUST carry it for the UI to wrap up.
+        user_message += (
+            f"\n\n[You have now asked all {cap} of your questions. Do NOT ask another question. "
+            "Give your brief in-character closing now with your decision — approved or refused — "
+            "and end it with the status tag on its own last line, exactly as instructed.]"
+        )
 
-    system = build_interview_system_prompt(client, organization, recent_notes, documents)
+    system = build_interview_system_prompt(client, organization, recent_notes, documents,
+                                           max_questions=cap)
     last_error = None
     for model_name in _model_candidates():
         try:
@@ -337,10 +472,24 @@ def run_interview_turn(
             ai_usage.record_gemini_usage("mock_interview", model_name, response)
             text = sanitize_public_ai_text((getattr(response, "text", None) or "").strip())
             cleaned, finished, decision = parse_completion(text)
+            if force_close and not finished:
+                # The model ignored the cap. The session still ends here: a closing without
+                # its tag keeps its words (and a decision when it clearly states one); a
+                # reply that asked yet another question is replaced, because answering it
+                # would be a question past the paid cap.
+                finished = True
+                if not cleaned or "?" in cleaned:
+                    cleaned, decision = _CAP_CLOSING_FALLBACK, None
+                else:
+                    decision = _infer_decision(cleaned)
             return {
                 "reply": cleaned or "Could you please repeat that?",
                 "finished": finished,
                 "decision": decision,
+                # A closing turn asks nothing; any other officer turn is one question.
+                "questions_asked": asked if finished else asked + 1,
+                "max_questions": cap,
+                "forced_close": force_close,
             }
         except Exception as exc:  # noqa: BLE001
             last_error = exc

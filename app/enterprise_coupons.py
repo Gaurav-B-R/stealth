@@ -10,9 +10,14 @@ applying those codes, plus computing how many times a code has been redeemed.
 Redemptions are counted live from *verified* payment rows that carry the code
 (EnterpriseCreditPayment / EnterpriseSubscriptionPayment), so there is no
 mutable counter to keep in sync.
+
+Every discount is capped at MAX_PERCENT_OFF (ENTERPRISE_COUPON_MAX_PERCENT, default 15):
+admins cannot save a code above it, and a legacy code above it is applied at the cap.
 """
 from __future__ import annotations
 
+import logging
+import os
 import re
 from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
 from typing import Any, Optional
@@ -29,6 +34,42 @@ MIN_CHECKOUT_PAISE = 100
 
 # Where a coupon may be redeemed.
 APPLIES_TO_VALUES = ("all", "credits", "billing")
+
+logger = logging.getLogger(__name__)
+
+
+def _max_percent_from_env() -> Decimal:
+    raw = os.getenv("ENTERPRISE_COUPON_MAX_PERCENT", "").strip()
+    default = Decimal("15")
+    if not raw:
+        return default
+    try:
+        value = Decimal(raw)
+    except (InvalidOperation, ValueError):
+        return default
+    if not value.is_finite() or value < 1 or value > 100:
+        return default
+    return value.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+
+
+# The most any coupon may take off, in percent (owner decision, 2026-10-22: 15).
+#
+# Two live 100%-off codes were found in production while the B2B prices were re-cut. On a
+# plan sold below ₹1,500 a deep percentage discount is not a promotion, it is the product
+# given away — and because a recurring mandate is created for the DISCOUNTED amount, a
+# launch coupon quietly becomes the permanent price. So the cap is enforced twice:
+#   * at CREATION/EDIT (validate_percent_off_for_admin): an admin cannot save a code above
+#     it — a 400 that names the cap, so nobody believes they issued 50% off;
+#   * at APPLICATION (effective_percent_off / compute_discounted_amount_paise): a code
+#     that already exists above the cap is honoured AT the cap, never more, and logged.
+#     Rejecting it instead would break checkout for a customer holding a code we issued.
+# ENTERPRISE_COUPON_MAX_PERCENT=100 restores the uncapped behaviour.
+MAX_PERCENT_OFF = _max_percent_from_env()
+
+
+def max_percent_off() -> Decimal:
+    """The live cap (read through a function so tests and callers see monkeypatches)."""
+    return MAX_PERCENT_OFF
 
 
 def normalize_code(raw_code: str | None) -> str:
@@ -50,7 +91,12 @@ def parse_percent_off(raw_value: Any) -> Decimal:
 
     Out-of-range numbers clamp (150 → 100, 0.5 → 1) rather than raise, so both
     admin input and legacy stored rows normalize the same way; only non-numeric
-    values are a 400."""
+    values are a 400.
+
+    This is the STORED value's normal form and deliberately ignores the business cap
+    (MAX_PERCENT_OFF): the admin console must still be able to show that a legacy row says
+    100%. Use validate_percent_off_for_admin when SAVING a code and effective_percent_off
+    when APPLYING one."""
     try:
         value = Decimal(str(raw_value)).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
     except (InvalidOperation, ValueError, TypeError):
@@ -58,6 +104,39 @@ def parse_percent_off(raw_value: Any) -> Decimal:
     if not value.is_finite():  # NaN survives quantize and would poison comparisons
         raise HTTPException(status_code=400, detail="Discount percentage is invalid.")
     return min(max(value, Decimal("1")), Decimal("100"))
+
+
+def validate_percent_off_for_admin(raw_value: Any) -> Decimal:
+    """Parse a percent an admin is CREATING or EDITING a code with, refusing anything above
+    the cap with a 400 (rather than silently saving a smaller number than they typed)."""
+    value = parse_percent_off(raw_value)
+    cap = max_percent_off()
+    if value > cap:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"Discount codes can be at most {format_percent_off(cap)}% off. "
+                f"Use {format_percent_off(cap)} or less."
+            ),
+        )
+    return value
+
+
+def effective_percent_off(raw_value: Any) -> Decimal:
+    """The percent a code ACTUALLY takes off at checkout: its stored value, capped.
+
+    Callers should record this (not the stored value) on the payment row, so the invoice
+    says what was really discounted. A code above the cap is logged every time it is
+    applied — that log line is the to-do list for deactivating it."""
+    value = parse_percent_off(raw_value)
+    cap = max_percent_off()
+    if value > cap:
+        logger.warning(
+            "coupon: stored discount %s%% exceeds the %s%% cap; applying the cap",
+            format_percent_off(value), format_percent_off(cap),
+        )
+        return cap
+    return value
 
 
 def parse_max_redemptions(raw_value: Any) -> Optional[int]:
@@ -86,9 +165,22 @@ def normalize_applies_to(raw_value: Any) -> str:
 
 
 def compute_discounted_amount_paise(base_amount_paise: int, percent_off: Decimal) -> int:
-    """Apply a percentage discount to an amount in paise (rounded, never < 0)."""
+    """Apply a percentage discount to an amount in minor units (rounded, never < 0).
+
+    The cap is applied HERE as well as in effective_percent_off, because this is the one
+    function every discounted amount passes through (plan checkout via
+    enterprise_billing.checkout_quote, credit top-ups, the coupon preview). A caller that
+    hands over a raw stored percent therefore still cannot discount past the cap."""
+    percent_off = Decimal(str(percent_off))
     if percent_off <= Decimal("0"):
         return int(base_amount_paise)
+    cap = max_percent_off()
+    if percent_off > cap:
+        logger.warning(
+            "coupon: discount %s%% requested above the %s%% cap; applying the cap",
+            format_percent_off(percent_off), format_percent_off(cap),
+        )
+        percent_off = cap
     multiplier = (Decimal("100") - percent_off) / Decimal("100")
     discounted = (Decimal(int(base_amount_paise)) * multiplier).quantize(
         Decimal("1"), rounding=ROUND_HALF_UP
@@ -216,12 +308,20 @@ def serialize(db: Session, coupon: models.EnterpriseCoupon) -> dict:
     """Admin-facing representation of a coupon, including live redemption usage."""
     percent = parse_percent_off(coupon.percent_off)
     used = redemptions_used(db, int(coupon.organization_id), coupon.code)
+    cap = max_percent_off()
+    effective = min(percent, cap)
     return {
         "id": int(coupon.id),
         "organization_id": int(coupon.organization_id),
         "code": normalize_code(coupon.code),
         "percent_off": float(percent),
         "percent_display": format_percent_off(percent) + "%",
+        # What checkout will really take off. Differs from percent_off only for a legacy
+        # code saved before the cap existed; the console should flag those.
+        "effective_percent_off": float(effective),
+        "effective_percent_display": format_percent_off(effective) + "%",
+        "above_cap": bool(percent > cap),
+        "max_percent_off": float(cap),
         "is_active": bool(coupon.is_active),
         "applies_to": str(coupon.applies_to or "all").lower(),
         "max_redemptions": int(coupon.max_redemptions) if coupon.max_redemptions is not None else None,

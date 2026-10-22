@@ -85,7 +85,14 @@ def sanitize_public_ai_text(text: str) -> str:
 #
 # Set ENTERPRISE_AI_MODEL=gemini-3.1-pro-preview to put Pro back — the cost-weighted
 # meter keeps the margin either way, the org just spends its allowance ~4x faster.
-_DEFAULT_ASSISTANT_MODELS = ["gemini-2.5-flash", "gemini-3.1-pro-preview", "gemini-2.5-pro"]
+#
+# 2026-10-22: this chain used to LEAD with gemini-2.5-flash. Gemini 2.5 was retired on
+# Vertex on 2026-10-20, so every turn's first attempt failed and fell through to 3.1 Pro —
+# the exact cost profile the paragraph above exists to avoid. The default is now the
+# shared cheap chain (3.1 Flash-Lite → 3.5 Flash → 3.1 Pro as last resort), which Deep
+# Scan also uses via _enterprise_model_candidates(). ENTERPRISE_AI_MODEL /
+# ENTERPRISE_AI_MODEL_CANDIDATES still override both, unchanged.
+_DEFAULT_ASSISTANT_MODELS = list(gemini_utils.CHEAP_MODEL_CANDIDATES)
 
 
 def _enterprise_model_candidates() -> list[str]:
@@ -1997,6 +2004,8 @@ class TurnUsage:
     tools_called: list = field(default_factory=list)
     empty_retries: int = 0
     hit_round_cap: bool = False
+    # True when the turn's cost budget (see _run_metered_tool_loop) ended tool calling.
+    hit_cost_budget: bool = False
 
     def as_dict(self) -> dict:
         return {
@@ -2009,6 +2018,7 @@ class TurnUsage:
             "model": self.model,
             "tools_called": list(self.tools_called),
             "hit_round_cap": self.hit_round_cap,
+            "hit_cost_budget": self.hit_cost_budget,
         }
 
 
@@ -2121,14 +2131,42 @@ def _capped_tool_result(name: str, result) -> dict:
     }
 
 
+def _normalize_cost_budget(cost_budget_usd) -> Optional[Decimal]:
+    """A turn cost budget as a non-negative Decimal, or None (= no budget).
+
+    Money arrives here as Decimal from the credits module, but a float or str must not
+    turn into binary-float noise in a comparison against the Decimal turn cost.
+    """
+    if cost_budget_usd is None:
+        return None
+    try:
+        value = cost_budget_usd if isinstance(cost_budget_usd, Decimal) else Decimal(str(cost_budget_usd))
+    except Exception:  # noqa: BLE001
+        logger.warning("Enterprise AI: ignoring malformed cost budget %r", cost_budget_usd)
+        return None
+    if not value.is_finite():
+        return None
+    return max(Decimal("0"), value)
+
+
 def _run_metered_tool_loop(*, model_name: str, system: str, tools: list, history: list,
                            message: str, source: str, organization_id: Optional[int],
-                           user_id: Optional[int], usage: TurnUsage) -> str:
+                           user_id: Optional[int], usage: TurnUsage,
+                           cost_budget_usd: Optional[Decimal] = None) -> str:
     """Drive the function-calling loop by hand, metering every round-trip.
 
     Mirrors the SDK's AFC semantics (call every requested tool, feed the results back,
-    repeat until the model answers in text) with three additions: per-round metering,
-    a hard round cap, and per-result size caps.
+    repeat until the model answers in text) with four additions: per-round metering,
+    a hard round cap, per-result size caps, and an optional per-turn COST budget.
+
+    `cost_budget_usd` (Decimal USD, None = no budget) is the most this turn may spend on
+    tool round-trips. It is checked before every round against usage.cost_usd — the
+    running total of the WHOLE turn, including rounds a failed earlier model candidate
+    already spent — and once reached, tool calling stops and the turn takes the same exit
+    as the MAX_TOOL_ROUNDS cap: one final no-tool round that answers from what was already
+    gathered. The credits module sets it when the wallet can only cover part of a turn's
+    worst case (a free turn must not be able to run away into a paid one). The final round
+    itself is unavoidably spent on top: a budget bounds the fan-out, not the answer.
     """
     from google.generativeai import protos
     from google.generativeai.types import content_types
@@ -2146,9 +2184,20 @@ def _run_metered_tool_loop(*, model_name: str, system: str, tools: list, history
     contents = list(content_types.to_contents(history)) if history else []
     contents.append(protos.Content(role="user", parts=[protos.Part(text=message)]))
 
+    budget = _normalize_cost_budget(cost_budget_usd)
     response = None
     empty_retries = 2
+    force_final_round = False
     for round_index in range(MAX_TOOL_ROUNDS):
+        if budget is not None and usage.cost_usd >= budget:
+            # Checked at the TOP of the round so it also catches an empty-candidate re-ask
+            # (the `continue` below) and a turn a previous model candidate already spent:
+            # neither may buy another tool round once the budget is gone.
+            usage.hit_cost_budget = True
+            force_final_round = True
+            logger.info("Enterprise AI: turn cost budget reached after %d round(s) (org_id=%s)",
+                        usage.rounds, organization_id)
+            break
         response = model.generate_content(contents=contents, tools=library)
         _meter_round(response, model_name=model_name, source=source, usage=usage,
                      organization_id=organization_id, user_id=user_id)
@@ -2198,18 +2247,18 @@ def _run_metered_tool_loop(*, model_name: str, system: str, tools: list, history
 
         if round_index == MAX_TOOL_ROUNDS - 1:
             usage.hit_round_cap = True
+            force_final_round = True
             logger.info("Enterprise AI: hit the %d-round tool cap (org_id=%s)",
                         MAX_TOOL_ROUNDS, organization_id)
 
-    if response is None:
-        return ""
-
-    if usage.hit_round_cap:
-        # The turn has just been charged for MAX_TOOL_ROUNDS round-trips and the last
-        # response is pure function_call, so it has no .text at all — without this the
-        # most expensive possible turn returns the generic "couldn't find an answer".
-        # One more round with tool calling switched OFF forces a text answer out of
-        # everything already gathered. It is metered like any other round.
+    if force_final_round:
+        # The turn has just been charged for MAX_TOOL_ROUNDS round-trips (or its cost
+        # budget) and the last response is pure function_call, so it has no .text at all —
+        # without this the most expensive possible turn returns the generic "couldn't find
+        # an answer". One more round with tool calling switched OFF forces a text answer out
+        # of everything already gathered. It is metered like any other round. (A budget
+        # spent before the first round leaves response None; the no-tool round then answers
+        # from the conversation alone.)
         try:
             response = model.generate_content(
                 contents=contents,
@@ -2219,6 +2268,9 @@ def _run_metered_tool_loop(*, model_name: str, system: str, tools: list, history
                          organization_id=organization_id, user_id=user_id)
         except Exception:
             logger.warning("Enterprise AI: final no-tool round failed", exc_info=True)
+
+    if response is None:
+        return ""
 
     try:
         return (response.text or "").strip()
@@ -2236,6 +2288,7 @@ def run_enterprise_ai_chat(
     message: str,
     history: Optional[list] = None,
     ctx=None,
+    cost_budget_usd: Optional[Decimal] = None,
 ) -> "ChatTurnResult":
     """Run one turn of the enterprise AI assistant.
 
@@ -2246,6 +2299,11 @@ def run_enterprise_ai_chat(
     `ctx` is the caller's access context. It must be threaded through: the assistant answers from
     live database queries, so without it a member limited to their own caseload could simply ask
     for every client in the workspace and get them.
+
+    `cost_budget_usd` (Decimal USD) caps what the turn may spend on tool rounds — see
+    _run_metered_tool_loop. None (the default) is the unbudgeted behaviour. The budget spans
+    the whole turn, including any model candidate that failed part-way, because the usage
+    object (and so the bill) does.
     """
     usage = TurnUsage()
     if not is_ai_configured():
@@ -2277,6 +2335,7 @@ def run_enterprise_ai_chat(
                 organization_id=int(organization.id),
                 user_id=int(user.id) if user.id else None,
                 usage=usage,
+                cost_budget_usd=cost_budget_usd,
             )
             if not text:
                 text = ("I couldn't find an answer to that. Try rephrasing, or ask about your "
@@ -2298,15 +2357,20 @@ def run_enterprise_ai_chat(
 #   MAP    — one small call per document extracts its audit facts as structured JSON
 #            (each call sees ONE document in full → nothing is truncated or dropped).
 #   REDUCE — one call cross-references the compact facts of ALL documents at once
-#            (structured input stays tiny even for 40+ docs → sharp, complete audit).
+#            (structured input stays tiny even for a full file → sharp, complete audit).
 # Per-document extractions are cached on the document row (keyed by a text hash), so
 # re-scans only re-run the cheap reduce step.
 
 # Read each document in full up to this cap for the MAP step (a whole passport / bank
 # statement / offer letter fits comfortably; guards against pathological OCR blobs).
 DEEP_SCAN_EXTRACT_MAX_DOC_CHARS = int(os.getenv("DEEP_SCAN_EXTRACT_MAX_DOC_CHARS", "60000") or "60000")
-# Safety cap on how many documents a single scan will process.
-DEEP_SCAN_MAX_DOCUMENTS = int(os.getenv("DEEP_SCAN_MAX_DOCUMENTS", "40") or "40")
+# How many documents a single scan will process. Deep Scan is sold at ONE flat credit price
+# per scan (credits action "deep_scan"), and the MAP step is one model call per uncached
+# document, so this cap is what bounds the worst-case cost of a scan against that price —
+# the owner-approved B2B pricing (2026-10) sells a scan as "up to 20 documents". Documents
+# beyond it are reported as documents_over_cap, never silently dropped; see
+# run_deep_scan_audit for which ones are kept.
+DEEP_SCAN_MAX_DOCUMENTS = max(1, int(os.getenv("DEEP_SCAN_MAX_DOCUMENTS", "20") or "20"))
 # The REDUCE step only sees compact structured facts, which stay small even for large
 # files; this is a generous guardrail, not a real constraint.
 DEEP_SCAN_RECONCILE_MAX_CHARS = int(os.getenv("DEEP_SCAN_RECONCILE_MAX_CHARS", "160000") or "160000")
@@ -2651,7 +2715,12 @@ def run_deep_scan_audit(
     # One resolved-model cache shared across every Gemini call in this scan (map + reduce),
     # so a dead primary id (e.g. gemini-3.1-pro 404) is skipped after the first fallback.
     model_state: dict = {}
-    processed = readable[:DEEP_SCAN_MAX_DOCUMENTS]
+    # Over the cap, audit the NEWEST documents. The caller passes them oldest-first
+    # (created_at, id), and the head of that list is exactly the superseded material — the
+    # first passport scan, last year's bank statement — while the tail holds the current
+    # versions the visa will actually be decided on. Kept in upload order so doc_index
+    # still reads chronologically.
+    processed = readable[-DEEP_SCAN_MAX_DOCUMENTS:] if len(readable) > DEEP_SCAN_MAX_DOCUMENTS else readable
     over_cap = max(0, len(readable) - len(processed))
     skipped_no_text = len(all_docs) - len(readable)
 

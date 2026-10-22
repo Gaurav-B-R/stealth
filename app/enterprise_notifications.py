@@ -24,8 +24,16 @@ logger = logging.getLogger(__name__)
 DEDUPE_MINUTES = 10
 # Keep at most this many notifications per recipient (oldest pruned, best-effort).
 MAX_PER_RECIPIENT = 200
-# "Credits low" fires when a debit crosses below this balance (admins only).
-CREDITS_LOW_THRESHOLD = 20
+# "Credits low" fires when a debit crosses below this balance (admins only). It is the
+# wallet's own low-balance line (enterprise_credits.LOW_BALANCE_CREDITS — by default the
+# price of the most expensive single AI action, env ENTERPRISE_CREDITS_LOW_THRESHOLD), so the
+# notification and the Credits-screen banner can never disagree. It was a fixed 20 — the old
+# Deep Scan price — which, once a Deep Scan cost 40, warned only after the org could no
+# longer run one. Read lazily: enterprise_credits imports this module from its debit paths.
+def credits_low_threshold() -> int:
+    from app import enterprise_credits
+
+    return int(enterprise_credits.LOW_BALANCE_CREDITS)
 
 
 def _active_member_user_ids(db: Session, organization_id: int, roles: list[str] | None = None) -> list[int]:
@@ -322,7 +330,7 @@ def maybe_notify_credits_low(db: Session, organization_id: int, balance_before: 
     the ones who can top the wallet up, which now includes a Finance member or a custom role — an
     `role == "admin"` filter would silently miss them.
     """
-    if balance_before >= CREDITS_LOW_THRESHOLD > balance_after:
+    if balance_before >= credits_low_threshold() > balance_after:
         notify_org(
             db, organization_id,
             type="credits_low",

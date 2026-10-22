@@ -68,12 +68,14 @@ def _model_candidates() -> list:
     """Ordered models to try.
 
     Keep defaults on stable model IDs. Preview IDs expire and can break admin actions if
-    an environment variable is not set.
+    an environment variable is not set — which is why the tail falls back to GA Flash ids.
+    Gemini 2.5 was retired on Vertex on 2026-10-20 and is out of this chain for good: a
+    retired id at the tail only adds a failing round-trip before the bulk scan gives up.
     """
     return gemini_utils.get_model_candidates(
         primary_env="ADMIN_GROWTH_AGENT_MODEL",
         candidates_env="ADMIN_GROWTH_AGENT_MODEL_CANDIDATES",
-        defaults=["gemini-3.1-pro", "gemini-3.1-pro-preview", "gemini-2.5-pro", "gemini-2.5-flash"],
+        defaults=["gemini-3.1-pro", "gemini-3.1-pro-preview", "gemini-3.5-flash", "gemini-3.1-flash-lite"],
     )
 
 

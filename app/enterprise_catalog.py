@@ -57,6 +57,7 @@ STAGE_APPOINTMENT = "appointment"
 STAGE_DECISION = "decision"
 STAGE_APPROVED = "approved"
 STAGE_REJECTED = "rejected"
+STAGE_CLOSED = "closed"
 STAGE_ON_HOLD = "on_hold"
 
 CLIENT_STAGES = [
@@ -150,12 +151,34 @@ CLIENT_STAGES = [
         "is_open": False,
         "is_terminal": True,
     },
+    # A file that ends WITHOUT a visa outcome — the student withdrew, deferred indefinitely,
+    # went with another agent, or the enquiry simply went cold. Before this stage existed the
+    # only ways to finish such a file were to mislabel it Approved/Rejected (corrupting the
+    # outcome analytics) or to leave it open forever. That stopped being cosmetic when plans
+    # became sized by OPEN files (app/enterprise_billing.py::open_client_count): a dead file
+    # left open now costs the consultancy a slot, so they need an honest way to close it.
+    # Terminal and not open, like Approved/Rejected. Moving a file back OUT of here into an
+    # open stage is a reopen, and the billing layer counts a reopen as an add.
+    {
+        "key": STAGE_CLOSED,
+        "label": "Closed",
+        "description": "File closed without a visa outcome — doesn't count toward your plan's open files.",
+        "order": 11,
+        "color": "#6b7280",
+        "is_open": False,
+        "is_terminal": True,
+    },
     {
         "key": STAGE_ON_HOLD,
         "label": "On Hold",
         "description": "Paused — waiting on the client or external factors.",
-        "order": 11,
+        # Was 11 until `closed` took that slot (2026-10-22). Only sort order reads this, and no
+        # destination overrides on_hold's position, so the shift moves nothing else.
+        "order": 12,
         "color": "#9ca3af",
+        # Not open (unchanged): a paused file does not hold a plan slot. Because of that, a
+        # move from On Hold back into an open stage is also an "add" for the open-file limit —
+        # see OPEN_STAGE_KEYS below and enterprise_billing.enforce_client_limit_or_402.
         "is_open": False,
         "is_terminal": False,
     },
@@ -164,6 +187,31 @@ CLIENT_STAGES = [
 CLIENT_STAGE_MAP = {item["key"]: item for item in CLIENT_STAGES}
 CLIENT_STAGE_KEYS = {item["key"] for item in CLIENT_STAGES}
 DEFAULT_CLIENT_STAGE = STAGE_NEW_LEAD
+
+# The stages that hold one of the plan's OPEN-FILE slots (app/enterprise_billing.py sizes
+# every plan by these). Derived from `is_open` rather than listed, so a new stage can never be
+# added to the pipeline without deciding — in one place — whether it counts.
+#
+# The billing rule built on these: any move from a NOT-open stage into an open one (reopening
+# an Approved/Rejected/Closed file, or resuming one from On Hold) takes a slot exactly like
+# creating a client does, and must go through the same limit check. Otherwise "close a file,
+# add a new one, reopen the old one" walks straight past the limit.
+OPEN_STAGE_KEYS = frozenset(item["key"] for item in CLIENT_STAGES if item["is_open"])
+NOT_OPEN_STAGE_KEYS = frozenset(CLIENT_STAGE_KEYS - OPEN_STAGE_KEYS)
+TERMINAL_STAGE_KEYS = frozenset(item["key"] for item in CLIENT_STAGES if item["is_terminal"])
+
+
+def is_open_stage(stage_key: str | None) -> bool:
+    """Whether a client in `stage_key` holds an open-file slot. Unknown/legacy keys read as
+    new_lead (see normalize_stage), which IS open — matching how open_client_count counts
+    them, so the two can never disagree about a stray value."""
+    return normalize_stage(stage_key) in OPEN_STAGE_KEYS
+
+
+def is_reopen(old_stage: str | None, new_stage: str | None) -> bool:
+    """True when a stage change moves a file from a non-open stage into an open one — the
+    transition the open-file limit treats as an add (enforce_client_limit_or_402(adding=1))."""
+    return (not is_open_stage(old_stage)) and is_open_stage(new_stage)
 
 
 # ---------------------------------------------------------------------------

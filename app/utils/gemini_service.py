@@ -3,6 +3,7 @@ Gemini AI service for document text extraction
 Supports both standard Gemini API (with API key) and Vertex AI (with service account)
 """
 import os
+import re
 from typing import Optional
 import io
 from PIL import Image
@@ -127,13 +128,31 @@ UPLOAD_VALIDATION_PROMPT_CONTEXT_CHARS = int(
 # every chain, so each call paid a wasted 404 round-trip before falling through, and
 # single-shot grounded callers (course_catalog) silently degraded to ungrounded. The
 # preview id is the primary until the GA id actually ships; keep the dead id OUT.
+#
+# 2026-10-22: Gemini 2.5 (pro / flash / flash-lite) was retired on Vertex on 2026-10-20,
+# so every 2.5 id is OUT of every default chain too. Left in, a retired id is not just a
+# wasted failing round-trip: the enterprise assistant led with gemini-2.5-flash, so after
+# the retirement every turn silently fell through to 3.1 Pro at ~6x the token price — which
+# the cost-weighted copilot meter passes to the org's allowance, and past its per-turn
+# weight cap (COPILOT_MAX_MSG_WEIGHT) to our margin. The 2.5/2.0 ids stay in the COST tables
+# (app/ai_usage.py, app/ai_cost_calculation.py) only so historical ledger rows still price.
 DEFAULT_GEMINI_MODEL = (os.getenv("GEMINI_MODEL", "gemini-3.1-pro-preview").strip() or "gemini-3.1-pro-preview")
 DEFAULT_GEMINI_MODEL_CANDIDATES = [
     DEFAULT_GEMINI_MODEL,
     "gemini-3.1-pro-preview",
-    "gemini-2.5-pro",
-    "gemini-2.5-flash",
+    "gemini-3.5-flash",
+    "gemini-3.1-flash-lite",
 ]
+
+# The CHEAP chain: surfaces whose correctness comes from the database or the document,
+# not from model reasoning — the enterprise assistant (tools return the facts), Deep Scan
+# (structured map-reduce over extracted text) and enterprise upload reading (transcribe
+# what is on the page). These are metered per message / per read against a flat credit
+# price, so the per-call token price IS the margin. Ordered cheapest-first; each step is a
+# live GA id (3.1 Flash-Lite went GA 2026-05, replacing the -preview id), and 3.1 Pro is
+# the last resort so a bad Flash day degrades cost, never availability. Every caller keeps
+# its own env pair, so an operator can still pin a stronger model per surface.
+CHEAP_MODEL_CANDIDATES = ["gemini-3.1-flash-lite", "gemini-3.5-flash", "gemini-3.1-pro-preview"]
 
 
 def _dedupe_model_names(model_names: list[str]) -> list[str]:
@@ -226,8 +245,13 @@ def _generate_content_with_fallback(
     *,
     product: Optional[str] = None,
     trigger: Optional[str] = None,
+    generation_config: Optional[dict] = None,
 ):
-    """Generate with each configured model until one succeeds."""
+    """Generate with each configured model until one succeeds.
+
+    `generation_config` is forwarded only when given, so every pre-existing caller sends
+    exactly the request it always did (no config at all → the model's own defaults).
+    """
     last_error = None
     for model_name in _dedupe_model_names(model_names):
         try:
@@ -236,6 +260,8 @@ def _generate_content_with_fallback(
             )
             if model is None:
                 continue
+            if generation_config:
+                return model.generate_content(content, generation_config=dict(generation_config))
             return model.generate_content(content)
         except Exception as exc:
             last_error = exc
@@ -797,10 +823,14 @@ Remember: Output ONLY the JSON object, nothing else."""
         print(f"Error validating and extracting document with Gemini: {str(e)}")
         return None
 
-def extract_text_from_document(file_contents: bytes, filename: str, mime_type: str) -> Optional[str]:
+def _extract_text_from_document_default(file_contents: bytes, filename: str, mime_type: str) -> Optional[str]:
     """
     Extract main information from a document using Gemini AI.
     Returns extracted text as a string, or None if extraction fails.
+
+    The original (B2C) extraction, kept byte-for-byte: the whole file in one request on
+    the GEMINI_DOCUMENT_MODEL chain, no output cap. Enterprise upload reading goes through
+    _read_document_for_enterprise instead — see extract_text_from_document.
     """
     # Check if we have authentication configured
     if not is_ai_configured():
@@ -1031,6 +1061,401 @@ def extract_text_from_document(file_contents: bytes, filename: str, mime_type: s
     except Exception as e:
         print(f"Error extracting text from document with Gemini: {str(e)}")
         return None
+
+# ---------------------------------------------------------------------------
+# Enterprise upload reading — page counting and 15-page blocks
+#
+# Every enterprise upload is "read" (its text extracted for the assistant, Deep Scan and
+# the interview officer) against the org's monthly READS allowance, priced per 15-page
+# block: reads = ceil(pages / 15), images and .txt = 1. A paid document check is priced on
+# the same block (4 credits per block). Both meters therefore need the SAME page count and
+# the SAME rounding, which is why count_document_pages / read_blocks_for live here, next to
+# the reader, and the billing modules call them instead of re-deriving either.
+#
+# Reading in blocks (rather than one request for the whole file) is what makes the price
+# per block honest: one request with a capped output can only transcribe a few pages before
+# it truncates, so a 120-page bank statement read in one call silently lost everything past
+# the first pages while being charged for all of them. Each block is its own request with
+# its own output cap, and the per-document block cap bounds the worst case.
+# ---------------------------------------------------------------------------
+
+def _int_env(env_key: str, default_value: int, minimum: int = 0) -> int:
+    """Env-overridable integer; a blank, malformed or below-minimum value keeps the default."""
+    raw = os.getenv(env_key, "").strip()
+    if not raw:
+        return default_value
+    try:
+        value = int(raw)
+    except ValueError:
+        return default_value
+    return value if value >= minimum else default_value
+
+
+# Deliberately NOT env-overridable: the block size is printed in the public price list
+# ("per 15 pages"), and both the credits and the reads meters derive their units from
+# read_blocks_for(). A block size that drifted from the published one would silently
+# re-price every PDF without a single price constant changing.
+READ_BLOCK_PAGES = 15
+# Hard ceiling on blocks read per document (10 x 15 = the first 150 pages). A caller may
+# ask for fewer (e.g. only what is left of the org's allowance) but never for more.
+ENTERPRISE_READ_MAX_BLOCKS = _int_env("ENTERPRISE_READ_MAX_BLOCKS", 10, minimum=1)
+# Output cap per block request. Reading is transcription, not reasoning: 2,048 tokens is
+# ~1,500 words — a dense 15-page block's key facts — and it bounds the one cost component
+# (output tokens, 6x the input price on Flash-Lite) that the input file does not.
+ENTERPRISE_READ_MAX_OUTPUT_TOKENS = _int_env("ENTERPRISE_READ_MAX_OUTPUT_TOKENS", 2048, minimum=1)
+# Its own ledger source, NOT the shared "document_ai" bucket: reads are a priced allowance,
+# and the margin report has to see what they really cost against what the plan charges.
+ENTERPRISE_READ_USAGE_SOURCE = "enterprise_document_read"
+# The Developer-API upload path polls until Google finishes processing the file. The B2C
+# path polls forever; a background reader must not hang a worker on one stuck upload.
+_PDF_UPLOAD_PROCESSING_TIMEOUT_SECONDS = _int_env("ENTERPRISE_READ_UPLOAD_TIMEOUT_SECONDS", 120, minimum=1)
+
+# Fallback page counter for when pypdf is unavailable or cannot parse the file: counts
+# page objects ("/Type /Page", not "/Type /Pages") in the raw bytes. It undercounts PDFs
+# whose objects sit in compressed object streams (then the floor of 1 applies), which is
+# the safe direction for a number that bills the customer.
+_PDF_PAGE_OBJECT_RE = re.compile(rb"/Type\s*/Page(?![A-Za-z])")
+
+
+def enterprise_read_model_candidates() -> list[str]:
+    """Model chain for enterprise upload reading: ENTERPRISE_READ_MODEL /
+    ENTERPRISE_READ_MODEL_CANDIDATES first, then the cheap chain."""
+    return get_model_candidates(
+        primary_env="ENTERPRISE_READ_MODEL",
+        candidates_env="ENTERPRISE_READ_MODEL_CANDIDATES",
+        defaults=CHEAP_MODEL_CANDIDATES,
+    )
+
+
+def _looks_like_pdf(contents: bytes, filename: str = "", mime_type: str = "") -> bool:
+    extension = os.path.splitext(str(filename or ""))[1].lower()
+    if extension == ".pdf" or str(mime_type or "").split(";")[0].strip().lower() == "application/pdf":
+        return True
+    return bytes(contents[:5] or b"") == b"%PDF-"
+
+
+def _pypdf_reader(contents: bytes):
+    """An open pypdf reader, or None when pypdf is not installed. Raises on an unreadable PDF.
+
+    pypdf is imported lazily so a deploy without it still boots and still reads small
+    files in one request — block reading is an improvement, never a dependency.
+    """
+    try:
+        from pypdf import PdfReader
+    except Exception:  # noqa: BLE001 — ImportError, or a broken install
+        return None
+    reader = PdfReader(io.BytesIO(contents))
+    if getattr(reader, "is_encrypted", False):
+        # Bank statements are routinely "protected" with an owner password only; those
+        # open with the empty user password. A real user password stays locked and the
+        # page access below raises, which callers treat as "can't count / can't split".
+        reader.decrypt("")
+    return reader
+
+
+def count_document_pages(contents: bytes, filename: str = "", mime_type: str = "") -> int:
+    """Number of pages in an uploaded document, for per-15-page pricing.
+
+    Never raises and never returns less than 1: images, .txt and anything that is not a
+    PDF count as one page, and a PDF that cannot be parsed falls back to a raw page-object
+    count and then to 1. Billing callers rely on that floor — a count of 0 would make a
+    document free to read.
+    """
+    try:
+        data = bytes(contents or b"")
+        if not data or not _looks_like_pdf(data, filename, mime_type):
+            return 1
+        try:
+            reader = _pypdf_reader(data)
+            if reader is not None:
+                return max(1, len(reader.pages))
+        except Exception:  # noqa: BLE001 — malformed/locked PDF: fall through to the raw count
+            pass
+        return max(1, len(_PDF_PAGE_OBJECT_RE.findall(data)))
+    except Exception:  # noqa: BLE001
+        return 1
+
+
+def read_blocks_for(pages, max_blocks: Optional[int] = None) -> int:
+    """Billable 15-page blocks for `pages` pages: ceil(pages / 15), at least 1.
+
+    `max_blocks` (optional) caps the result at what a reader will actually read — pass
+    the same cap given to extract_text_from_document so a 400-page file whose reading
+    stops at ENTERPRISE_READ_MAX_BLOCKS is not charged for pages nobody read.
+    """
+    try:
+        page_count = int(pages)
+    except (TypeError, ValueError):
+        page_count = 1
+    blocks = -(-max(1, page_count) // READ_BLOCK_PAGES)
+    if max_blocks is not None:
+        try:
+            cap = int(max_blocks)
+        except (TypeError, ValueError):
+            cap = 0
+        if cap >= 1:
+            blocks = min(blocks, cap)
+    return blocks
+
+
+def _resolve_block_cap(max_blocks: Optional[int]) -> int:
+    """The caller's block cap, clamped to [1, ENTERPRISE_READ_MAX_BLOCKS]."""
+    ceiling = max(1, int(ENTERPRISE_READ_MAX_BLOCKS))
+    if max_blocks is None:
+        return ceiling
+    try:
+        requested = int(max_blocks)
+    except (TypeError, ValueError):
+        return ceiling
+    return max(1, min(ceiling, requested))
+
+
+def _reads_as_pdf(contents: bytes, filename: str, mime_type: str) -> bool:
+    """The enterprise reader's own dispatch rule (.txt and image extensions win)."""
+    extension = os.path.splitext(str(filename or ""))[1].lower()
+    if extension == ".txt" or extension in SUPPORTED_IMAGE_TYPES:
+        return False
+    return _looks_like_pdf(contents, filename, mime_type)
+
+
+def enterprise_read_units(contents: bytes, filename: str = "", mime_type: str = "",
+                          max_blocks: Optional[int] = None) -> int:
+    """Reads that extract_text_from_document(..., max_blocks=max_blocks) will request for
+    this file — the number the reads meter should consume. Never raises, never < 1.
+
+    Mirrors the reader exactly, which a bare read_blocks_for(count_document_pages(...)) does
+    not: the reader stops at the block cap, and a PDF pypdf cannot open (or a deploy without
+    pypdf) is read in ONE whole-file request, so it is one read — charging the raw page
+    count there would bill blocks that were never requested.
+    """
+    try:
+        data = bytes(contents or b"")
+        if not data or not _reads_as_pdf(data, filename, mime_type):
+            return 1
+        try:
+            reader = _pypdf_reader(data)
+            pages = len(reader.pages) if reader is not None else None
+        except Exception:  # noqa: BLE001
+            pages = None
+        if pages is None:
+            return 1
+        return read_blocks_for(pages, max_blocks=_resolve_block_cap(max_blocks))
+    except Exception:  # noqa: BLE001
+        return 1
+
+
+def _split_pdf_blocks(contents: bytes, max_blocks: int):
+    """Split a PDF into READ_BLOCK_PAGES-page PDFs.
+
+    Returns (blocks, total_pages) with blocks = [(first_page, last_page, pdf_bytes)], at
+    most `max_blocks` of them. A PDF of one block or less returns ([], total_pages): the
+    caller sends the original bytes rather than a needlessly re-encoded copy. Returns None
+    when pypdf is unavailable or the file cannot be split; the caller then reads the whole
+    file in one request, as before block reading existed.
+    """
+    try:
+        reader = _pypdf_reader(contents)
+        if reader is None:
+            return None
+        from pypdf import PdfWriter
+        total_pages = len(reader.pages)
+        if total_pages <= READ_BLOCK_PAGES:
+            return [], total_pages
+        blocks = []
+        for start in range(0, total_pages, READ_BLOCK_PAGES):
+            if len(blocks) >= max_blocks:
+                break
+            end = min(start + READ_BLOCK_PAGES, total_pages)
+            writer = PdfWriter()
+            for index in range(start, end):
+                writer.add_page(reader.pages[index])
+            buffer = io.BytesIO()
+            writer.write(buffer)
+            blocks.append((start + 1, end, buffer.getvalue()))
+        return blocks, total_pages
+    except Exception as exc:  # noqa: BLE001
+        print(f"⚠ Could not split PDF into reading blocks ({type(exc).__name__}); reading it whole.")
+        return None
+
+
+_ENTERPRISE_READ_PROMPT = (
+    "Read this document and write out the information in it as clear, structured plain text "
+    "for a study-visa counsellor. Include: the document type and purpose; every name; dates of "
+    "birth; passport, identification, account and reference numbers and codes; issue, expiry "
+    "and other key dates; amounts, balances and currencies with their dates; institutions, "
+    "courses, grades and test scores; and any other fact relevant to a visa or admission file. "
+    "Copy names, numbers and dates exactly as printed — never guess, complete or correct them; "
+    "write [illegible] where you cannot read something. No commentary or advice."
+)
+
+
+def _enterprise_generate(model_names, content, generation_config):
+    return _generate_content_with_fallback(
+        model_names, content, ENTERPRISE_READ_USAGE_SOURCE, generation_config=generation_config,
+    )
+
+
+def _generate_from_pdf_bytes(model_names, prompt: str, pdf_bytes: bytes, generation_config):
+    """One read request over a PDF held in memory, on whichever provider is selected."""
+    if USE_VERTEX_AI and VERTEX_AI_AVAILABLE:
+        pdf_part = Part.from_data(pdf_bytes, mime_type="application/pdf")
+        return _enterprise_generate(model_names, [prompt, pdf_part], generation_config)
+
+    import tempfile
+    import time
+    with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as tmp_file:
+        tmp_file.write(pdf_bytes)
+        tmp_path = tmp_file.name
+    try:
+        pdf_file = genai.upload_file(path=tmp_path, mime_type="application/pdf")
+        try:
+            deadline = time.monotonic() + _PDF_UPLOAD_PROCESSING_TIMEOUT_SECONDS
+            while pdf_file.state.name == "PROCESSING":
+                if time.monotonic() > deadline:
+                    raise TimeoutError("PDF processing did not finish in time")
+                time.sleep(2)
+                pdf_file = genai.get_file(pdf_file.name)
+            if pdf_file.state.name == "FAILED":
+                raise RuntimeError("PDF processing failed")
+            return _enterprise_generate(model_names, [prompt, pdf_file], generation_config)
+        finally:
+            # Unlike the B2C path, delete on failure too: an abandoned upload is ours to
+            # clean up whichever way the read ended.
+            try:
+                genai.delete_file(pdf_file.name)
+            except Exception:  # noqa: BLE001
+                pass
+    finally:
+        try:
+            os.unlink(tmp_path)
+        except Exception:  # noqa: BLE001
+            pass
+
+
+def _read_pdf_in_blocks(model_names, blocks, total_pages: int, generation_config) -> Optional[str]:
+    """Read each block in its own request and stitch the results in page order.
+
+    A block that fails is marked in the text rather than silently dropped, so the
+    assistant never presents a partial transcription as the whole file. If the FIRST block
+    fails outright the read is abandoned: that is a provider/model outage, and trying the
+    remaining blocks would only repeat the same failing chain up to max_blocks times.
+    """
+    sections = []
+    read_any = False
+    for first_page, last_page, block_bytes in blocks:
+        label = f"Pages {first_page}–{last_page} of {total_pages}"
+        prompt = (
+            f"{_ENTERPRISE_READ_PROMPT}\n\nThis file is pages {first_page}–{last_page} of a "
+            f"{total_pages}-page document. Cover only what these pages contain."
+        )
+        text = ""
+        try:
+            response = _generate_from_pdf_bytes(model_names, prompt, block_bytes, generation_config)
+            text = (response.text or "").strip()
+        except Exception as exc:  # noqa: BLE001 — includes .text on a part-less (truncated) answer
+            print(f"⚠ Enterprise reading failed for {label} ({type(exc).__name__}).")
+            if not read_any:
+                return None
+        if text:
+            read_any = True
+            sections.append(f"[{label}]\n{text}")
+        else:
+            sections.append(f"[{label}: could not be read]")
+    if not read_any:
+        return None
+    last_read = blocks[-1][1]
+    if last_read < total_pages:
+        sections.append(
+            f"[Pages {last_read + 1}–{total_pages} were not read: reading stops after "
+            f"{last_read} pages per document.]"
+        )
+    return "\n\n".join(sections)
+
+
+def _read_document_for_enterprise(
+    file_contents: bytes,
+    filename: str,
+    mime_type: str,
+    *,
+    model_candidates: Optional[list[str]],
+    max_blocks: Optional[int],
+) -> Optional[str]:
+    if not is_ai_configured():
+        return None
+    model_names = _dedupe_model_names(list(model_candidates or [])) or enterprise_read_model_candidates()
+    generation_config = {"max_output_tokens": int(ENTERPRISE_READ_MAX_OUTPUT_TOKENS)}
+    block_cap = _resolve_block_cap(max_blocks)
+    try:
+        data = bytes(file_contents or b"")
+        extension = os.path.splitext(str(filename or ""))[1].lower()
+        print(f"🔵 GEMINI API CALL: enterprise document read — {extension or 'unknown type'}")
+
+        if extension == ".txt":
+            text_content = data.decode("utf-8", errors="ignore")
+            response = _enterprise_generate(
+                model_names,
+                f"{_ENTERPRISE_READ_PROMPT}\n\nDocument content:\n{text_content[:50000]}",
+                generation_config,
+            )
+            return response.text
+
+        if _reads_as_pdf(data, filename, mime_type):
+            split = _split_pdf_blocks(data, block_cap)
+            if split is not None and split[0]:
+                blocks, total_pages = split
+                return _read_pdf_in_blocks(model_names, blocks, total_pages, generation_config)
+            # One block or less, or pypdf unavailable: the whole file in one request.
+            response = _generate_from_pdf_bytes(model_names, _ENTERPRISE_READ_PROMPT, data, generation_config)
+            return response.text
+
+        # Images — and any other type, tried as an image (as the default reader does).
+        try:
+            image = Image.open(io.BytesIO(data))
+        except Exception:  # noqa: BLE001 — not an image and not a PDF/txt: nothing to read
+            return None
+        if USE_VERTEX_AI and VERTEX_AI_AVAILABLE:
+            buffer = io.BytesIO()
+            image.save(buffer, format="PNG")
+            image_part = Part.from_data(buffer.getvalue(), mime_type="image/png")
+        else:
+            image_part = image
+        response = _enterprise_generate(model_names, [_ENTERPRISE_READ_PROMPT, image_part], generation_config)
+        return response.text
+    except Exception as exc:  # noqa: BLE001
+        print(f"Error reading enterprise document with Gemini: {type(exc).__name__}")
+        return None
+
+
+def extract_text_from_document(
+    file_contents: bytes,
+    filename: str,
+    mime_type: str,
+    model_candidates: Optional[list[str]] = None,
+    max_blocks: Optional[int] = None,
+) -> Optional[str]:
+    """Extract a document's information as text, or None if it could not be read.
+
+    Called with neither `model_candidates` nor `max_blocks` (every B2C caller), this is the
+    original extraction, unchanged: whole file, one request, GEMINI_DOCUMENT_MODEL chain.
+
+    Passing EITHER selects enterprise reading:
+      * model chain = `model_candidates` if non-empty, else enterprise_read_model_candidates()
+        (ENTERPRISE_READ_MODEL / _CANDIDATES, then CHEAP_MODEL_CANDIDATES);
+      * PDFs over READ_BLOCK_PAGES pages are read in 15-page blocks via pypdf, at most
+        min(max_blocks, ENTERPRISE_READ_MAX_BLOCKS) blocks, each block's text headed
+        "[Pages a–b of N]" and a trailing note when pages were left unread;
+      * every request's output is capped at ENTERPRISE_READ_MAX_OUTPUT_TOKENS;
+      * usage is booked under ENTERPRISE_READ_USAGE_SOURCE.
+    Charge reads with enterprise_read_units(contents, filename, mime_type, max_blocks=<same
+    cap>) so the meter and the reader agree on what was requested.
+    """
+    if model_candidates is None and max_blocks is None:
+        return _extract_text_from_document_default(file_contents, filename, mime_type)
+    return _read_document_for_enterprise(
+        file_contents, filename, mime_type,
+        model_candidates=model_candidates, max_blocks=max_blocks,
+    )
+
 
 RED_FLAG_PROMPT = """You are an expert study-visa document auditor for Rilono's supported destinations
 (US, UK, Canada, Australia, Germany and future student-visa destinations). Inspect this document and

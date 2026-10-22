@@ -1,34 +1,60 @@
 """
 Rilono Credits — the AI metering unit for Rilono Enterprise (B2B).
 
-A credit is what an AI action costs an agency. Credits reach a wallet two ways:
+A credit is what an AI action costs an agency. Credits reach a wallet three ways:
 
   1. INCLUDED WITH THE PLAN. Every organization is on a tier (app/enterprise_billing.py)
-     and each tier carries a monthly allowance — 1,000 / 3,500 / 10,000 credits for
-     Starter / Growth / Scale, and a one-time 100 on the free sandbox. `sync_plan_credits`
-     grants it exactly once per billing period.
-  2. PURCHASED AS A TOP-UP for overage, via Razorpay, from PACKAGES below. A team that
-     burns its monthly allowance early buys more rather than being stopped.
+     and each tier carries a per-period allowance — by default 150 / 450 / 1,200 credits a
+     month for Starter / Team / Multi-branch, and 50 once for the 14-day free trial — plus
+     whatever Branch Packs and admin overrides add (billing.effective_limits).
+     `sync_plan_credits` grants it exactly once per billing period, and a plan change inside
+     a live period only ever tops it up to the new tier (never a second full allowance).
+  2. THE DEMO-CALL BONUS. Rilono staff grant TRIAL_DEMO_BONUS_CREDITS (50) once per org
+     after a demo call (`grant_demo_call_bonus`, durable via demo_bonus_granted_at).
+  3. PURCHASED AS A TOP-UP for overage, via Razorpay, from PACKAGES below. A team that
+     burns its monthly allowance early buys more rather than being stopped — while its
+     plan or trial is live; a lapsed org renews, it does not top up.
+
+Next to credits, every plan includes AI document READS: the free text extraction that runs
+on each upload, metered in 15-page blocks against a per-period allowance (150 / 500 / 1,000,
+and 50 for the whole trial). Reads are a counter on the wallet, not credits: they are never
+bought, never roll over, and an upload past the allowance is stored "not read" instead of
+being refused (`consume_reads`, `reads_state`). A paid document check reads the file itself
+and never touches the reads allowance.
 
 We charge by the *value* of the task to the agency, not by the GCP compute cost — so the
 margin per action is high, and `build_revenue_analytics` is what proves it, cross-checking
 real Gemini spend (from app.ai_usage) against plan + top-up revenue.
 
-Economics (all env-overridable):
+Economics (defaults; every number is env-overridable and the action descriptions shown to
+customers are GENERATED from these constants, never typed by hand):
   * 1 Rilono Credit = ₹10.
   * Top-up packages (Razorpay, charm-priced): Starter ₹999 → 100 cr; Pro ₹2,999 → 350 cr
     (50 bonus); Enterprise ₹4,999 → 650 cr (150 bonus).
-  * Deep Scan client audit = 20 credits; document scan = 1; mock interview = 20;
-    university match / course finder = 5 each; SOP-LOR draft = 1.
+  * Document check = 4 credits per 15-page block; SOP / LOR draft or refinement = 5;
+    Course Finder / university shortlist = 5 each; mock interview = 20 per session (up to
+    12 officer questions + one feedback report); Deep Scan = 40 per scan (up to 20
+    documents, no free scans); AI assistant = 5 free messages per org per day, then 1 credit
+    per 2 messages; client Copilot link = 30 credits for 5 messages over 30 days.
+  * While the trial has expired or a paid plan has lapsed, AI is PAUSED: every enforce /
+    charge / precheck function below calls billing.enforce_ai_access_or_402 before anything
+    else, so no path can reach a model (or take a credit) for a paused org.
 
-This module owns the credit math, wallet operations, the ledger, the plan-allowance grant,
-and the admin revenue analytics. Razorpay order creation / verification lives in the
-enterprise router; PRICES live in app/money.py. This module is the single source of truth
-for credit costs, balances and reporting.
+This module owns the credit math, wallet operations, the ledger, the plan-allowance and
+reads grants, and the admin revenue analytics. Razorpay order creation / verification lives
+in the enterprise router; PRICES live in app/money.py. This module is the single source of
+truth for credit costs, balances and reporting.
 
-HISTORY (2026-08-02): the previous model — free CRM up to 50 students, then a flat ₹999/mo
-infrastructure server fee, with credits available only as prepaid top-ups — was replaced by
-the tiered plans. The infra fee is retired; see INFRA_FEE_RETIRED below for what remains.
+HISTORY:
+  * 2026-08-02 — the previous model (free CRM up to 50 students, then a flat ₹999/mo
+    infrastructure server fee, with credits only as prepaid top-ups) was replaced by the
+    tiered plans. The infra fee is retired; see INFRA_FEE_RETIRED below for what remains.
+  * 2026-10-22 — re-priced. The included allowances were 1,000 / 3,500 / 10,000 credits,
+    which earned ₹1.50–3.00 per credit against actions that cost more than that to run, and
+    a document scan / SOP draft sold for 1 credit. Allowances were cut, action prices raised
+    (document scan 1 → 4 per block, writing studio 1 → 5, Deep Scan 20 → 40 with no free
+    scans, assistant 1 credit / 5 messages → 1 / 2, client Copilot 20 credits for 100
+    messages → 30 for 5), and the reads allowance and the AI-paused gate were added.
 """
 
 from __future__ import annotations
@@ -167,18 +193,94 @@ PACKAGES = {
 PACKAGE_ORDER = ["starter", "pro", "enterprise"]
 
 
+def _plural(count: int, word: str) -> str:
+    return f"{int(count):,} {word}" + ("" if int(count) == 1 else "s")
+
+
+# ---------------------------------------------------------------------------
+# Per-action limits that the PRICE depends on
+#
+# These are declared before ACTIONS because the customer-facing descriptions are generated
+# from them: a description that restated "20 documents" or "100 messages" by hand is how the
+# old copy drifted from what the code actually did. Where another module enforces the limit,
+# the SAME env var is read here so the two can only disagree if someone edits a default in
+# one place — and tests/test_enterprise_credits_v2.py pins each pair equal.
+# ---------------------------------------------------------------------------
+
+# Paid document checks are priced per block of this many pages — the SAME block the reads
+# allowance uses (app/utils/gemini_service.READ_BLOCK_PAGES), so "4 credits per 15 pages" and
+# "1 read per 15 pages" can never drift apart. Deliberately not env-overridable, for the
+# reason given there: the block size is printed in the public price list.
+DOCUMENT_BLOCK_PAGES = 15
+
+# The most documents one Deep Scan processes (enforced by enterprise_ai.DEEP_SCAN_MAX_DOCUMENTS,
+# same env var). It is what bounds a scan's worst-case model cost against its flat price.
+DEEP_SCAN_MAX_DOCUMENTS = max(1, _int_env("DEEP_SCAN_MAX_DOCUMENTS", 20))
+
+# Officer questions per mock-interview session (enforced server-side by
+# enterprise_interview.MAX_INTERVIEW_QUESTIONS, same env var). One session = these questions
+# plus ONE feedback report, sold at one flat price.
+INTERVIEW_MAX_QUESTIONS = max(1, _int_env("ENTERPRISE_INTERVIEW_MAX_QUESTIONS", 12))
+
+# Rilono AI assistant (copilot) metering. The copilot is a function-calling agent (the most
+# expensive call type), so it must be metered — but gently: a free daily allowance per org,
+# then 1 credit per bundle of COPILOT_MSGS_PER_CREDIT messages. At 2 messages per credit a
+# message earns ₹5 (it was ₹2 at 5 per credit, re-cut with the rest of the price list).
+COPILOT_ACTION_KEY = "ai_copilot"
+COPILOT_FREE_DAILY = _int_env("ENTERPRISE_COPILOT_FREE_DAILY", 5)          # free messages / org / day
+COPILOT_MSGS_PER_CREDIT = max(1, _int_env("ENTERPRISE_COPILOT_MSGS_PER_CREDIT", 2))  # billable msgs per credit
+
+# The CLIENT Copilot link (a client chatting about their own case via an emailed link) is a
+# flat per-client unlock, not the staff meter above. Interim pricing (owner, 2026-10-22):
+# 30 credits buys 5 messages over 30 days — priced so the link can never be a loss, and not
+# promoted in marketing until it is re-cut. A new invite's `allowed_messages` and expiry must
+# come from COPILOT_CLIENT_MESSAGES / COPILOT_CLIENT_DAYS (same env vars the router has always
+# read) so the counter the client hits and the price list's promise cannot drift apart.
+COPILOT_CLIENT_ACTION_KEY = "copilot_client"
+COPILOT_CLIENT_MESSAGES = max(1, _int_env("ENTERPRISE_COPILOT_INVITE_MESSAGES", 5))
+COPILOT_CLIENT_DAYS = max(1, _int_env("ENTERPRISE_COPILOT_INVITE_EXPIRES_DAYS", 30))
+
+# Each CLIENT's first N Deep Scans are free (per client, not per org). Default 0 since
+# 2026-10-22: at 40 credits a scan, a free scan on every new dossier gave away more than a
+# Starter plan's whole monthly allowance to an office adding four clients. Kept as a knob
+# (with the per-org monthly cap below) so a promotion can switch it back on by config.
+# Counted from stored scan rows — a failed scan stores nothing, so it never burns a freebie.
+DEEP_SCAN_FREE_SCANS_PER_CLIENT = _int_env("ENTERPRISE_DEEP_SCAN_FREE_SCANS_PER_CLIENT", 0)
+# Anti-farming cap: scan rows die with their client (cascade), so create→scan→delete
+# churn could otherwise mint unlimited free Gemini audits. The org's TOTAL free scans
+# are therefore also capped per calendar month (generous for honest client intake —
+# beyond it, a new client's first scan simply costs the normal price).
+DEEP_SCAN_FREE_MONTHLY_ORG_CAP = _int_env("ENTERPRISE_DEEP_SCAN_FREE_MONTHLY_ORG_CAP", 25)
+
+
+def _deep_scan_description() -> str:
+    text = (
+        "Rilono AI strictly audits the client's ENTIRE dossier — profile, stage records, the "
+        f"contents of up to {_plural(DEEP_SCAN_MAX_DOCUMENTS, 'document')}, notes, emails, "
+        "universities, interviews and payments — and flags anything irregular."
+    )
+    if DEEP_SCAN_FREE_SCANS_PER_CLIENT == 1:
+        text += " Each client's first scan is free."
+    elif DEEP_SCAN_FREE_SCANS_PER_CLIENT > 1:
+        text += f" Each client's first {DEEP_SCAN_FREE_SCANS_PER_CLIENT} scans are free."
+    return text
+
+
 # Premium AI actions and what they cost the agency, in credits. We charge by value
 # (protecting a large university commission), not GCP compute cost.
+#
+# `credits` is the price of ONE `unit` (action_cost multiplies by units): a document check is
+# priced per 15-page block, the assistant per bundle of messages, everything else per run.
+# `unit_label` is how the price reads after the number ("4 credits per 15 pages").
 ACTIONS = {
     "deep_scan": {
         "key": "deep_scan",
         "label": "Deep Scan client audit",
-        "description": (
-            "Rilono AI strictly audits the client's ENTIRE dossier — profile, stage records, "
-            "every document's contents, notes, emails, universities, interviews and payments — "
-            "and flags anything irregular. Each client's first scan is free."
-        ),
-        "credits": _int_env("ENTERPRISE_CREDIT_COST_DEEP_SCAN", 20),
+        "description": _deep_scan_description(),
+        "credits": _int_env("ENTERPRISE_CREDIT_COST_DEEP_SCAN", 40),
+        "unit": "scan",
+        "unit_label": "per scan",
+        "max_documents": DEEP_SCAN_MAX_DOCUMENTS,
     },
     "document_scan": {
         "key": "document_scan",
@@ -187,21 +289,35 @@ ACTIONS = {
             "Rilono AI reads ONE uploaded document — checks it is the right type, genuine "
             "and still in date, then cross-validates it against the client's profile and "
             "their already-validated documents, and auto-fills any empty profile fields it "
-            "can prove. Storing a document without a scan is always free."
+            f"can prove. Priced per {DOCUMENT_BLOCK_PAGES}-page block (an image or text file is "
+            "one block); the check reads the file itself, so it never uses your monthly "
+            "document reads. Storing a document without a check is always free."
         ),
-        "credits": _int_env("ENTERPRISE_CREDIT_COST_DOCUMENT_SCAN", 1),
+        "credits": _int_env("ENTERPRISE_CREDIT_COST_DOCUMENT_SCAN", 4),
+        "unit": "block",
+        "unit_label": f"per {DOCUMENT_BLOCK_PAGES} pages",
+        "pages_per_unit": DOCUMENT_BLOCK_PAGES,
     },
     "mock_interview": {
         "key": "mock_interview",
         "label": "AI mock visa interview",
-        "description": "A full dynamic mock visa interview tailored to the client's weak points.",
+        "description": (
+            "A full dynamic mock visa interview tailored to the client's weak points — up to "
+            f"{_plural(INTERVIEW_MAX_QUESTIONS, 'officer question')} and one feedback report "
+            "per session."
+        ),
         "credits": _int_env("ENTERPRISE_CREDIT_COST_MOCK_INTERVIEW", 20),
+        "unit": "session",
+        "unit_label": "per interview",
+        "max_questions": INTERVIEW_MAX_QUESTIONS,
     },
     "university_match": {
         "key": "university_match",
         "label": "AI university shortlist",
         "description": "Rilono AI recommends real universities matched to the client's destination, budget, grades and intake.",
         "credits": _int_env("ENTERPRISE_CREDIT_COST_UNIVERSITY_MATCH", 5),
+        "unit": "shortlist",
+        "unit_label": "per shortlist",
     },
     "course_finder": {
         "key": "course_finder",
@@ -212,6 +328,8 @@ ACTIONS = {
             "requirements — tailored to the selected client. Browsing the catalog is free."
         ),
         "credits": _int_env("ENTERPRISE_CREDIT_COST_COURSE_FINDER", 5),
+        "unit": "shortlist",
+        "unit_label": "per shortlist",
     },
     "writing_studio": {
         "key": "writing_studio",
@@ -221,43 +339,56 @@ ACTIONS = {
             "Letter of Recommendation for the selected client — grounded in their real "
             "dossier and exported as a formatted Word document. Refinements cost the same."
         ),
-        "credits": _int_env("ENTERPRISE_CREDIT_COST_WRITING_STUDIO", 1),
+        "credits": _int_env("ENTERPRISE_CREDIT_COST_WRITING_STUDIO", 5),
+        "unit": "draft",
+        "unit_label": "per draft or refinement",
     },
     "ai_copilot": {
         "key": "ai_copilot",
         "label": "Rilono AI assistant",
         "description": (
-            f"Ask anything about your workspace — clients, documents, calendar, team, "
-            f"credits, your books and Rilono's university catalog. First "
-            f"{_int_env('ENTERPRISE_COPILOT_FREE_DAILY', 5)} messages/day are free, then "
-            f"{_int_env('ENTERPRISE_CREDIT_COST_COPILOT_BUNDLE', 1)} credit per "
-            f"{_int_env('ENTERPRISE_COPILOT_MSGS_PER_CREDIT', 5)} messages. A question that "
-            f"needs several lookups counts as more than one message."
+            "Ask anything about your workspace — clients, documents, calendar, team, "
+            "credits, your books and Rilono's university catalog. First "
+            f"{_plural(COPILOT_FREE_DAILY, 'message')}/day are free, then "
+            f"{_plural(_int_env('ENTERPRISE_CREDIT_COST_COPILOT_BUNDLE', 1), 'credit')} per "
+            f"{_plural(COPILOT_MSGS_PER_CREDIT, 'message')}. A question that needs several "
+            "lookups counts as more than one message."
         ),
         # Cost is per BUNDLE of COPILOT_MSGS_PER_CREDIT messages (not per message).
         "credits": _int_env("ENTERPRISE_CREDIT_COST_COPILOT_BUNDLE", 1),
+        "unit": "bundle",
+        "unit_label": f"per {_plural(COPILOT_MSGS_PER_CREDIT, 'message')}",
+        "messages_per_unit": COPILOT_MSGS_PER_CREDIT,
+        "free_daily_messages": COPILOT_FREE_DAILY,
     },
     "copilot_client": {
         "key": "copilot_client",
         "label": "Client copilot access",
         "description": (
-            f"Give a client their own secure Copilot chat about their application via an "
-            f"emailed link (verified by a one-time code). Flat price per client, charged "
-            f"once when the client first opens it — valid "
-            f"{_int_env('ENTERPRISE_COPILOT_INVITE_EXPIRES_DAYS', 30)} days, up to "
-            f"{_int_env('ENTERPRISE_COPILOT_INVITE_MESSAGES', 100)} messages."
+            "Give a client their own secure Copilot chat about their application via an "
+            "emailed link (verified by a one-time code). Flat price per client, charged "
+            "once when the client first opens it — valid "
+            f"{_plural(COPILOT_CLIENT_DAYS, 'day')}, up to "
+            f"{_plural(COPILOT_CLIENT_MESSAGES, 'message')}."
         ),
         # Flat per-client unlock (NOT the per-message staff meter above).
-        "credits": _int_env("ENTERPRISE_CREDIT_COST_COPILOT_CLIENT", 20),
+        "credits": _int_env("ENTERPRISE_CREDIT_COST_COPILOT_CLIENT", 30),
+        "unit": "client",
+        "unit_label": "per client link",
+        "messages_included": COPILOT_CLIENT_MESSAGES,
+        "valid_days": COPILOT_CLIENT_DAYS,
     },
 }
 
-# Rilono AI assistant (copilot) metering. The copilot is a function-calling agent
-# (the most expensive call type), so it must be metered — but gently: a free daily
-# allowance per org, then 1 credit per bundle of messages.
-COPILOT_ACTION_KEY = "ai_copilot"
-COPILOT_FREE_DAILY = _int_env("ENTERPRISE_COPILOT_FREE_DAILY", 5)          # free messages / org / day
-COPILOT_MSGS_PER_CREDIT = max(1, _int_env("ENTERPRISE_COPILOT_MSGS_PER_CREDIT", 5))  # billable msgs per credit
+# The wallet's "low balance" line, shared by the Credits screen banner (wallet_state) and the
+# one-time admin notification (enterprise_notifications.maybe_notify_credits_low), so the two
+# never disagree. Default: the price of the single most expensive action — below it, some AI
+# action already refuses. (It used to be a fixed 20, the old Deep Scan price; at 40 a Deep
+# Scan, a 20 line warned only after the org could no longer run one.)
+LOW_BALANCE_CREDITS = _int_env(
+    "ENTERPRISE_CREDITS_LOW_THRESHOLD",
+    max([int(a["credits"]) for a in ACTIONS.values()] + [1]),
+)
 
 # Cost-weighted metering — the guarantee that a message can never be sold below cost.
 #
@@ -269,8 +400,8 @@ COPILOT_MSGS_PER_CREDIT = max(1, _int_env("ENTERPRISE_COPILOT_MSGS_PER_CREDIT", 
 # So a turn is weighted by what it actually cost: every COPILOT_TURN_COST_BUDGET_USD of
 # model spend counts as one message against the free allowance and the billing bundle.
 # Normal one- and two-lookup questions stay a single message; only genuinely heavy turns
-# (or an expensive model) cost more. At 1 credit / 5 messages a message earns ₹2 ≈ $0.021,
-# so a $0.007 budget floors the gross margin at ~3x by construction, whatever the model.
+# (or an expensive model) cost more. At 1 credit / 2 messages a message earns ₹5 ≈ $0.058,
+# so a $0.007 budget floors the gross margin at ~8x by construction, whatever the model.
 COPILOT_TURN_COST_BUDGET_USD = Decimal(
     os.getenv("ENTERPRISE_COPILOT_TURN_COST_BUDGET_USD", "0.007") or "0.007"
 )
@@ -302,23 +433,21 @@ def copilot_message_weight(turn_cost_usd) -> int:
 # the normal mock_interview price. Self-serve/public interviews always charge.
 INTERVIEW_FREE_STAFF_PREVIEWS = _int_env("ENTERPRISE_INTERVIEW_FREE_STAFF_PREVIEWS", 3)
 
-# Each CLIENT's first N Deep Scans are free (per client, not per org) so staff see the
-# full audit's value on every new dossier before the 20-credit price kicks in. Counted
-# from stored scan rows — a failed scan stores nothing, so it never burns the freebie.
-DEEP_SCAN_FREE_SCANS_PER_CLIENT = _int_env("ENTERPRISE_DEEP_SCAN_FREE_SCANS_PER_CLIENT", 1)
-# Anti-farming cap: scan rows die with their client (cascade), so create→scan→delete
-# churn could otherwise mint unlimited free Gemini audits. The org's TOTAL free scans
-# are therefore also capped per calendar month (generous for honest client intake —
-# beyond it, a new client's first scan simply costs the normal price).
-DEEP_SCAN_FREE_MONTHLY_ORG_CAP = _int_env("ENTERPRISE_DEEP_SCAN_FREE_MONTHLY_ORG_CAP", 25)
-
 
 def _month_str() -> str:
     return datetime.utcnow().strftime("%Y-%m")
 
 
 def deep_scan_free_budget_left(db: Session, organization_id: int) -> int:
-    """How many free Deep Scans this org has left in the current month's budget."""
+    """How many free Deep Scans this org has left in the current month's budget.
+
+    0 while AI is paused: the router decides "free" from this number and skips the credit
+    pre-check for a free scan, so a paused org must never be told it has a free one left.
+    """
+    from app import enterprise_billing as billing
+
+    if not billing.ai_access_state(db, organization_id)["allowed"]:
+        return 0
     wallet = get_or_create_wallet(db, organization_id, commit=False)
     used = int(getattr(wallet, "deep_scan_free_used", 0) or 0) \
         if getattr(wallet, "deep_scan_free_month", None) == _month_str() else 0
@@ -327,7 +456,9 @@ def deep_scan_free_budget_left(db: Session, organization_id: int) -> int:
 
 def consume_deep_scan_free(db: Session, organization_id: int) -> None:
     """Record one free Deep Scan against the org's monthly budget (call only after a
-    successful free scan, inside the caller's transaction — no commit here)."""
+    successful free scan, inside the caller's transaction — no commit here). Refuses (402)
+    while AI is paused, like every other charge path."""
+    _ai_gate_or_402(db, organization_id)
     wallet = get_wallet_for_update(db, organization_id)
     month = _month_str()
     if getattr(wallet, "deep_scan_free_month", None) != month:
@@ -340,7 +471,8 @@ def consume_deep_scan_free(db: Session, organization_id: int) -> None:
 ACTION_SOURCE_MAP = {
     "deep_scan": ["deep_scan", "deep_scan_extract"],
     # Only the BILLED validation call. The free text extraction that also runs on every
-    # upload stays on the shared "document_ai" source below, so it is never mistaken for
+    # upload stays on its own sources below ("document_ai" for legacy rows,
+    # "enterprise_document_read" for the reads allowance), so it is never mistaken for
     # revenue-bearing work in the per-action margin report.
     "document_scan": ["enterprise_document_scan"],
     "mock_interview": ["mock_interview", "interview_feedback"],
@@ -354,9 +486,12 @@ ACTION_SOURCE_MAP = {
 # Every Gemini source the enterprise platform incurs cost on (billed or not).
 # course_catalog_refresh is the Course Finder's shared catalog-build cost (the daily
 # grounded agent): it belongs in the top-line margin but NOT in ACTION_SOURCE_MAP,
-# whose per-action economics track marginal cost only.
+# whose per-action economics track marginal cost only. enterprise_document_read is the
+# monthly reads allowance (gemini_service.ENTERPRISE_READ_USAGE_SOURCE): no credit is
+# charged for it, but the plan fee pays for it, so it is a real cost against plan revenue.
 ENTERPRISE_COST_SOURCES = [
-    "deep_scan", "deep_scan_extract", "document_ai", "enterprise_document_scan",
+    "deep_scan", "deep_scan_extract", "document_ai", "enterprise_document_read",
+    "enterprise_document_scan",
     "mock_interview", "interview_feedback",
     "enterprise_copilot", "enterprise_copilot_extension", "enterprise_copilot_client",
     "enterprise_university_shortlist",
@@ -397,9 +532,68 @@ def get_action(action_key: str | None) -> Optional[dict]:
     return ACTIONS.get(str(action_key or "").strip().lower())
 
 
-def action_cost(action_key: str) -> int:
+def _units(units) -> int:
+    """A billable unit count, floored at 1. A malformed or zero count must never make an
+    action FREE — a 0-page document is still one block, an unknown count is one unit."""
+    try:
+        value = int(units)
+    except (TypeError, ValueError):
+        return 1
+    return max(1, value)
+
+
+def action_cost(action_key: str, units: int = 1) -> int:
+    """Credits for `units` of an action: the per-unit price × units (0 for an unknown key).
+
+    Units are action-specific — 15-page blocks for a document check (document_scan_units),
+    message bundles for the assistant, and 1 for everything priced per run.
+    """
     action = get_action(action_key)
-    return int(action["credits"]) if action else 0
+    return int(action["credits"]) * _units(units) if action else 0
+
+
+def document_scan_units(pages, max_blocks: Optional[int] = None) -> int:
+    """Billable blocks for a paid document check of `pages` pages: ceil(pages / 15), >= 1.
+
+    Delegates to gemini_service.read_blocks_for — the reader's own rounding — so the credits
+    meter and the reads meter can never count the same file differently. Pass the same
+    `max_blocks` the check reads with, so pages nobody read are never charged.
+    """
+    try:
+        from app.utils.gemini_service import read_blocks_for
+    except Exception:  # noqa: BLE001 — a reader import problem must not make checks free
+        blocks = -(-_units(pages) // DOCUMENT_BLOCK_PAGES)
+        if max_blocks is not None:
+            blocks = min(blocks, _units(max_blocks))
+        return max(1, blocks)
+    return max(1, int(read_blocks_for(pages, max_blocks=max_blocks)))
+
+
+def _action_price_label(action: dict, units: int = 1) -> str:
+    """'4 credits per 15 pages', '40 credits per scan', '1 credit per 2 messages'."""
+    return f"{_plural(int(action['credits']) * _units(units), 'credit')} {action.get('unit_label') or ''}".strip()
+
+
+def _ai_gate_or_402(db: Session, organization_id: int, *, client_facing: bool = False) -> None:
+    """The shared AI-paused gate (billing.enforce_ai_access_or_402), applied FIRST by every
+    enforce / charge / precheck function in this module.
+
+    It sits in front of the ENFORCE switch on purpose: ENTERPRISE_CREDITS_ENFORCE=false is a
+    soft launch for the WALLET (spend past zero), not permission for an expired trial or a
+    lapsed plan to keep running AI — that has its own switch, ENTERPRISE_AI_PAUSE_ON_EXPIRY.
+    Read-only, so it is safe before the row-locked wallet work that follows.
+    """
+    from app import enterprise_billing as billing
+
+    billing.enforce_ai_access_or_402(db, organization_id, client_facing=client_facing)
+
+
+def _ai_allowed(db: Session, organization_id: int) -> bool:
+    """The same gate as a predicate, for the can_* helpers that must answer rather than raise
+    (they also feed GET payloads, where a 402 would break the screen)."""
+    from app import enterprise_billing as billing
+
+    return bool(billing.ai_access_state(db, organization_id)["allowed"])
 
 
 def _naive(dt) -> Optional[datetime]:
@@ -454,6 +648,9 @@ def wallet_snapshot(db: Session, organization_id: int) -> models.EnterpriseCredi
         plan_credits_granted=0, plan_credits_remaining=0,
         copilot_msgs_today=0, copilot_unbilled_msgs=0,
         interview_staff_previews_used=0,
+        # Column defaults are not applied to a transient instance, so the reads counters
+        # are spelled out — None here would read as "unknown", not 0.
+        reads_period=None, reads_granted=0, reads_used=0,
     )
 
 
@@ -485,6 +682,9 @@ def get_wallet_for_update(db: Session, organization_id: int) -> models.Enterpris
 
 
 def active_client_count(db: Session, organization_id: int) -> int:
+    """EVERY client in the workspace, open or not. NOT the plan-limit count — that is
+    enterprise_billing.open_client_count (open files only). This one feeds the legacy
+    infra-fee panel and the assistant's workspace overview, which describe the whole book."""
     return int(
         db.query(models.EnterpriseClient)
         .filter(models.EnterpriseClient.organization_id == int(organization_id))
@@ -493,14 +693,28 @@ def active_client_count(db: Session, organization_id: int) -> int:
 
 
 # ---------------------------------------------------------------------------
-# Plan-included credit allowance
+# Plan-included allowances: AI credits and AI reads
 #
-# Each tier includes N credits per billing period. Granting them is LAZY and
+# Each tier includes N credits and M reads per billing period (billing.effective_limits:
+# the plan's numbers, admin overrides, Branch Packs). Granting them is LAZY and
 # IDEMPOTENT: `sync_plan_credits` runs on every wallet read and every spend, works out
 # which period the org is in, and grants only if that period's key differs from the one
 # already stamped on the wallet. There is no cron, so a renewal that lands while nobody is
 # looking still credits correctly on the next request, and a request storm at renewal
 # time grants once — the wallet row is locked for the read-modify-write.
+#
+# A key change is one of three things, told apart by the STORED key (not the new one):
+#   1. A GENUINE NEW PERIOD — the stored period has elapsed, there was none, or it was the
+#      one-time trial key. The unspent plan remainder of the old period expires and the full
+#      allowance lands.
+#   2. A PLAN CHANGE INSIDE A LIVE PAID PERIOD — upgrade, downgrade, or a re-buy that
+#      re-anchors the period. Only max(0, new allowance − already granted this period) lands,
+#      and "granted" becomes max(old, new): a downgrade grants nothing and takes nothing.
+#   3. NO key change but a RAISED allowance — an override or Branch Pack set mid-period.
+#      The same difference lands now, so the customer gets what they just bought today
+#      rather than at the next renewal; a lowered allowance takes nothing back.
+# Reads follow the same rules on their own key (`reads_period`) with no ledger and no
+# rollover: a genuine new period sets reads_used back to 0.
 # ---------------------------------------------------------------------------
 
 def _period_start_for(sub, plan_key: str, *, now: Optional[datetime] = None) -> datetime:
@@ -543,9 +757,10 @@ def _period_start_for(sub, plan_key: str, *, now: Optional[datetime] = None) -> 
 def plan_credits_period_key(sub, plan_key: str, *, now: Optional[datetime] = None) -> str:
     """The idempotency key for one period's grant: "<plan>:<period-start>".
 
-    The plan is part of the key on purpose. An org that upgrades Starter → Growth mid-month
-    gets a NEW key, so the larger allowance is granted immediately rather than making them
-    wait for the next renewal for the tier they just paid for.
+    The plan is part of the key on purpose. An org that upgrades Starter → Team mid-month
+    gets a NEW key, so sync_plan_credits notices the change on the very next request rather
+    than at the next renewal — and then grants only the difference up to the new tier
+    (rule 2 above), never a second full allowance for the same period.
     """
     return f"{plan_key}:{_period_start_for(sub, plan_key, now=now):%Y-%m-%d}"
 
@@ -563,28 +778,74 @@ def _has_ever_paid(db: Session, organization_id: int) -> bool:
     ).scalar() or False
 
 
-def _previous_period_elapsed(wallet: models.EnterpriseCreditWallet) -> bool:
-    """Has the period whose grant is still sitting in the wallet actually ended?
+ONCE_KEY_SUFFIX = ":once"
+
+
+def _key_period_start(key) -> Optional[datetime]:
+    """The period start encoded in a recurring key "<plan>:<YYYY-MM-DD>", else None — for a
+    one-time "<plan>:once" key, an empty key, or anything unparseable."""
+    raw = str(key or "")
+    if not raw or raw.endswith(ONCE_KEY_SUFFIX):
+        return None
+    _, _, start_str = raw.rpartition(":")
+    try:
+        return datetime.strptime(start_str, "%Y-%m-%d")
+    except ValueError:
+        return None
+
+
+def _period_key_elapsed(key) -> bool:
+    """Has the period a stored key belongs to actually ended?
 
     The stored key is "<plan>:<period-start YYYY-MM-DD>" (or "<plan>:once"). A one-time
-    grant has no period and never expires. Otherwise the previous period ended
-    PLAN_PERIOD_DAYS after the start encoded in the key — so an upgrade or an early renewal,
-    which also change the key, do NOT count as an expiry.
+    grant has no period and never expires. Otherwise the period ended PLAN_PERIOD_DAYS after
+    the start encoded in the key — so an upgrade or an early renewal, which also change the
+    key, do NOT count as an expiry.
 
     An unparseable key returns False: failing towards "don't take credits away" is the only
     safe direction when we cannot prove the period is over.
     """
     from app import enterprise_billing as billing
 
-    raw = str(wallet.plan_credits_period or "")
-    if not raw or raw.endswith(":once"):
-        return False
-    _, _, start_str = raw.rpartition(":")
-    try:
-        start = datetime.strptime(start_str, "%Y-%m-%d")
-    except ValueError:
+    start = _key_period_start(key)
+    if start is None:
         return False
     return (start + timedelta(days=billing.PLAN_PERIOD_DAYS)) <= datetime.utcnow()
+
+
+def _period_key_live(key) -> bool:
+    """A recurring (paid) key whose period has NOT ended yet. A key change away from one is
+    a plan change INSIDE that period — not a renewal — so it earns only the difference up to
+    the new tier. An empty, one-time or unparseable key is not live: an unreadable legacy key
+    is no evidence that this period's allowance was already handed out, and the old code
+    granted in full on any key change, so that is where the doubt falls."""
+    return _key_period_start(key) is not None and not _period_key_elapsed(key)
+
+
+def _previous_period_elapsed(wallet: models.EnterpriseCreditWallet) -> bool:
+    """_period_key_elapsed for the wallet's stored CREDIT key."""
+    return _period_key_elapsed(wallet.plan_credits_period)
+
+
+def _grant_plan_credits(
+    db: Session, wallet: models.EnterpriseCreditWallet, credits: int, description: str,
+) -> Optional[models.EnterpriseCreditTransaction]:
+    """Add `credits` of plan allowance to the balance with a ledger row (None if 0). The
+    caller has already moved plan_credits_granted / plan_credits_remaining."""
+    credits = int(credits)
+    if credits <= 0:
+        return None
+    wallet.balance_credits = int(wallet.balance_credits) + credits
+    return _record_transaction(
+        db, wallet=wallet, txn_type="bonus", credits=credits, action_key=None,
+        description=description, reference_type="plan_credits",
+    )
+
+
+def _explicit_override(sub, limits: dict, column: str) -> bool:
+    """Did an admin set this number for this org (and does it currently apply)? Overrides
+    are ignored on a lapsed org (billing._limits_for), and so is this."""
+    return bool(limits.get("overrides_applied")) and getattr(sub, column, None) is not None
 
 
 def sync_plan_credits(
@@ -593,43 +854,132 @@ def sync_plan_credits(
     *,
     commit: bool = True,
 ) -> Optional[models.EnterpriseCreditTransaction]:
-    """Grant this billing period's included credits, exactly once. Returns the ledger row
-    if a grant happened, else None.
+    """Grant this billing period's included credits AND AI reads, exactly once. Returns the
+    credit ledger row if credits were granted, else None (reads never write a ledger row).
 
     Safe to call on any path, at any frequency — it is a no-op once the current period's
-    key is stamped on the wallet.
+    keys are stamped on the wallet and the allowance has not been raised. See the section
+    comment above for the three kinds of key change and what each grants.
     """
     from app import enterprise_billing as billing
 
     if billing.ENTERPRISE_FREE:
-        # Billing disabled: no tier, so no allowance to grant.
+        # Billing disabled: no tier, so no allowance to grant (reads are unmetered).
         return None
 
     sub = billing.get_or_create_org_subscription(db, organization_id, commit=False)
-    plan_key = billing.effective_plan_key(sub)
-    allowance = billing.included_credits_for(plan_key)
-    recurring = billing.credits_recur_for(plan_key)
+    # What THIS org gets — the plan's numbers with admin overrides and Branch Packs applied
+    # (neither on a lapsed org). Never included_credits_for(), which is the bare plan.
+    limits = billing.effective_limits(db, organization_id)
+    plan_key = limits["plan"]
+    recurring = bool(limits["credits_recur"])
 
-    # A one-time allowance (the sandbox's 100 demo credits) is keyed to the org, not to a
-    # period — otherwise a sandbox left open for months would mint 100 credits every month.
+    # A one-time allowance (the trial's credits and reads) is keyed to the org, not to a
+    # period — otherwise a sandbox left open for months would mint them every month.
     period_key = (
-        plan_credits_period_key(sub, plan_key) if recurring else f"{plan_key}:once"
+        plan_credits_period_key(sub, plan_key) if recurring else f"{plan_key}{ONCE_KEY_SUFFIX}"
     )
 
     wallet = get_wallet_for_update(db, organization_id)
-    if (wallet.plan_credits_period or "") == period_key:
-        return None
+    txn, once_suppressed = _sync_credit_allowance(
+        db, wallet, sub, organization_id,
+        plan_key=plan_key, period_key=period_key, recurring=recurring,
+        allowance=max(0, int(limits["included_credits"] or 0)),
+        explicit_override=_explicit_override(sub, limits, "override_included_credits"),
+    )
+    _sync_read_allowance(
+        db, wallet, sub, organization_id,
+        period_key=period_key, recurring=recurring,
+        allowance=limits["monthly_reads"],
+        explicit_override=_explicit_override(sub, limits, "override_monthly_reads"),
+        once_suppressed=once_suppressed,
+    )
 
+    if commit:
+        db.commit()
+        if txn is not None:
+            db.refresh(txn)
+    return txn
+
+
+def _sync_credit_allowance(
+    db: Session,
+    wallet: models.EnterpriseCreditWallet,
+    sub,
+    organization_id: int,
+    *,
+    plan_key: str,
+    period_key: str,
+    recurring: bool,
+    allowance: int,
+    explicit_override: bool,
+) -> tuple[Optional[models.EnterpriseCreditTransaction], Optional[bool]]:
+    """The credit half of sync_plan_credits (wallet already row-locked).
+
+    Returns (ledger row or None, once_suppressed). `once_suppressed` is the one-time-grant
+    decision when this call moved the wallet ONTO a one-time key, else None — the reads half
+    applies the same decision, so a lapsed payer or a repeat company domain is denied trial
+    reads exactly when it is denied trial credits.
+    """
+    from app import enterprise_billing as billing
+
+    stored = wallet.plan_credits_period or ""
+    granted = int(wallet.plan_credits_granted or 0)
+    plan = billing.get_plan(plan_key) or {}
+    label = plan.get("label") or plan_key
+
+    if stored == period_key:
+        # Same period. The only thing that can be due is a RAISED allowance — an admin
+        # override or a Branch Pack set mid-period — topped up by the difference. A one-time
+        # key tops up only if its grant actually happened (granted > 0) or an admin set the
+        # number for this org explicitly: a SUPPRESSED trial grant (lapsed payer, repeat
+        # company domain) has granted == 0 < allowance and must stay suppressed.
+        if allowance <= granted or not (recurring or granted > 0 or explicit_override):
+            return None, None
+        delta = allowance - granted
+        wallet.plan_credits_granted = allowance
+        wallet.plan_credits_remaining = int(wallet.plan_credits_remaining or 0) + delta
+        if not recurring and wallet.plan_credits_once_at is None:
+            wallet.plan_credits_once_at = datetime.utcnow()
+        return _grant_plan_credits(
+            db, wallet, delta,
+            f"{label} — allowance raised to {allowance:,}: +{delta:,} credits this period",
+        ), None
+
+    if recurring and _period_key_live(stored):
+        # A plan change INSIDE a paid period whose grant is still live: an upgrade, a
+        # downgrade, or a re-buy that re-anchored the period. Top up to the new tier only —
+        # max(0, new − already granted this period) — and keep the period's high-water mark
+        # at max(old, new). Granting the full new allowance here (the old behaviour, because
+        # the plan is part of the key) let Starter → Team → Starter → Team inside one month
+        # mint a full Team allowance on every hop. Nothing expires either: the period the
+        # unspent remainder belongs to has not ended, and the remainder stays this period's.
+        delta = max(0, allowance - granted)
+        wallet.plan_credits_period = period_key
+        wallet.plan_credits_granted = max(granted, allowance)
+        wallet.plan_credits_remaining = int(wallet.plan_credits_remaining or 0) + delta
+        return _grant_plan_credits(
+            db, wallet, delta,
+            f"{label} plan — +{delta:,} credits for the rest of this period (plan changed)",
+        ), None
+
+    # A genuine new period: a renewal, the first grant, or a move onto / off the one-time
+    # trial key.
+    #
     # "Once" must mean once per ORGANIZATION, not once per consecutive stretch on the plan.
     # `plan_credits_period` only remembers the LATEST key, so sandbox -> paid -> lapse walks
     # it sandbox:once -> starter:X -> sandbox:once and the equality guard above sees a
-    # different value each time. A paid customer who lapses would be handed the 100 demo
+    # different value each time. A paid customer who lapses would be handed the trial
     # credits again on every lapse cycle, unboundedly. This timestamp is the durable record.
     # The sandbox grant is an ONBOARDING allowance for someone evaluating the product. An org
-    # that has already paid us and then lapsed is not evaluating — handing it 100 free credits
+    # that has already paid us and then lapsed is not evaluating — handing it free credits
     # rewards churn, and it is the one case where the wallet's "never granted" marker is
     # legitimately empty (they went straight onto a paid tier and never held the sandbox).
-    if not recurring and wallet.plan_credits_once_at is None and _has_ever_paid(db, organization_id):
+    # A company whose email domain already used a trial (trial_domain_blocked) gets none
+    # either; signup stamps the marker too, this is the belt to that brace.
+    if not recurring and wallet.plan_credits_once_at is None and (
+        bool(getattr(sub, "trial_domain_blocked", False)) or _has_ever_paid(db, organization_id)
+    ):
         wallet.plan_credits_once_at = datetime.utcnow()
 
     suppress_grant = not recurring and wallet.plan_credits_once_at is not None
@@ -639,8 +989,7 @@ def sync_plan_credits(
     # an early renewal, and clawing back there would delete allowance the customer has
     # already paid for and not yet used — the moment they gave us more money. So the
     # remainder is only forfeited once the period it belonged to has actually elapsed.
-    expired = 0
-    if not PLAN_CREDITS_ROLLOVER and granted_before > 0 and _previous_period_elapsed(wallet):
+    if not PLAN_CREDITS_ROLLOVER and granted_before > 0 and _period_key_elapsed(stored):
         # Claw back the unspent remainder of the PREVIOUS period's grant before the new one
         # lands. Capped at the live balance so it can never eat purchased credits: if the
         # org spent its allowance and then topped up, `plan_credits_remaining` is already 0
@@ -669,25 +1018,74 @@ def sync_plan_credits(
         # Stamp the durable "the one-time grant has been used" marker.
         wallet.plan_credits_once_at = datetime.utcnow()
 
-    txn = None
-    if allowance > 0:
-        wallet.balance_credits = int(wallet.balance_credits) + int(allowance)
-        plan = billing.get_plan(plan_key) or {}
-        label = plan.get("label") or plan_key
-        txn = _record_transaction(
-            db, wallet=wallet, txn_type="bonus", credits=int(allowance), action_key=None,
-            description=(
-                f"{label} plan — {allowance:,} credits included this month" if recurring
-                else f"{label} — {allowance:,} demo credits"
-            ),
-            reference_type="plan_credits",
-        )
+    txn = _grant_plan_credits(
+        db, wallet, allowance,
+        f"{label} plan — {allowance:,} credits included this month" if recurring
+        else f"{label} — {allowance:,} credits included",
+    )
+    return txn, (suppress_grant if not recurring else None)
 
-    if commit:
-        db.commit()
-        if txn is not None:
-            db.refresh(txn)
-    return txn
+
+def _sync_read_allowance(
+    db: Session,
+    wallet: models.EnterpriseCreditWallet,
+    sub,
+    organization_id: int,
+    *,
+    period_key: str,
+    recurring: bool,
+    allowance: int,
+    explicit_override: bool,
+    once_suppressed: Optional[bool],
+) -> None:
+    """The reads half of sync_plan_credits: the same three rules on `reads_period`.
+
+    Reads are a counter pair, not a ledger: `reads_granted` is this period's allowance
+    (raised to the high-water mark on a mid-period plan change, exactly like credits) and
+    `reads_used` what uploads have consumed. A genuine new period resets used to 0 — there
+    is no rollover, so nothing has to be clawed back.
+    """
+    from app import enterprise_billing as billing
+
+    if allowance == billing.UNLIMITED:
+        # Only ENTERPRISE_FREE reports unlimited reads, and it never reaches here; if a
+        # future limit ever does, there is simply nothing to meter.
+        return
+    allowance = max(0, int(allowance or 0))
+    stored = wallet.reads_period or ""
+    granted = int(wallet.reads_granted or 0)
+
+    if stored == period_key:
+        # Same period: a raised allowance (override / Branch Pack) tops up now; a lowered one
+        # takes nothing back. Same suppressed-trial guard as credits.
+        if allowance > granted and (recurring or granted > 0 or explicit_override):
+            wallet.reads_granted = allowance
+        return
+
+    if recurring and _period_key_live(stored):
+        # Plan change inside a live paid period: raise to the new tier, keep what was used.
+        wallet.reads_period = period_key
+        wallet.reads_granted = max(granted, allowance)
+        return
+
+    if not recurring:
+        suppressed = once_suppressed
+        if suppressed is None:
+            # The credit key was already on this one-time key (a wallet from before reads
+            # existed): decide from the durable facts instead. A reads key that last held a
+            # PAID period, a repeat company domain or any past payment all mean this org is
+            # not evaluating the product for the first time.
+            suppressed = (
+                bool(getattr(sub, "trial_domain_blocked", False))
+                or _key_period_start(stored) is not None
+                or _has_ever_paid(db, organization_id)
+            )
+        if suppressed:
+            allowance = 0
+
+    wallet.reads_period = period_key
+    wallet.reads_granted = allowance
+    wallet.reads_used = 0
 
 
 def _spend_from_wallet(wallet: models.EnterpriseCreditWallet, cost: int) -> None:
@@ -708,15 +1106,19 @@ def _spend_from_wallet(wallet: models.EnterpriseCreditWallet, cost: int) -> None
 
 
 def plan_credits_state(db: Session, organization_id: int, *, read_only: bool = False) -> dict:
-    """The allowance panel: what this tier includes, how much of it is left, and when it
-    refreshes. Read-only — call `sync_plan_credits` first if a grant may be due."""
+    """The allowance panel: what this org's tier includes (overrides and Branch Packs
+    applied), how much of it is left, and when it refreshes. Read-only — call
+    `sync_plan_credits` first if a grant may be due."""
     from app import enterprise_billing as billing
 
     wallet = wallet_snapshot(db, organization_id) if read_only else get_or_create_wallet(db, organization_id, commit=False)
     sub = billing.subscription_snapshot(db, organization_id) if read_only else billing.get_or_create_org_subscription(db, organization_id, commit=False)
     plan_key = billing.effective_plan_key(sub)
-    allowance = billing.included_credits_for(plan_key)
-    recurring = billing.credits_recur_for(plan_key)
+    # effective_limits, not included_credits_for: the panel must show the number the grant
+    # actually uses, or an org with a Branch Pack sees 1,200 "included" and receives 1,400.
+    limits = billing.effective_limits(db, organization_id)
+    allowance = int(limits["included_credits"] or 0)
+    recurring = bool(limits["credits_recur"])
     renews_at = None
     if recurring:
         start = _period_start_for(sub, plan_key)
@@ -732,6 +1134,207 @@ def plan_credits_state(db: Session, organization_id: int, *, read_only: bool = F
         "renews_at": renews_at,
         "period_key": wallet.plan_credits_period,
     }
+
+
+# ---------------------------------------------------------------------------
+# Monthly AI reading allowance ("reads")
+#
+# Every upload's free text extraction — what the assistant, Deep Scan and the interview
+# officer later read instead of the raw file — is metered here, one read per 15-page block
+# (gemini_service.enterprise_read_units). The allowance is granted by sync_plan_credits
+# alongside the credits, on the same period key. When it runs out, or AI is paused, the
+# upload is still STORED, just not read: the router marks it read_status="not_read" and
+# offers "Read now" once allowance is back. A paid document check never consumes reads.
+# ---------------------------------------------------------------------------
+
+def _reads_payload(sub, wallet, limits: dict) -> dict:
+    from app import enterprise_billing as billing
+
+    granted = int(getattr(wallet, "reads_granted", 0) or 0)
+    used = int(getattr(wallet, "reads_used", 0) or 0)
+    plan_key = limits["plan"]
+    recurring = bool(limits["credits_recur"])
+    period_ends_at = None
+    if recurring:
+        period_ends_at = _period_start_for(sub, plan_key) + timedelta(days=billing.PLAN_PERIOD_DAYS)
+    elif billing.normalize_plan_key(getattr(sub, "plan", None)) == billing.SANDBOX_PLAN:
+        # The trial's reads are granted once and last for the trial.
+        period_ends_at = _naive(getattr(sub, "trial_ends_at", None))
+    return {
+        "granted": granted,
+        "used": used,
+        "remaining": max(0, granted - used),
+        "period_ends_at": period_ends_at,
+        "period_key": getattr(wallet, "reads_period", None),
+        "monthly_allowance": int(limits["monthly_reads"]),
+        "recurring": recurring,
+        "unlimited": False,
+        "pages_per_read": DOCUMENT_BLOCK_PAGES,
+        "enforced": ENFORCE,
+    }
+
+
+def _unlimited_reads_payload() -> dict:
+    from app import enterprise_billing as billing
+
+    return {
+        "granted": 0, "used": 0, "remaining": None, "period_ends_at": None,
+        "period_key": None, "monthly_allowance": billing.UNLIMITED, "recurring": False,
+        "unlimited": True, "pages_per_read": DOCUMENT_BLOCK_PAGES, "enforced": False,
+    }
+
+
+def reads_state(db: Session, organization_id: int, *, read_only: bool = False) -> dict:
+    """The reading allowance: {granted, used, remaining, period_ends_at} plus period_key,
+    monthly_allowance (overrides and Branch Packs applied), recurring, unlimited and
+    pages_per_read. `remaining` is None only when reads are unmetered (ENTERPRISE_FREE).
+
+    read_only=True is a PURE READ — no row is created, nothing is granted or flushed. It
+    must stay that way: enterprise_billing.build_subscription_state calls it from inside
+    request paths with uncommitted work (enforce_client_limit_or_402), and it must never call
+    back into build_subscription_state, which would recurse. The default path first grants
+    any due allowance (without committing — the caller owns the transaction).
+    """
+    from app import enterprise_billing as billing
+
+    if billing.ENTERPRISE_FREE:
+        return _unlimited_reads_payload()
+    if read_only:
+        wallet = wallet_snapshot(db, organization_id)
+        sub = billing.subscription_snapshot(db, organization_id)
+    else:
+        _sync_plan_credits_quietly(db, organization_id)
+        wallet = get_or_create_wallet(db, organization_id, commit=False)
+        sub = billing.get_or_create_org_subscription(db, organization_id, commit=False)
+    return _reads_payload(sub, wallet, billing.effective_limits(db, organization_id))
+
+
+def consume_reads(db: Session, organization_id: int, reads: int, *, commit: bool = True) -> bool:
+    """Take `reads` from this period's reading allowance, atomically.
+
+    True  — consumed: go ahead and read the upload.
+    False — not enough allowance left, or AI is paused: NOTHING was consumed, and the caller
+            stores the upload unread (read_status="not_read").
+
+    All-or-nothing on purpose: a caller that wants to read only what is left asks
+    reads_state() for `remaining` and passes that as the reader's max_blocks instead. A
+    count below 1 is read as 1 — a file is never free to read.
+
+    The check-and-increment runs under the wallet's row lock (get_wallet_for_update), so two
+    uploads landing together cannot both spend the last read. commit=True (the default)
+    commits before returning, which also RELEASES that lock before the caller's model call:
+    holding a FOR UPDATE through a 30-60 s read would queue every other wallet operation of
+    the org behind one upload. With ENTERPRISE_CREDITS_ENFORCE=false (soft launch) reads are
+    tracked but never refused, the same way credits may then go past zero.
+    """
+    from app import enterprise_billing as billing
+
+    needed = _units(reads)
+    if billing.ENTERPRISE_FREE:
+        return True  # billing disabled: reading is unmetered
+    if not _ai_allowed(db, organization_id):
+        # Same gate as every AI path, but answered rather than raised: the upload itself must
+        # still succeed for a paused org — only the reading is withheld.
+        return False
+    # A period that rolled since the last request must refill BEFORE we refuse — otherwise
+    # the first upload of a new month is stored unread against last month's count.
+    _sync_plan_credits_quietly(db, organization_id)
+    wallet = get_wallet_for_update(db, organization_id)
+    granted = int(wallet.reads_granted or 0)
+    used = int(wallet.reads_used or 0)
+    ok = (granted - used) >= needed or not ENFORCE
+    if ok:
+        wallet.reads_used = used + needed
+    if commit:
+        db.commit()
+    return ok
+
+
+def release_reads(
+    db: Session,
+    organization_id: int,
+    reads: int,
+    *,
+    period_key: Optional[str] = None,
+    commit: bool = True,
+) -> int:
+    """Give back reads that a FAILED read consumed (the reader errored before producing any
+    text, so the upload ends read_status="failed"). Returns the reads actually released.
+
+    Pass the `period_key` reads_state() reported before consuming, and nothing is released
+    if the period has rolled since — the new period's count is not the one that was charged.
+    Either way `reads_used` is floored at 0, so a release can never lift an org above its
+    allowance.
+    """
+    wallet = get_wallet_for_update(db, organization_id)
+    if period_key is not None and (wallet.reads_period or "") != str(period_key):
+        if commit:
+            db.commit()
+        return 0
+    used = int(wallet.reads_used or 0)
+    released = min(_units(reads), used)
+    wallet.reads_used = used - released
+    if commit:
+        db.commit()
+    return released
+
+
+# ---------------------------------------------------------------------------
+# The trial's demo-call bonus
+# ---------------------------------------------------------------------------
+
+def grant_demo_call_bonus(
+    db: Session,
+    organization_id: int,
+    user: Optional[models.User] = None,
+    *,
+    commit: bool = True,
+) -> int:
+    """Grant billing.TRIAL_DEMO_BONUS_CREDITS (default 50) once per organization — the bonus
+    Rilono staff hand out after a demo call. Returns the credits granted: 0 if this org has
+    already had it (or the bonus is configured to 0).
+
+    The once-guard is a CONDITIONAL UPDATE on subscription.demo_bonus_granted_at, not a
+    read-then-write: two admins clicking together, or a double-submitted form, must not both
+    grant. The marker lives on the subscription (never reset by a plan change), unlike the
+    wallet's grant keys, which every period change overwrites.
+
+    The credits are a gift, not plan allowance: they are not added to plan_credits_remaining,
+    so no period rollover ever expires them — and not counted as purchased either. It is not
+    an AI call, so the AI-paused gate does not apply; an admin extending a lapsed trial may
+    grant it in either order.
+    """
+    from app import enterprise_billing as billing
+
+    amount = int(billing.TRIAL_DEMO_BONUS_CREDITS or 0)
+    if amount <= 0:
+        return 0
+    sub = billing.get_or_create_org_subscription(db, organization_id, commit=False)
+    claimed = (
+        db.query(models.EnterpriseSubscription)
+        .filter(
+            models.EnterpriseSubscription.id == sub.id,
+            models.EnterpriseSubscription.demo_bonus_granted_at.is_(None),
+        )
+        .update({"demo_bonus_granted_at": datetime.utcnow()}, synchronize_session=False)
+    )
+    if not claimed:
+        return 0
+    # The bulk UPDATE bypassed the identity map; make the next read see the stamp.
+    db.expire(sub, ["demo_bonus_granted_at"])
+    get_wallet_for_update(db, organization_id)  # serialize the balance write with spends
+    add_credits(
+        db, organization_id, amount,
+        txn_type="bonus",
+        description=f"Demo call bonus — {amount:,} credits",
+        reference_type="demo_call_bonus",
+        user=user,
+        count_as_purchase=False,
+        commit=False,
+    )
+    if commit:
+        db.commit()
+    return amount
 
 
 def _record_transaction(
@@ -832,8 +1435,19 @@ def apply_adjustment(
     return txn, delta
 
 
+def _grant_marker(wallet: models.EnterpriseCreditWallet) -> tuple:
+    """Everything a grant can move without writing a ledger row: both period keys and both
+    granted marks. Compared before/after a sync to decide whether there is work to commit."""
+    return (
+        wallet.plan_credits_period or "",
+        int(wallet.plan_credits_granted or 0),
+        wallet.reads_period or "",
+        int(wallet.reads_granted or 0),
+    )
+
+
 def _sync_plan_credits_quietly(db: Session, organization_id: int, *, commit: bool = False) -> None:
-    """Grant any due plan allowance before a balance is read or spent.
+    """Grant any due plan allowance (credits and reads) before a balance is read or spent.
 
     Wrapped because this runs on hot read paths: an org whose allowance cannot be worked
     out (a half-created subscription, a DB hiccup) must still be able to spend the credits
@@ -859,24 +1473,30 @@ def _sync_plan_credits_quietly(db: Session, organization_id: int, *, commit: boo
         # outer transaction intact and usable.
         # "No ledger row" does NOT mean "nothing to persist". A period rollover that grants
         # zero (a suppressed one-time grant, or a lapsed org) still advances
-        # plan_credits_period and can claw credits back. Those writes would be silently dropped
-        # on read-only paths, so the work would be redone on every request and the claw-back
-        # would never stick. The period marker is the reliable signal — db.dirty is already
-        # empty here because sync_plan_credits flushes before returning.
-        before_key = (get_or_create_wallet(db, organization_id, commit=False).plan_credits_period or "")
+        # plan_credits_period and can claw credits back, and a reads grant never writes a
+        # ledger row at all. Those writes would be silently dropped on read-only paths, so the
+        # work would be redone on every request and the claw-back would never stick. The
+        # keys and granted marks are the reliable signal — db.dirty is already empty here
+        # because the savepoint flushes on release.
+        before = _grant_marker(get_or_create_wallet(db, organization_id, commit=False))
         with db.begin_nested():
             txn = sync_plan_credits(db, organization_id, commit=False)
-        after_key = (get_or_create_wallet(db, organization_id, commit=False).plan_credits_period or "")
-        if commit and (txn is not None or after_key != before_key):
+        after = _grant_marker(get_or_create_wallet(db, organization_id, commit=False))
+        if commit and (txn is not None or after != before):
             db.commit()
     except Exception:
         logger.exception("plan-credits: grant sync failed for org %s", organization_id)
 
 
-def can_afford(db: Session, organization_id: int, action_key: str) -> bool:
+def can_afford(db: Session, organization_id: int, action_key: str, *, units: int = 1) -> bool:
+    """Whether the org may run `units` of a billable action right now. False while AI is
+    paused (answered, not raised: this also feeds GET payloads such as a "can afford" chip,
+    and the public client-facing gates that word their own 402)."""
+    if not _ai_allowed(db, organization_id):
+        return False
     if not ENFORCE:
         return True
-    cost = action_cost(action_key)
+    cost = action_cost(action_key, units)
     if cost <= 0:
         return True
     _sync_plan_credits_quietly(db, organization_id)
@@ -884,11 +1504,31 @@ def can_afford(db: Session, organization_id: int, action_key: str) -> bool:
     return int(wallet.balance_credits) >= cost
 
 
-def enforce_action_or_402(db: Session, organization_id: int, action_key: str) -> None:
-    """Pre-check before running a billable AI action. Raises 402 when too poor."""
+def _unit_phrase(action: Optional[dict], units: int) -> str:
+    """' (3 × 4 credits per 15 pages)' for a multi-unit charge, '' for a single one."""
+    if not action or _units(units) <= 1:
+        return ""
+    return f" ({_units(units)} × {_action_price_label(action)})"
+
+
+def enforce_action_or_402(
+    db: Session,
+    organization_id: int,
+    action_key: str,
+    *,
+    units: int = 1,
+    client_facing: bool = False,
+) -> None:
+    """Pre-check before running a billable AI action. Raises 402 while AI is paused, or when
+    the wallet cannot cover `units` of the action (e.g. the 15-page blocks of a document).
+
+    `client_facing=True` swaps the paused message for one the consultancy's own client can
+    act on; the credits message is staff-only, so client surfaces should use can_afford and
+    word their own refusal."""
+    _ai_gate_or_402(db, organization_id, client_facing=client_facing)
     if not ENFORCE:
         return
-    cost = action_cost(action_key)
+    cost = action_cost(action_key, units)
     if cost <= 0:
         return
     # A renewal that landed since the last request must credit BEFORE we refuse the action
@@ -902,34 +1542,28 @@ def enforce_action_or_402(db: Session, organization_id: int, action_key: str) ->
     raise HTTPException(
         status_code=402,
         detail=(
-            f"Not enough credits for {label}. It costs {cost} credits and your balance is "
-            f"{int(wallet.balance_credits)}. Your plan's monthly credits refresh on renewal — "
-            "top up your Rilono Credits wallet to continue now."
+            f"Not enough credits for {label}. It costs {cost} credits{_unit_phrase(action, units)} "
+            f"and your balance is {int(wallet.balance_credits)}. Your plan's monthly credits "
+            "refresh on renewal — top up your Rilono Credits wallet to continue now."
         ),
     )
 
 
 def can_afford_units(db: Session, organization_id: int, action_key: str, units: int = 1) -> bool:
     """Whether the wallet can cover `units` of a billable action (e.g. N invited interviews)."""
-    if not ENFORCE:
-        return True
-    units = max(1, int(units))
-    needed = action_cost(action_key) * units
-    if needed <= 0:
-        return True
-    _sync_plan_credits_quietly(db, organization_id)
-    wallet = get_or_create_wallet(db, organization_id, commit=False)
-    return int(wallet.balance_credits) >= needed
+    return can_afford(db, organization_id, action_key, units=units)
 
 
 def enforce_units_or_402(db: Session, organization_id: int, action_key: str, units: int = 1) -> None:
     """Staff-facing pre-check before *issuing* N billable units (e.g. an interview link
     that lets a client take `units` interviews). Blocks sending a link the wallet can't
     fund, so the client never hits a dead 'contact your consultancy' wall. Raises 402
-    with an explicit, staff-readable top-up message (this is never shown to clients)."""
+    with an explicit, staff-readable top-up message (this is never shown to clients) — and
+    while AI is paused, because a link issued then would only ever reach that wall."""
+    _ai_gate_or_402(db, organization_id)
     if not ENFORCE:
         return
-    units = max(1, int(units))
+    units = _units(units)
     cost_each = action_cost(action_key)
     if cost_each <= 0:
         return
@@ -956,26 +1590,38 @@ def charge_action(
     organization_id: int,
     action_key: str,
     *,
+    units: int = 1,
     user: Optional[models.User] = None,
     reference_type: Optional[str] = None,
     reference_id: Optional[int] = None,
     description: Optional[str] = None,
+    client_facing: bool = False,
     commit: bool = True,
 ) -> Optional[models.EnterpriseCreditTransaction]:
-    """Debit the cost of a billable action. Raises 402 if enforced and unaffordable."""
-    cost = action_cost(action_key)
+    """Debit the cost of `units` of a billable action. Raises 402 if AI is paused, or if
+    enforced and unaffordable.
+
+    The paused check runs even though callers pre-check: a charge is the last line, and
+    several flows charge without an enforce_* call of their own (the public interview link,
+    the client Copilot unlock, background document checks)."""
+    _ai_gate_or_402(db, organization_id, client_facing=client_facing)
+    units = _units(units)
+    cost = action_cost(action_key, units)
     if cost <= 0:
         return None
     _sync_plan_credits_quietly(db, organization_id)
     wallet = get_wallet_for_update(db, organization_id)
     if ENFORCE and int(wallet.balance_credits) < cost:
-        enforce_action_or_402(db, organization_id, action_key)
+        enforce_action_or_402(db, organization_id, action_key, units=units, client_facing=client_facing)
     action = get_action(action_key)
     balance_before = int(wallet.balance_credits)
     _spend_from_wallet(wallet, cost)
+    default_description = action["label"] if action else action_key
+    if action and units > 1:
+        default_description = f"{default_description}{_unit_phrase(action, units)}"
     txn = _record_transaction(
         db, wallet=wallet, txn_type="debit", credits=-cost, action_key=action_key,
-        description=(description or (action["label"] if action else action_key)),
+        description=(description or default_description),
         reference_type=reference_type, reference_id=reference_id, user=user,
     )
     if commit:
@@ -1000,12 +1646,14 @@ def charge_action(
 # type in the app — so leaving it unmetered was a real margin leak. It is metered
 # gently: every org gets COPILOT_FREE_DAILY free messages per day, then messages
 # accrue toward a bundle and 1 credit is debited every COPILOT_MSGS_PER_CREDIT
-# billable messages (≈ ₹2/message at the default 1 credit / 5 messages).
+# billable messages (≈ ₹5/message at the default 1 credit / 2 messages).
 #
 # Flow (mirrors deep_scan: enforce before the model call, charge after success):
-#   1. copilot_precheck_or_402()  — read-only; blocks a paid message when the wallet
-#      can't cover the next bundle (raised BEFORE any Gemini tokens are spent).
-#   2. run the model.
+#   1. copilot_turn_budget()      — read-mostly; refuses when neither free messages nor
+#      credits are left, and otherwise returns the COST BUDGET the turn may spend (None =
+#      unbounded). copilot_precheck_or_402() is the raising form of the same check.
+#   2. run the model with that budget (enterprise_ai stops calling tools once the turn's
+#      running cost reaches it, then forces the final answer).
 #   3. record_copilot_message()   — increments counters and debits on bundle rollover.
 # ---------------------------------------------------------------------------
 
@@ -1026,30 +1674,82 @@ def copilot_message_is_free(db: Session, organization_id: int) -> bool:
     return _copilot_used_today(wallet) < COPILOT_FREE_DAILY
 
 
-def copilot_precheck_or_402(db: Session, organization_id: int) -> None:
-    """Pre-check before running a copilot message. Free within the daily allowance;
-    beyond it, requires enough credits to cover the next bundle. Raises 402 otherwise
-    (before any Gemini tokens are spent). No-op when enforcement is disabled."""
+def _copilot_out_of_messages_detail(cost: int) -> str:
+    return (
+        f"You've used today's {COPILOT_FREE_DAILY} free Rilono AI assistant messages. "
+        f"Further messages cost {_plural(cost, 'credit')} per {_plural(COPILOT_MSGS_PER_CREDIT, 'message')}, "
+        "and your wallet can't cover the next one. Top up your Rilono Credits to keep chatting."
+    )
+
+
+def copilot_turn_budget(db: Session, organization_id: int) -> dict:
+    """The RESERVATION for one assistant turn: may it run, and how much may it spend?
+
+    Returns {allowed, cost_budget_usd, reason, message, free_left, covered_units,
+    max_units, msgs_per_credit}:
+      * allowed=True, cost_budget_usd=None, reason=None — the free allowance plus the wallet
+        can pay for the WORST-CASE turn (COPILOT_MAX_MSG_WEIGHT messages), so the turn runs
+        unbounded, exactly as before.
+      * allowed=True, cost_budget_usd=Decimal, reason="balance_limited" — they cannot. The turn
+        still runs, but enterprise_ai must stop calling tools once its running cost reaches
+        covered_units × COPILOT_TURN_COST_BUDGET_USD and answer from what it has. Without
+        this a single "free" turn could fan out into eight messages' worth of work on an
+        empty wallet, and the bill would land as unpayable debt.
+      * allowed=False, reason="insufficient_credits" (+ message) — no free message left and
+        not one bundle affordable: the caller answers 402 with `message`, as before.
+    Raises 402 first while AI is paused, like every other precheck.
+
+    covered_units = free messages left today + what the wallet's whole bundles buy, minus
+    messages already accrued unpaid toward the next bundle (copilot_unbilled_msgs: those are
+    owed first, so they are not the new turn's to spend). With nothing accrued this is the
+    spec's free_left + affordable_bundles × COPILOT_MSGS_PER_CREDIT.
+    """
+    _ai_gate_or_402(db, organization_id)
+    worst = COPILOT_MAX_MSG_WEIGHT if COPILOT_TURN_COST_BUDGET_USD > 0 else 1
+    result = {
+        "allowed": True, "cost_budget_usd": None, "reason": None, "message": None,
+        "free_left": None, "covered_units": None, "max_units": worst,
+        "msgs_per_credit": COPILOT_MSGS_PER_CREDIT,
+    }
     if not ENFORCE:
-        return
+        return result
     # Same rule as every other 402 gate: a renewal that landed since the last request
     # must credit BEFORE we refuse the message, or a paid-up org hits a top-up wall on
     # the day it renewed — and on this surface that wall is the Chrome extension.
     _sync_plan_credits_quietly(db, organization_id)
     wallet = get_or_create_wallet(db, organization_id, commit=False)
-    if _copilot_used_today(wallet) < COPILOT_FREE_DAILY:
-        return  # still within the free daily allowance
-    cost = action_cost(COPILOT_ACTION_KEY)
-    if cost <= 0 or int(wallet.balance_credits) >= cost:
-        return
-    raise HTTPException(
-        status_code=402,
-        detail=(
-            f"You've used today's {COPILOT_FREE_DAILY} free Rilono AI assistant messages. "
-            f"Further messages cost {cost} credit per {COPILOT_MSGS_PER_CREDIT}, and your wallet "
-            f"is empty. Top up your Rilono Credits to keep chatting."
-        ),
-    )
+    free_left = max(0, COPILOT_FREE_DAILY - _copilot_used_today(wallet))
+    result["free_left"] = free_left
+    cost_each = action_cost(COPILOT_ACTION_KEY)
+    if cost_each <= 0:
+        return result  # messages are free: nothing to reserve
+    bundles = max(0, int(wallet.balance_credits)) // cost_each
+    owed = max(0, int(wallet.copilot_unbilled_msgs or 0))
+    covered = free_left + max(0, bundles * COPILOT_MSGS_PER_CREDIT - owed)
+    result["covered_units"] = covered
+    if covered >= worst:
+        return result
+    if covered <= 0:
+        result.update(
+            allowed=False, reason="insufficient_credits",
+            cost_budget_usd=Decimal("0"),
+            message=_copilot_out_of_messages_detail(cost_each),
+        )
+        return result
+    if COPILOT_TURN_COST_BUDGET_USD > 0:
+        result["cost_budget_usd"] = Decimal(covered) * COPILOT_TURN_COST_BUDGET_USD
+        result["reason"] = "balance_limited"
+    return result
+
+
+def copilot_precheck_or_402(db: Session, organization_id: int) -> None:
+    """Pre-check before running a copilot message: the raising form of copilot_turn_budget.
+    402 while AI is paused, or when there is neither a free message left today nor a bundle
+    the wallet can pay for (raised BEFORE any Gemini tokens are spent). A turn the wallet can
+    only partly cover passes — copilot_turn_budget's cost budget is what bounds it."""
+    budget = copilot_turn_budget(db, organization_id)
+    if not budget["allowed"]:
+        raise HTTPException(status_code=402, detail=budget["message"])
 
 
 def record_copilot_message(
@@ -1068,7 +1768,11 @@ def record_copilot_message(
     (enterprise_ai.TurnUsage.cost_usd). It converts the turn into a message weight so a
     heavy multi-tool answer is metered as the several messages' worth of work it is.
     Omitting it meters the turn as exactly one message — the pre-cost-weighting behavior.
+
+    Refuses (402) while AI is paused, like every charge path: the precheck already did, so
+    this only fires for a trial that expired during the turn itself.
     """
+    _ai_gate_or_402(db, organization_id)
     # Grant any due renewal before the wallet is read, exactly as charge_action does:
     # otherwise a bundle completing on renewal day debits against a stale balance and
     # the clamp below writes off credits the org has already paid for.
@@ -1166,8 +1870,10 @@ def staff_interview_next_is_free(db: Session, organization_id: int) -> bool:
 
 
 def enforce_staff_interview_or_402(db: Session, organization_id: int) -> None:
-    """Pre-check before a STAFF-run mock interview. Free while previews remain;
-    otherwise it costs the normal mock_interview price (raises 402 if unaffordable)."""
+    """Pre-check before a STAFF-run mock interview. 402 while AI is paused — a free preview
+    is still a model call. Otherwise free while previews remain, then the normal
+    mock_interview price (402 if unaffordable)."""
+    _ai_gate_or_402(db, organization_id)
     if staff_interview_next_is_free(db, organization_id):
         return
     enforce_action_or_402(db, organization_id, "mock_interview")
@@ -1183,8 +1889,12 @@ def consume_staff_interview(
     commit: bool = True,
 ) -> dict:
     """Called after a staff-run interview starts successfully. Consumes a free preview
-    if any remain (no charge); otherwise debits the normal mock_interview cost."""
-    wallet = get_or_create_wallet(db, organization_id, commit=False)
+    if any remain (no charge); otherwise debits the normal mock_interview cost. Refuses
+    (402) while AI is paused, like every charge path."""
+    _ai_gate_or_402(db, organization_id)
+    # Row-locked: two staff starting interviews together must not both take the last
+    # free preview (a plain read here let both see `used < limit`).
+    wallet = get_wallet_for_update(db, organization_id)
     used = int(getattr(wallet, "interview_staff_previews_used", 0) or 0)
     if used < INTERVIEW_FREE_STAFF_PREVIEWS:
         wallet.interview_staff_previews_used = used + 1
@@ -1320,7 +2030,7 @@ def packages_payload(currency: str | None = None) -> list[dict]:
             "bonus_credits": pkg["bonus_credits"],
             "total_credits": total,
             # Credits stay an INR-denominated unit of account (1 credit = ₹10) regardless
-            # of the currency they were bought in — a Deep Scan costs 20 credits either way.
+            # of the currency they were bought in — a Deep Scan costs the same credits either way.
             "value_inr": paise_to_rupees(credits_to_paise(total)),
             "is_popular": pkg["is_popular"],
             "currency": code,
@@ -1330,6 +2040,12 @@ def packages_payload(currency: str | None = None) -> list[dict]:
 
 
 def actions_payload() -> list[dict]:
+    """The per-action price list. `credits` is the price of ONE unit (kept under its old
+    name: the SPA divides pack sizes by it); `unit` / `unit_label` / `price_label` say what a
+    unit is — "4 credits per 15 pages" for a document check, "1 credit per 2 messages" for
+    the assistant — so no surface has to hardcode that a price is per block or per bundle.
+    The per-unit limits a price depends on (pages per block, documents per scan, questions
+    per interview, messages per bundle / per client link) ride along for the same reason."""
     payload = []
     for key, action in ACTIONS.items():
         payload.append({
@@ -1339,6 +2055,17 @@ def actions_payload() -> list[dict]:
             "credits": action["credits"],
             "price_inr": paise_to_rupees(credits_to_paise(action["credits"])),
             "price_display": format_inr(credits_to_paise(action["credits"])),
+            "unit": action.get("unit"),
+            "unit_label": action.get("unit_label"),
+            "price_label": _action_price_label(action),
+            "per_unit": action.get("unit") in {"block", "bundle"},
+            "pages_per_unit": action.get("pages_per_unit"),
+            "messages_per_unit": action.get("messages_per_unit"),
+            "free_daily_messages": action.get("free_daily_messages"),
+            "max_documents": action.get("max_documents"),
+            "max_questions": action.get("max_questions"),
+            "messages_included": action.get("messages_included"),
+            "valid_days": action.get("valid_days"),
         })
     return payload
 
@@ -1355,7 +2082,7 @@ def _wallet_state(db: Session, organization_id: int, *, currency: str | None = N
     """Wallet + catalogue, with all real CHARGES priced in `currency`.
 
     Credits themselves stay an INR-denominated unit of account (1 credit = ₹10) whatever
-    currency they were bought in — a Deep Scan costs 20 credits everywhere — so the
+    currency they were bought in — a Deep Scan costs the same credits everywhere — so the
     *_inr fields keep their INR meaning. Only the things an org actually pays for
     (packages, infra fee) are re-priced.
     """
@@ -1363,12 +2090,18 @@ def _wallet_state(db: Session, organization_id: int, *, currency: str | None = N
         code = money.normalize_currency(currency or CURRENCY, strict=True)
     except money.UnsupportedCurrency:
         code = money.DEFAULT_CURRENCY
+    from app import enterprise_billing as billing
+
     # Every entry into the Credits screen is also the moment a due allowance should land,
     # so the balance the user is looking at is never one renewal behind.
     if not read_only:
         _sync_plan_credits_quietly(db, organization_id, commit=True)
     wallet = wallet_snapshot(db, organization_id) if read_only else get_or_create_wallet(db, organization_id, commit=False)
     balance = int(wallet.balance_credits)
+    # Both are pure reads (the grant above already ran), so the read-only view and the
+    # default view render the same stored state identically.
+    reads = reads_state(db, organization_id, read_only=True)
+    ai = billing.ai_access_state(db, organization_id)
     return {
         "balance_credits": balance,
         "balance_value_inr": paise_to_rupees(credits_to_paise(balance)),
@@ -1381,8 +2114,16 @@ def _wallet_state(db: Session, organization_id: int, *, currency: str | None = N
         # are the credit unit of account and stay INR regardless.
         "currency": code,
         "enforced": ENFORCE,
-        "low_balance": balance < (action_cost("mock_interview") or 1),
+        "low_balance": balance < LOW_BALANCE_CREDITS,
+        "low_balance_threshold": LOW_BALANCE_CREDITS,
+        # The shared AI-paused gate, as a banner: while true every AI action (and a top-up)
+        # answers 402, and the wallet is read-only until the plan is chosen or renewed.
+        "ai_paused": not ai["allowed"],
+        "ai_paused_reason": ai["reason"],
+        "ai_paused_message": ai["message"],
         "actions": actions_payload(),
+        # The monthly AI reading allowance (free upload reading, in 15-page blocks).
+        "reads": reads,
         # What the org's plan includes each month and how much of it is left. This is the
         # primary "where do credits come from" panel now; top-ups are overage.
         "plan_credits": plan_credits_state(db, organization_id, read_only=read_only),
@@ -1403,6 +2144,10 @@ def _wallet_state(db: Session, organization_id: int, *, currency: str | None = N
             "copilot_msgs_daily": COPILOT_FREE_DAILY,
             "copilot_msgs_left_today": max(0, COPILOT_FREE_DAILY - _copilot_used_today(wallet)),
             "copilot_msgs_per_credit": COPILOT_MSGS_PER_CREDIT,
+            # Upload reading is free up to the plan's reads allowance (not a credit spend).
+            "reads_allowance": reads["monthly_allowance"],
+            "reads_left": reads["remaining"],
+            "pages_per_read": DOCUMENT_BLOCK_PAGES,
         },
     }
 
@@ -2344,8 +3089,13 @@ def build_revenue_analytics(db: Session) -> dict:
         cost_paise = usd_to_inr_paise(src_usd)
         avg_cost_paise = int(cost_paise / units) if units > 0 else (int(cost_paise / src_calls) if src_calls > 0 else 0)
         price_paise = credits_to_paise(action["credits"])
+        # Margin against what a DEBIT ROW actually earned, not the per-unit list price: one
+        # row is a whole document check (several 15-page blocks) or several assistant
+        # bundles, while avg_cost_paise is per row. Comparing a per-row cost with a per-block
+        # price reported a profitable 60-page check as a loss.
+        avg_price_paise = int(revenue_paise / units) if units > 0 else price_paise
         action_margin_pct = (
-            round(((price_paise - avg_cost_paise) / price_paise) * 100, 1) if price_paise > 0 else None
+            round(((avg_price_paise - avg_cost_paise) / avg_price_paise) * 100, 1) if avg_price_paise > 0 else None
         )
         per_action.append({
             "key": key,
@@ -2353,6 +3103,9 @@ def build_revenue_analytics(db: Session) -> dict:
             "price_credits": action["credits"],
             "price_paise": price_paise,
             "price_display": format_inr(price_paise),
+            "unit_label": action.get("unit_label"),
+            "avg_price_per_unit_paise": avg_price_paise,
+            "avg_price_per_unit_display": format_inr(avg_price_paise),
             "units_sold": units,
             "credits_charged": credits_charged,
             "revenue_paise": revenue_paise,
