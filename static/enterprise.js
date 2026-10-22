@@ -1675,13 +1675,19 @@
     // for" and "can I run another AI action".
     if (s && s.plan_label) {
       const bal = cr && cr.balance_credits != null ? ` · ${cr.balance_credits} cr` : "";
-      $("#brandPlan").textContent = s.plan_label + bal;
+      // A lapsed plan reports the trial's label (its limits apply); name the plan that expired.
+      const label = s.plan_lapsed ? (s.lapsed_plan_label || "Plan") + " (expired)" : s.plan_label;
+      $("#brandPlan").textContent = label + bal;
     } else if (cr && cr.balance_credits != null) {
       $("#brandPlan").textContent = cr.balance_credits + " credits";
     } else {
       $("#brandPlan").textContent = "Rilono Credits";
     }
-    if (s && s.clients_used != null) $("#clientsBadge").textContent = s.clients_used;
+    // The sidebar badge counts CLIENTS, as the client list's total_clients does — not open
+    // files: clients_used became the open-file count with pricing v2, and writing it here made
+    // the badge flip between the two (90 ↔ 120) as screens refreshed.
+    const clientsTotal = s ? (s.clients_total != null ? s.clients_total : s.clients_used) : null;
+    if (clientsTotal != null) $("#clientsBadge").textContent = clientsTotal;
     const cb = $("#creditsBadge");
     if (cb && cr && cr.balance_credits != null) cb.textContent = cr.balance_credits;
     // Every subscription refresh (a plan bought, a trial that just ran out) also re-states
@@ -4360,9 +4366,9 @@
           } else if (found.validation_status === "invalid") {
             toast("⚠ Rilono AI flagged the " + found.document_type + " — see the document card", "error");
           } else if (found.validation_status === "error") {
-            // A scan that returned no verdict is never charged, so say so — otherwise it
-            // reads as a credit spent on nothing.
-            toast("Rilono AI couldn't read the " + found.document_type + " — you haven't been charged.", "error");
+            // A scan that returned no verdict is refunded (it is debited when it starts, so
+            // the wallet dipped meanwhile) — say so, or it reads as credits spent on nothing.
+            toast("Rilono AI couldn't read the " + found.document_type + " — the credits for this check were refunded.", "error");
           }
           return;
         }
@@ -10596,6 +10602,31 @@
       return best ? planCycleAmount(bestPlan, best, cycle).display : null;
     };
 
+    // A running prepaid YEAR (server: billing.live_term_lock). Checkout refuses a change of
+    // tier until it ends (409) — the new tier would apply to the whole remaining year — so
+    // the other tiers say so instead of offering a button that can only fail.
+    const termLocked = !!sub.term_locked_until && !sub.is_sandbox && !sub.plan_lapsed;
+    // A yearly purchase is a one-off order: the server cancels a live monthly mandate when it
+    // is paid. Say so on every button that would do that, before the buyer pays.
+    const endsMandateNote = yearly && sub.auto_renews
+      ? `<div class="plan-files-note">Paid once for the year — your monthly auto-renewal will be cancelled.</div>` : "";
+    const checkoutBtn = (p, label) => `<button class="btn ${p.is_popular ? "btn-primary" : "btn-ghost"} btn-block" onclick="__ent.checkout('${p.key}',this)">${label}</button>`;
+    // The current PAID tier's footer. Nothing renews a plan without a live mandate (every
+    // yearly purchase, or auto-renewal turned off): without a Renew button the tier's own
+    // checkout only came back once the plan had LAPSED to the trial — AI paused, limits cut.
+    // Renewing early is safe: the server stacks the new period after the current one.
+    const currentPaidAction = (p) => {
+      const nowCycle = sub.billing_cycle === "yearly" ? "yearly" : "monthly";
+      // Monthly on top of a prepaid year with months still to run would start a mandate that
+      // debits every month from today while each charge only adds time after the year. Offer
+      // it once the term is in its last month (the server's term lock has lifted by then).
+      if (!yearly && termLocked) return "";
+      if (state.billingYearlyEnabled && cycle !== nowCycle) {
+        return checkoutBtn(p, yearly ? "Switch to yearly" : "Switch to monthly") + endsMandateNote;
+      }
+      if (!sub.auto_renews) return checkoutBtn(p, "Renew " + esc(p.label) + (yearly ? " · yearly" : ""));
+      return "";   // a live mandate already renews it; a second one would charge twice
+    };
     const planCard = (p) => {
       const isCurrent = sub.plan === p.key;
       const isSandbox = p.is_free;
@@ -10613,10 +10644,11 @@
         </div>
         ${p.files_note ? `<div class="plan-files-note">${esc(p.files_note)}</div>` : ""}
         <ul>${(p.features || []).map((f) => `<li>${esc(f)}</li>`).join("")}</ul>
-        ${isCurrent ? `<div class="plan-current-tag">✓ Current plan</div>`
+        ${isCurrent ? `<div class="plan-current-tag">✓ Current plan</div>${canManage && !isSandbox && !sub.is_sandbox ? currentPaidAction(p) : ""}`
           : (isSandbox ? `<div class="plan-current-tag" style="color:var(--muted)">Where every workspace starts</div>`
-          : (canManage ? `<button class="btn ${p.is_popular ? "btn-primary" : "btn-ghost"} btn-block" onclick="__ent.checkout('${p.key}',this)">${sub.is_sandbox ? "Choose " + esc(p.label) : "Switch to " + esc(p.label)}${yearly ? " · yearly" : ""}</button>`
-            : `<div class="plan-current-tag" style="color:var(--muted)">Ask an admin to upgrade</div>`))}
+          : (!canManage ? `<div class="plan-current-tag" style="color:var(--muted)">Ask an admin to upgrade</div>`
+          : termLocked ? `<div class="plan-current-tag" style="color:var(--muted)">Your plan is paid to ${esc(fmtDate(sub.term_locked_until))} — <a href="#" onclick="__ent.go('support');return false">contact us</a> to change tier</div>`
+          : checkoutBtn(p, (sub.is_sandbox ? "Choose " + esc(p.label) : "Switch to " + esc(p.label)) + (yearly ? " · yearly" : "")) + endsMandateNote))}
       </div>`;
     };
 
@@ -10656,9 +10688,16 @@
       <div class="card" style="margin-bottom:24px"><div class="card-body" style="display:flex;align-items:center;gap:24px;flex-wrap:wrap">
         <div style="flex:1;min-width:220px">
           <div style="font-size:12px;font-weight:700;text-transform:uppercase;letter-spacing:.05em;color:var(--muted)">Current plan</div>
-          <div style="font-size:24px;font-weight:760;margin:4px 0">${esc(sub.plan_label)} ${sub.is_sandbox ? `<span style="font-size:13px;color:var(--warning);font-weight:600">· ${sub.trial_expired ? "trial ended" : (sub.trial_days_left != null ? sub.trial_days_left + " days left" : "")}</span>` : ""}</div>
+          <div style="font-size:24px;font-weight:760;margin:4px 0">${sub.plan_lapsed
+            // A LAPSED paying customer falls back to the trial's limits, so the server reports
+            // the sandbox label and is_sandbox — but they are not on a fresh trial, and its stale
+            // "0 days left" / past "Trial ends" date contradicted the expiry banner below.
+            ? `${esc(sub.lapsed_plan_label || "Paid")} plan <span style="font-size:13px;color:var(--warning);font-weight:600">· expired</span>`
+            : `${esc(sub.plan_label)} ${sub.is_sandbox ? `<span style="font-size:13px;color:var(--warning);font-weight:600">· ${sub.trial_expired ? "trial ended" : (sub.trial_days_left != null ? sub.trial_days_left + " days left" : "")}</span>` : ""}`}</div>
           <div style="font-size:13px;color:var(--text-2)">${
-            sub.current_period_end && !sub.is_sandbox
+            sub.plan_lapsed
+              ? (sub.lapsed_at ? "Expired " + fmtDate(sub.lapsed_at) + " — " : "") + "on trial limits until you renew"
+            : sub.current_period_end && !sub.is_sandbox
               // Say which of the two it is. "Renews" on a plan with no mandate is a promise
               // the system does not keep — nothing auto-charges, and the org would lapse
               // silently while believing it was covered.
@@ -10742,13 +10781,17 @@
     if (!code) { toast("Enter a discount code.", "error"); return; }
     const paid = (state.billingPlans || []).filter((p) => !p.is_free && p.monthly_paise > 0);
     if (!paid.length) { toast("No paid plans available for discounts.", "error"); return; }
+    // Validate against a plan the org can actually buy: inside a prepaid year only its own
+    // tier is on sale (the server 409s any other), so the cheapest card would refuse the code.
+    const subNow = state.subscription || {};
+    const target = (subNow.term_locked_until && paid.find((p) => p.key === subNow.plan)) || paid[0];
     await withBusy($("#billingCouponInputApply"), "", async () => {
       let res;
       try {
         // Same `currency` hint as checkout() sends, so the validated preview and the
         // eventual charge are quotes of the same price. undefined (old payload) is
         // dropped by JSON.stringify, keeping the body old-server compatible.
-        res = await api("/coupons/validate", { method: "POST", body: { code, context: "billing", plan: paid[0].key, billing_cycle: billingCycleNow(), currency: billingCurrencyHint(paid[0].key) } });
+        res = await api("/coupons/validate", { method: "POST", body: { code, context: "billing", plan: target.key, billing_cycle: billingCycleNow(), currency: billingCurrencyHint(target.key) } });
       } catch (ex) { toast(ex.message || "Invalid discount code.", "error"); return; }
       state.billingCoupon = { code: res.code, percent: res.percent_off, percent_display: res.percent_display };
       toast(res.percent_display + " discount applied.", "success");
@@ -10876,6 +10919,9 @@
     if (t.type === "bonus") return { label: "Bonus", color: "#8b5cf6" };
     if (t.action_key === "infra_fee" || t.reference_type === "infra_payment") return { label: "Infra fee", color: "#0ea5e9" };
     if (t.type === "adjustment") return { label: "Adjustment", color: "#0ea5e9" };
+    // Before the action match: a document check that returned no verdict is refunded with its
+    // action_key, and must not read as a second "Document check" charge.
+    if (t.type === "refund") return { label: "Refund", color: "#10b981" };
     if (t.action_key && CREDIT_ACTION_META[t.action_key]) return CREDIT_ACTION_META[t.action_key];
     if (t.type === "debit") return { label: "Usage", color: "#64748b" };
     return { label: t.type || "—", color: "#64748b" };
@@ -10993,7 +11039,13 @@
     const pc = w.plan_credits || {};
     const included = Number(pc.included_credits || 0);
     const left = Number(pc.remaining_this_period || 0);
-    const usedPct = included > 0 ? Math.min(100, Math.round(((included - left) / included) * 100)) : 0;
+    // Measured against what this period actually GRANTED, not the plan's current allowance:
+    // after a mid-period downgrade (or the 2026-10-22 allowance cut) the period keeps its
+    // bigger grant, so `left` can exceed `included` — (included − left) went negative, the
+    // browser dropped the invalid width and drew the bar FULL for an untouched allowance.
+    const granted = Math.max(Number(pc.granted_this_period || 0), included);
+    const usedNow = pc.used_this_period != null ? Number(pc.used_this_period) : Math.max(0, granted - left);
+    const usedPct = granted > 0 ? Math.max(0, Math.min(100, Math.round((usedNow / granted) * 100))) : 0;
     // The monthly AI reading allowance (free upload reading, counted in 15-page reads) sits
     // with the credits it complements: both are what the plan includes this period.
     const rd = w.reads || null;
@@ -13819,10 +13871,18 @@
       ["SG", "🇸🇬 Singapore (SGD)"], ["JP", "🇯🇵 Japan (JPY ¥)"],
       ["DE", "🇩🇪 Germany (EUR €)"], ["FR", "🇫🇷 France (EUR €)"], ["IE", "🇮🇪 Ireland (EUR €)"],
       ["NL", "🇳🇱 Netherlands (EUR €)"], ["IT", "🇮🇹 Italy (EUR €)"], ["ES", "🇪🇸 Spain (EUR €)"],
+      // Every member of the server's INR billing region (enterprise_billing.INR_REGION_COUNTRIES)
+      // must be pickable: "Other" (XX) deliberately means OUTSIDE that region, so a Kenyan or
+      // Ghanaian office forced onto it was moved to the USD ladder at ~2× the rupee price.
+      // "(shows USD)" is the portal DISPLAY currency, not what plans are billed in.
       ["NP", "🇳🇵 Nepal (shows USD)"], ["BD", "🇧🇩 Bangladesh (shows USD)"], ["LK", "🇱🇰 Sri Lanka (shows USD)"],
-      ["PK", "🇵🇰 Pakistan (shows USD)"], ["NG", "🇳🇬 Nigeria (shows USD)"], ["XX", "🌐 Other (shows USD)"],
+      ["PK", "🇵🇰 Pakistan (shows USD)"], ["NG", "🇳🇬 Nigeria (shows USD)"], ["GH", "🇬🇭 Ghana (shows USD)"],
+      ["KE", "🇰🇪 Kenya (shows USD)"], ["XX", "🌐 Other (shows USD)"],
     ];
     const orgCC = (org.country_code || "").toUpperCase();
+    // Locked by the server after the first verified plan payment (it decides whether INR may
+    // be charged); a change would be refused with a 400, so the picker is read-only.
+    const countryLocked = !!org.billing_country_locked;
     const countryOpts = ORG_COUNTRIES.map(([v, l]) => `<option value="${v}" ${v === orgCC ? "selected" : ""}>${l}</option>`)
       .join("") + (orgCC && !ORG_COUNTRIES.some(([v]) => v === orgCC) ? `<option value="${esc(orgCC)}" selected>${esc(orgCC)}</option>` : "");
     const countryLabel = (ORG_COUNTRIES.find(([v]) => v === orgCC) || [])[1] || orgCC || "—";
@@ -13911,12 +13971,13 @@
           <div class="card"><div class="card-body">
             ${canManage ? `
             <div class="field-row">
-              <div class="field"><label for="setCountry">Country</label><select id="setCountry">${countryOpts}</select></div>
+              <div class="field"><label for="setCountry">Country</label><select id="setCountry"${countryLocked ? " disabled" : ""}>${countryOpts}</select></div>
               <div class="field"><label for="setState">State / Region</label><input id="setState" value="${esc(org.state_region || "")}" placeholder="e.g. Karnataka, California" maxlength="80"/></div>
             </div>
             <div class="set-actions">
               <button class="btn btn-primary btn-sm" id="saveLocation">Save location</button>
-            </div>` : `
+            </div>
+            ${countryLocked ? `<div class="set-note">${ICON_INFO}<span>Your country sets your billing currency, so it's locked once a plan has been paid for. Contact support to change your billing country.</span></div>` : ""}` : `
             <div class="set-rows">
               <div class="set-row"><span class="set-row-k">Country</span><span class="set-row-v">${esc(countryLabel)}</span></div>
               <div class="set-row"><span class="set-row-k">State / Region</span><span class="set-row-v">${esc(org.state_region || "—")}</span></div>
@@ -15650,7 +15711,7 @@
     {
       id: "docscan",
       q: "Scanning and validating a document",
-      a: "<b>Uploading a document is always free</b>, and Rilono AI reads it from your plan's monthly AI document reads — when they run out the file is stored as <i>Not read yet</i> and <b>Read now</b> reads it once reads are available again. Ticking <b>Scan &amp; validate with Rilono AI</b> on the upload card is the paid part, priced by the document's length: Rilono AI reads that one document, checks it is the right type, genuine and still in date, then cross-checks it against the client's profile and their <i>already-validated</i> documents — so a document that was flagged can never quietly become the yardstick for the next one. A passed identity document also auto-fills empty profile fields; anything that differs is flagged for you, never overwritten. You can also scan any stored document later from its card, or re-scan one once more of the dossier has been validated. A scan that fails to return a verdict isn't charged. Documents a student sends through a secure request link are stored unscanned — scan them yourself when you're ready.",
+      a: "<b>Uploading a document is always free</b>, and Rilono AI reads it from your plan's monthly AI document reads — when they run out the file is stored as <i>Not read yet</i> and <b>Read now</b> reads it once reads are available again. Ticking <b>Scan &amp; validate with Rilono AI</b> on the upload card is the paid part, priced by the document's length: Rilono AI reads that one document, checks it is the right type, genuine and still in date, then cross-checks it against the client's profile and their <i>already-validated</i> documents — so a document that was flagged can never quietly become the yardstick for the next one. A passed identity document also auto-fills empty profile fields; anything that differs is flagged for you, never overwritten. You can also scan any stored document later from its card, or re-scan one once more of the dossier has been validated. The credits are taken when a scan starts, and a scan that fails to return a verdict is refunded in full. Documents a student sends through a secure request link are stored unscanned — scan them yourself when you're ready.",
       view: "credits", cta: "See what it costs",
       keys: ["scan", "validate", "validation", "document", "credit", "cost", "charge", "verify", "check", "passport", "fake", "expired", "auto-fill", "autofill", "re-scan"],
     },

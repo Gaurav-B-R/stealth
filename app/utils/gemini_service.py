@@ -246,11 +246,17 @@ def _generate_content_with_fallback(
     product: Optional[str] = None,
     trigger: Optional[str] = None,
     generation_config: Optional[dict] = None,
+    validate=None,
 ):
     """Generate with each configured model until one succeeds.
 
     `generation_config` is forwarded only when given, so every pre-existing caller sends
     exactly the request it always did (no config at all → the model's own defaults).
+
+    `validate` (optional) is called on each response before it is returned; if it raises,
+    that model counts as failed and the next one is tried. An SDK call that "succeeds" with
+    nothing usable — a reasoning model that spent its whole capped output thinking returns
+    MAX_TOKENS with no parts — would otherwise end the chain without trying a fallback.
     """
     last_error = None
     for model_name in _dedupe_model_names(model_names):
@@ -261,8 +267,12 @@ def _generate_content_with_fallback(
             if model is None:
                 continue
             if generation_config:
-                return model.generate_content(content, generation_config=dict(generation_config))
-            return model.generate_content(content)
+                response = model.generate_content(content, generation_config=dict(generation_config))
+            else:
+                response = model.generate_content(content)
+            if validate is not None:
+                validate(response)
+            return response
         except Exception as exc:
             last_error = exc
             print(
@@ -1106,6 +1116,11 @@ ENTERPRISE_READ_MAX_OUTPUT_TOKENS = _int_env("ENTERPRISE_READ_MAX_OUTPUT_TOKENS"
 # Its own ledger source, NOT the shared "document_ai" bucket: reads are a priced allowance,
 # and the margin report has to see what they really cost against what the plan charges.
 ENTERPRISE_READ_USAGE_SOURCE = "enterprise_document_read"
+# The paid document check's OWN reading of a file it has no text for. That reading is part
+# of the billed check (priced per 15-page block) and never touches the reads allowance, so
+# booking it under ENTERPRISE_READ_USAGE_SOURCE overstated the check's margin and the
+# allowance's cost at once. Listed in enterprise_credits.ACTION_SOURCE_MAP["document_scan"].
+ENTERPRISE_SCAN_READ_USAGE_SOURCE = "enterprise_document_scan_read"
 # The Developer-API upload path polls until Google finishes processing the file. The B2C
 # path polls forever; a background reader must not hang a worker on one stuck upload.
 _PDF_UPLOAD_PROCESSING_TIMEOUT_SECONDS = _int_env("ENTERPRISE_READ_UPLOAD_TIMEOUT_SECONDS", 120, minimum=1)
@@ -1289,17 +1304,69 @@ _ENTERPRISE_READ_PROMPT = (
 )
 
 
-def _enterprise_generate(model_names, content, generation_config):
+class _NoReadableText(RuntimeError):
+    """Every model in the chain answered, none with text: a problem with THIS request (e.g.
+    the output cap spent on reasoning), not a provider outage."""
+
+
+# MAX_TOKENS by enum name, or as the raw proto value some SDK builds hand back.
+_MAX_TOKENS_REASONS = {"MAX_TOKENS", "2"}
+
+
+def _finish_reason_name(response) -> str:
+    """candidates[0].finish_reason as an upper-case name ("" when absent). Never raises."""
+    try:
+        candidates = getattr(response, "candidates", None) or []
+        if not candidates:
+            return ""
+        reason = getattr(candidates[0], "finish_reason", None)
+        if reason is None:
+            return ""
+        name = getattr(reason, "name", None)
+        return str(name if name is not None else reason).strip().upper()
+    except Exception:  # noqa: BLE001
+        return ""
+
+
+def _enterprise_read_text(response) -> tuple[str, bool]:
+    """(text, cut_off) of one read answer. Never raises.
+
+    `.text` raises on the Developer API (and is None on Vertex) when the candidate has no
+    parts, and a MAX_TOKENS answer that does carry text is a PARTIAL transcription — the
+    2,048-token cap is real on a dense statement — which must never be stored as the whole
+    file without saying so."""
+    try:
+        text = response.text
+    except Exception:  # noqa: BLE001 — a part-less candidate
+        text = None
+    return str(text or "").strip(), _finish_reason_name(response) in _MAX_TOKENS_REASONS
+
+
+def _require_read_text(response) -> None:
+    """`validate` hook for the read chain: an answer with no text is a failed attempt, so the
+    next model is tried instead of the document being marked unread."""
+    text, _ = _enterprise_read_text(response)
+    if not text:
+        raise _NoReadableText(f"no usable text (finish_reason={_finish_reason_name(response) or 'unknown'})")
+
+
+def _cut_off_note(scope: str) -> str:
+    return f"[The transcription of {scope} was cut off at the output limit; later facts in it are missing.]"
+
+
+def _enterprise_generate(model_names, content, generation_config, usage_source=ENTERPRISE_READ_USAGE_SOURCE):
     return _generate_content_with_fallback(
-        model_names, content, ENTERPRISE_READ_USAGE_SOURCE, generation_config=generation_config,
+        model_names, content, usage_source, generation_config=generation_config,
+        validate=_require_read_text,
     )
 
 
-def _generate_from_pdf_bytes(model_names, prompt: str, pdf_bytes: bytes, generation_config):
+def _generate_from_pdf_bytes(model_names, prompt: str, pdf_bytes: bytes, generation_config,
+                             usage_source=ENTERPRISE_READ_USAGE_SOURCE):
     """One read request over a PDF held in memory, on whichever provider is selected."""
     if USE_VERTEX_AI and VERTEX_AI_AVAILABLE:
         pdf_part = Part.from_data(pdf_bytes, mime_type="application/pdf")
-        return _enterprise_generate(model_names, [prompt, pdf_part], generation_config)
+        return _enterprise_generate(model_names, [prompt, pdf_part], generation_config, usage_source)
 
     import tempfile
     import time
@@ -1317,7 +1384,7 @@ def _generate_from_pdf_bytes(model_names, prompt: str, pdf_bytes: bytes, generat
                 pdf_file = genai.get_file(pdf_file.name)
             if pdf_file.state.name == "FAILED":
                 raise RuntimeError("PDF processing failed")
-            return _enterprise_generate(model_names, [prompt, pdf_file], generation_config)
+            return _enterprise_generate(model_names, [prompt, pdf_file], generation_config, usage_source)
         finally:
             # Unlike the B2C path, delete on failure too: an abandoned upload is ours to
             # clean up whichever way the read ended.
@@ -1332,13 +1399,16 @@ def _generate_from_pdf_bytes(model_names, prompt: str, pdf_bytes: bytes, generat
             pass
 
 
-def _read_pdf_in_blocks(model_names, blocks, total_pages: int, generation_config) -> Optional[str]:
+def _read_pdf_in_blocks(model_names, blocks, total_pages: int, generation_config,
+                       usage_source=ENTERPRISE_READ_USAGE_SOURCE) -> Optional[str]:
     """Read each block in its own request and stitch the results in page order.
 
     A block that fails is marked in the text rather than silently dropped, so the
-    assistant never presents a partial transcription as the whole file. If the FIRST block
-    fails outright the read is abandoned: that is a provider/model outage, and trying the
-    remaining blocks would only repeat the same failing chain up to max_blocks times.
+    assistant never presents a partial transcription as the whole file — and a block cut
+    off at the output cap says so. If the FIRST block fails outright the read is abandoned:
+    that is a provider/model outage, and trying the remaining blocks would only repeat the
+    same failing chain up to max_blocks times. A block every model answered without text
+    is that block's problem, not an outage, so it is marked and the rest are still read.
     """
     sections = []
     read_any = False
@@ -1348,16 +1418,20 @@ def _read_pdf_in_blocks(model_names, blocks, total_pages: int, generation_config
             f"{_ENTERPRISE_READ_PROMPT}\n\nThis file is pages {first_page}–{last_page} of a "
             f"{total_pages}-page document. Cover only what these pages contain."
         )
-        text = ""
+        text, cut_off = "", False
         try:
-            response = _generate_from_pdf_bytes(model_names, prompt, block_bytes, generation_config)
-            text = (response.text or "").strip()
-        except Exception as exc:  # noqa: BLE001 — includes .text on a part-less (truncated) answer
+            response = _generate_from_pdf_bytes(model_names, prompt, block_bytes, generation_config, usage_source)
+            text, cut_off = _enterprise_read_text(response)
+        except _NoReadableText as exc:
+            print(f"⚠ Enterprise reading got no text for {label} ({exc}).")
+        except Exception as exc:  # noqa: BLE001
             print(f"⚠ Enterprise reading failed for {label} ({type(exc).__name__}).")
             if not read_any:
                 return None
         if text:
             read_any = True
+            if cut_off:
+                text = f"{text}\n{_cut_off_note(f'pages {first_page}–{last_page}')}"
             sections.append(f"[{label}]\n{text}")
         else:
             sections.append(f"[{label}: could not be read]")
@@ -1379,12 +1453,22 @@ def _read_document_for_enterprise(
     *,
     model_candidates: Optional[list[str]],
     max_blocks: Optional[int],
+    usage_source: Optional[str] = None,
 ) -> Optional[str]:
     if not is_ai_configured():
         return None
     model_names = _dedupe_model_names(list(model_candidates or [])) or enterprise_read_model_candidates()
     generation_config = {"max_output_tokens": int(ENTERPRISE_READ_MAX_OUTPUT_TOKENS)}
     block_cap = _resolve_block_cap(max_blocks)
+    source = usage_source or ENTERPRISE_READ_USAGE_SOURCE
+
+    def _whole(response) -> Optional[str]:
+        # One request held the whole file: a cut-off answer is marked, an empty one is None.
+        text, cut_off = _enterprise_read_text(response)
+        if not text:
+            return None
+        return f"{text}\n\n{_cut_off_note('this document')}" if cut_off else text
+
     try:
         data = bytes(file_contents or b"")
         extension = os.path.splitext(str(filename or ""))[1].lower()
@@ -1395,18 +1479,18 @@ def _read_document_for_enterprise(
             response = _enterprise_generate(
                 model_names,
                 f"{_ENTERPRISE_READ_PROMPT}\n\nDocument content:\n{text_content[:50000]}",
-                generation_config,
+                generation_config, source,
             )
-            return response.text
+            return _whole(response)
 
         if _reads_as_pdf(data, filename, mime_type):
             split = _split_pdf_blocks(data, block_cap)
             if split is not None and split[0]:
                 blocks, total_pages = split
-                return _read_pdf_in_blocks(model_names, blocks, total_pages, generation_config)
+                return _read_pdf_in_blocks(model_names, blocks, total_pages, generation_config, source)
             # One block or less, or pypdf unavailable: the whole file in one request.
-            response = _generate_from_pdf_bytes(model_names, _ENTERPRISE_READ_PROMPT, data, generation_config)
-            return response.text
+            response = _generate_from_pdf_bytes(model_names, _ENTERPRISE_READ_PROMPT, data, generation_config, source)
+            return _whole(response)
 
         # Images — and any other type, tried as an image (as the default reader does).
         try:
@@ -1419,8 +1503,8 @@ def _read_document_for_enterprise(
             image_part = Part.from_data(buffer.getvalue(), mime_type="image/png")
         else:
             image_part = image
-        response = _enterprise_generate(model_names, [_ENTERPRISE_READ_PROMPT, image_part], generation_config)
-        return response.text
+        response = _enterprise_generate(model_names, [_ENTERPRISE_READ_PROMPT, image_part], generation_config, source)
+        return _whole(response)
     except Exception as exc:  # noqa: BLE001
         print(f"Error reading enterprise document with Gemini: {type(exc).__name__}")
         return None
@@ -1432,6 +1516,7 @@ def extract_text_from_document(
     mime_type: str,
     model_candidates: Optional[list[str]] = None,
     max_blocks: Optional[int] = None,
+    usage_source: Optional[str] = None,
 ) -> Optional[str]:
     """Extract a document's information as text, or None if it could not be read.
 
@@ -1444,16 +1529,19 @@ def extract_text_from_document(
       * PDFs over READ_BLOCK_PAGES pages are read in 15-page blocks via pypdf, at most
         min(max_blocks, ENTERPRISE_READ_MAX_BLOCKS) blocks, each block's text headed
         "[Pages a–b of N]" and a trailing note when pages were left unread;
-      * every request's output is capped at ENTERPRISE_READ_MAX_OUTPUT_TOKENS;
-      * usage is booked under ENTERPRISE_READ_USAGE_SOURCE.
+      * every request's output is capped at ENTERPRISE_READ_MAX_OUTPUT_TOKENS, and an answer
+        cut off there is kept but marked as cut off; one with no text tries the next model;
+      * usage is booked under `usage_source`, default ENTERPRISE_READ_USAGE_SOURCE (the paid
+        check's own reading passes ENTERPRISE_SCAN_READ_USAGE_SOURCE).
     Charge reads with enterprise_read_units(contents, filename, mime_type, max_blocks=<same
-    cap>) so the meter and the reader agree on what was requested.
+    cap>) so the meter and the reader agree on what was requested. `usage_source` alone does
+    not select enterprise reading.
     """
     if model_candidates is None and max_blocks is None:
         return _extract_text_from_document_default(file_contents, filename, mime_type)
     return _read_document_for_enterprise(
         file_contents, filename, mime_type,
-        model_candidates=model_candidates, max_blocks=max_blocks,
+        model_candidates=model_candidates, max_blocks=max_blocks, usage_source=usage_source,
     )
 
 

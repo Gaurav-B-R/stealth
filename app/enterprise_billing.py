@@ -182,6 +182,12 @@ def _country_set_env(env_key: str, default_codes: tuple[str, ...]) -> frozenset[
 INR_REGION_COUNTRIES = _country_set_env(
     "ENTERPRISE_INR_REGION_COUNTRIES", ("IN", "NP", "BD", "LK", "NG", "GH", "KE")
 )
+# org.country_code is owner-editable (Settings), so on its own it is a self-declared claim
+# to the INR price. When true (default), INR is chargeable only if the request's CDN geo
+# country is unknown or ALSO in the INR region: an owner browsing from London who sets
+# their country to IN is quoted (and charged) GBP. Unknown geo (no CDN header, background
+# paths) keeps trusting the org's country. See billing_country_for.
+INR_REQUIRE_GEO_MATCH = _bool_env("ENTERPRISE_INR_REQUIRE_GEO_MATCH", True)
 
 
 # ---------------------------------------------------------------------------
@@ -695,14 +701,42 @@ def request_geo_country(request) -> Optional[str]:
         return None
 
 
+def billing_country_for(org_country: str | None, request=None) -> Optional[str]:
+    """The country the currency-region rule is applied with, for an org whose stored
+    `country_code` is `org_country`, billed in the context of `request`.
+
+      * No country on file -> the request's CDN geo country (None when unknown).
+      * An INR-region country on file, but a KNOWN geo country outside the region (and
+        INR_REQUIRE_GEO_MATCH on) -> the geo country. The stored country is owner-editable,
+        and INR is ~60% below the foreign ladders; setting "IN" in Settings must not be how
+        a London consultancy buys at the rupee price. The geo country then picks the
+        ladder currency (else USD), exactly as for an org with no country on file.
+      * Otherwise the stored country (geo unknown, or agreeing with the region).
+
+    Every surface that quotes or charges (charge_currency_for_org, the subscription state,
+    the currency selector) goes through this, so the price shown is the price charged."""
+    org_c = _norm_country(org_country)
+    geo = request_geo_country(request)
+    if org_c is None:
+        return geo
+    if (
+        INR_REQUIRE_GEO_MATCH and geo and org_c in INR_REGION_COUNTRIES
+        and geo not in INR_REGION_COUNTRIES
+    ):
+        return geo
+    return org_c
+
+
 def charge_currency_for_org(db: Session, organization, hint: str | None, request=None) -> str:
     """Decide what currency to CHARGE (and quote) an organization in.
 
     Order: validate the buyer's hint strictly (an unknown or not-enabled code is a 400,
     never a silent coercion) -> candidate = hint, else the stored/country fallback
     (fallback_charge_currency) -> clamp to the org's currency region
-    (region_charge_currency). The country is the org's own `country_code`; when that is
-    missing, the request's CDN geo country; when both are unknown, INR stays allowed.
+    (region_charge_currency). The country is billing_country_for: the org's own
+    `country_code`, unless it claims the INR region while the request's geo country is
+    known and outside it (then the geo country); when the org has none, the request's CDN
+    geo country; when both are unknown, INR stays allowed.
 
     `organization` may be the model or its id. Used for plan checkout, credit top-up
     checkout and every displayed quote, so the price a buyer sees is the price they pay.
@@ -724,7 +758,7 @@ def charge_currency_for_org(db: Session, organization, hint: str | None, request
                     + ", ".join(money.supported_charge_currencies()) + "."
                 ),
             )
-    country = _norm_country(getattr(org, "country_code", None)) or request_geo_country(request)
+    country = billing_country_for(getattr(org, "country_code", None), request)
     candidate = code or fallback_charge_currency(getattr(org, "billing_currency", None), country)
     return region_charge_currency(candidate, country)
 
@@ -887,7 +921,19 @@ def public_plans_payload(currency: str | None = None, *, usd_estimate: bool = Fa
         plan = PLANS[key]
         if not plan["is_public"]:
             continue
-        quote = checkout_quote(key, code)
+        if plan.get("price_product"):
+            quote = checkout_quote(key, code)
+        else:
+            # A free card has no price book entry, so checkout_quote would fall back to INR
+            # (resolve_plan_currency's guard for PAID checkout) and a US org's trial card read
+            # "₹0" with GST 18% beside "$39". Free is free in the card's own currency, untaxed.
+            quote = {
+                **money.quote_with_tax(0, code),
+                "list_minor": 0,
+                "list_display": money.format_money(0, code),
+                "tax_label": None,
+                "tax_percent": 0.0,
+            }
         monthly = quote["list_minor"]
         paid = bool(plan.get("price_product")) and monthly > 0
         yq = checkout_quote(key, code, billing_cycle="yearly") if paid else None
@@ -1457,6 +1503,80 @@ def _latest_plan_payment(db: Session, organization_id: int):
         )
 
 
+# How far back live_term_lock walks the payment chain. A yearly term plus a few stacked
+# months is a handful of rows; the cap only bounds the query.
+_TERM_LOCK_CHAIN_LIMIT = 24
+
+
+def live_term_lock(db: Session, organization_id: int, *, sub=None, now: Optional[datetime] = None) -> Optional[dict]:
+    """{plan, plan_label, ends_at} while a prepaid YEARLY term is still running, else None.
+
+    WHY A TIER CHANGE IS REFUSED DURING ONE. Every plan payment sets `sub.plan` at once but
+    stacks its days AFTER the coverage already paid for, and the monthly allowance
+    sub-periods of that coverage are keyed by the CURRENT plan
+    (enterprise_credits.plan_credits_period_key). So one monthly purchase of a higher tier
+    would re-tier the rest of a paid year (its credits, reads, seats, files and features for
+    ~11 months, for one month's price) and a lower-tier purchase would throw away the rest of
+    a prepaid higher-tier year. Same-tier purchases (renewing early) are unaffected.
+
+    Locked when: the effective plan is paid and not lapsed; more than one PLAN_PERIOD_DAYS of
+    coverage is left (inside the last month a change costs at most the month-on-month overlap
+    that monthly plans have always had); and a yearly payment's coverage, walked back from
+    `current_period_end` through the org's payments newest first, still reaches past now.
+    """
+    if ENTERPRISE_FREE:
+        return None
+    if sub is None:
+        sub = subscription_snapshot(db, organization_id)
+    plan_key = effective_plan_key(sub)
+    if plan_key not in PAID_PLAN_KEYS:
+        return None
+    now = now or datetime.utcnow()
+    end = _as_naive(getattr(sub, "current_period_end", None))
+    if not end or end - now <= timedelta(days=PLAN_PERIOD_DAYS):
+        return None
+    with db.no_autoflush:
+        cycles = (
+            db.query(models.EnterpriseSubscriptionPayment.billing_cycle)
+            .filter(
+                models.EnterpriseSubscriptionPayment.organization_id == int(organization_id),
+                # Same statuses as the coverage chain: a refunded payment still extended the
+                # period (nothing rolls coverage back).
+                models.EnterpriseSubscriptionPayment.status.in_(
+                    ("verified", "partially_refunded", "refunded")
+                ),
+            )
+            .order_by(models.EnterpriseSubscriptionPayment.id.desc())
+            .limit(_TERM_LOCK_CHAIN_LIMIT)
+            .all()
+        )
+    segment_end = end
+    for (cycle,) in cycles:
+        if segment_end <= now:
+            break
+        if _is_yearly(cycle):
+            return {"plan": plan_key, "plan_label": PLANS[plan_key]["label"], "ends_at": end}
+        segment_end -= timedelta(days=period_days_for(cycle))
+    return None
+
+
+def term_lock_message(lock: dict) -> str:
+    ends = _as_naive(lock.get("ends_at"))
+    when = f"{ends:%b} {ends.day}, {ends:%Y}" if ends else "the end of your term"
+    return (
+        f"Your {lock.get('plan_label') or 'current'} plan is paid up to {when}. To change plans "
+        "before then, contact us and we'll adjust your invoice."
+    )
+
+
+def enforce_no_tier_change_during_term_or_409(db: Session, organization_id: int, plan_key: str) -> None:
+    """409 when buying `plan_key` would change tier inside a live yearly term (see
+    live_term_lock). Same-tier purchases pass — renewing early just stacks time."""
+    lock = live_term_lock(db, organization_id)
+    if lock and normalize_plan_key(plan_key) != lock["plan"]:
+        raise HTTPException(status_code=409, detail=term_lock_message(lock))
+
+
 def _build_subscription_state(
     db: Session, organization_id: int, *, read_only: bool = False, sub=None, request=None,
 ) -> dict:
@@ -1492,12 +1612,13 @@ def _build_subscription_state(
         .first()
     )
     org_created_at = org_row[0] if org_row else None
-    # The org's own country, else the request's geo country — exactly the country
+    # The org's own country, else the request's geo country (billing_country_for, which also
+    # overrides an INR-region claim the geo contradicts) — exactly the country
     # charge_currency_for_org decides by, so the region clamp below, `inr_region` and the
     # US$-estimate flag all match what /billing/plans shows and checkout charges. Ignoring
     # the request here once quoted a London office with no country on file in INR while its
     # cards (and its checkout) were in GBP.
-    org_country = (_norm_country(org_row[2]) if org_row else None) or request_geo_country(request)
+    org_country = billing_country_for(org_row[2] if org_row else None, request)
     grandfathered = is_grandfathered(sub, org_created_at)
     files = _file_limit_state(sub, clients_used, max_clients)
     can_add_client = files["can_add"] and not trial_expired
@@ -1542,6 +1663,7 @@ def _build_subscription_state(
     }
     reads = _reads_snapshot(db, organization_id, limits)
     trial_domain_blocked = bool(getattr(sub, "trial_domain_blocked", False))
+    term_lock = live_term_lock(db, organization_id, sub=sub)
 
     # The US$ estimate is for the NON-Indian members of the INR region (Nepal, Bangladesh,
     # …): they are charged INR and think in dollars. An Indian org, or one whose country is
@@ -1579,6 +1701,9 @@ def _build_subscription_state(
         "lapsed_at": sub.current_period_end if plan_lapsed else None,
         # The cycle of the latest plan payment ("monthly"/"yearly"); None if never paid.
         "billing_cycle": (latest_payment[1] or "monthly") if latest_payment else None,
+        # Set while a prepaid yearly term runs (live_term_lock): checkout refuses a CHANGE of
+        # tier until then (renewing the same tier is fine), and the cards say so.
+        "term_locked_until": term_lock["ends_at"] if term_lock else None,
         # `is_trial` keeps its name (the deployed SPA branches on it) and now means
         # "on the free sandbox tier".
         "is_trial": is_sandbox,

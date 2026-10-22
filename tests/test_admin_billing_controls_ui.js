@@ -146,7 +146,8 @@ function setup({ fetchImpl, grant = access(), confirmAnswer = true } = {}) {
     });
     vm.runInContext(`${source}
 ;globalThis.ui = { state, refs, applyAdminAccess, adminFetch, renderAccountDetails, loadAccountDetails,
-    billingMajorToMinor, readOfflinePaymentForm, readOverridesForm, buildBillingControlsBlock, buildPlanPaymentsBlock };`, context);
+    billingMajorToMinor, readOfflinePaymentForm, readOverridesForm, buildBillingControlsBlock, buildPlanPaymentsBlock,
+    renderCouponTable };`, context);
     context.__confirm = async (message, opts) => {
         confirms.push({ message, opts: plain(opts || {}) });
         return confirmAnswer;
@@ -240,6 +241,52 @@ test('the Admin sees the billing controls; an Editor sees the plan payments but 
     const editorHtml = editor.refs.accountDetails.innerHTML;
     assert.doesNotMatch(editorHtml, /Billing controls/);
     assert.match(editorHtml, /Plan payments/);
+});
+
+test('plan payments show the offline note (escaped), only when there is one, and flag a superseded charge', () => {
+    const app = setup();
+    const base = details().plan_payments[0];
+    const html = app.buildPlanPaymentsBlock({ plan_payments: [
+        { ...base, note: 'NEFT <b>after</b> demo; 10% negotiated' },
+        { ...base, id: 8, is_offline: false, provider: 'razorpay', provider_label: 'Razorpay checkout', reference: 'pay_X1',
+          created_by_name: null, note: null, status: 'superseded' },
+    ] });
+    assert.match(html, /NEFT &lt;b&gt;after&lt;\/b&gt; demo; 10% negotiated/);
+    assert.doesNotMatch(html, /<b>after/);
+    const rows = html.split('<tr>').slice(2);       // [header, offline row, checkout row]
+    assert.equal(rows.length, 2);
+    // The checkout row carries no note, so no extra meta line beyond its reference.
+    assert.equal((rows[1].match(/enterprise-meta/g) || []).length, 3, 'cycle, tax, reference only');
+    assert.match(rows[1], /account-status-chip failed">superseded/);
+});
+
+test('a legacy coupon above the cap is listed at the percent checkout really gives', () => {
+    const app = setup();
+    app.state.couponList = [
+        { id: 1, code: 'LAUNCH50', percent_off: 50, percent_display: '50%', effective_percent_display: '15%', above_cap: true,
+          is_active: true, applies_to: 'all', redemptions_used: 0, max_redemptions: null },
+        { id: 2, code: 'TEN', percent_off: 10, percent_display: '10%', effective_percent_display: '10%', above_cap: false,
+          is_active: true, applies_to: 'all', redemptions_used: 0, max_redemptions: null },
+    ];
+    app.renderCouponTable();
+    const html = app.get('adminCouponTableBody').innerHTML;
+    assert.match(html, /<td>15%<div class="enterprise-meta">saved as 50% · above cap<\/div><\/td>/);
+    assert.match(html, /<td>10%<\/td>/);
+});
+
+test('inside a prepaid term the payment form offers an explicit tier change, and sends it only when ticked', () => {
+    const app = setup();
+    app.renderAccountDetails(details());
+    assert.doesNotMatch(app.refs.accountDetails.innerHTML, /billingPayTierNow/, 'no option without a running term');
+
+    app.renderAccountDetails(details({ billing_controls: controls({
+        term_locked_until: '2027-08-01T00:00:00', term_locked_plan: 'starter', term_locked_plan_label: 'Starter' }) }));
+    assert.match(app.refs.accountDetails.innerHTML, /id="billingPayTierNow"[\s\S]*prepaid Starter term/);
+    fill(app, { billingPayPlan: 'scale', billingPayCycle: 'monthly', billingPayProvider: 'invoice',
+        billingPayCurrency: 'INR', billingPayAmount: '11,798.82', billingPayReference: 'INV-9' });
+    assert.equal(app.readOfflinePaymentForm(controls()).body.change_tier_now, undefined);
+    app.get('billingPayTierNow').checked = true;
+    assert.equal(app.readOfflinePaymentForm(controls()).body.change_tier_now, true);
 });
 
 test('a granted demo bonus shows its date instead of the button', () => {

@@ -28,10 +28,10 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException
 from fastapi.testclient import TestClient
 from pypdf import PdfWriter
-from sqlalchemy import create_engine
+from sqlalchemy import create_engine, event
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
 
@@ -83,6 +83,9 @@ class FakeStorage:
             raise enterprise_storage.DocumentNotFound(key)
         return self.blobs[key]
 
+    def delete(self, key):
+        self.blobs.pop(key, None)
+
 
 class FakeReader:
     """gemini_service.extract_text_from_document stand-in that records each call."""
@@ -92,9 +95,11 @@ class FakeReader:
         self.result = "Extracted text of the document."
         self.fail = False
 
-    def __call__(self, contents, filename, mime_type, model_candidates=None, max_blocks=None):
+    def __call__(self, contents, filename, mime_type, model_candidates=None, max_blocks=None,
+                 usage_source=None):
         self.calls.append({
             "filename": filename, "model_candidates": model_candidates, "max_blocks": max_blocks,
+            "usage_source": usage_source,
         })
         if self.fail:
             raise RuntimeError("model down")
@@ -180,6 +185,7 @@ def ctx(monkeypatch):
     monkeypatch.setattr(enterprise_storage, "is_configured", lambda: True)
     monkeypatch.setattr(enterprise_storage, "store_document", storage.store)
     monkeypatch.setattr(enterprise_storage, "fetch_document", storage.fetch)
+    monkeypatch.setattr(enterprise_storage, "delete_document", storage.delete)
     reader = FakeReader()
     monkeypatch.setattr(gemini_service, "is_ai_configured", lambda: True)
     monkeypatch.setattr(gemini_service, "extract_text_from_document", reader)
@@ -747,6 +753,289 @@ def test_legacy_document_with_text_is_already_read(ctx):
 
 
 # ---------------------------------------------------------------------------
+# 5b. Overlapping requests: paid checks, reads and the secure link
+#
+# These run the background workers LATE (DeferredThreads), the way a busy server does: every
+# request of a batch has returned before any model call has. Inline workers hid all of it.
+# ---------------------------------------------------------------------------
+
+class DeferredThreads:
+    """threading.Thread stand-in that queues each worker until run()."""
+
+    def __init__(self):
+        self.queue = []
+
+    def Thread(self, target=None, daemon=None, **_kw):
+        queue = self.queue
+        return SimpleNamespace(start=lambda: queue.append(target))
+
+    def run(self):
+        while self.queue:
+            self.queue.pop(0)()
+
+
+@pytest.fixture
+def deferred(ctx, monkeypatch):
+    threads = DeferredThreads()
+    monkeypatch.setattr(enterprise, "threading", SimpleNamespace(Thread=threads.Thread))
+    yield threads
+    # A worker never run leaves its id registered, and the next test's sqlite ids restart at 1.
+    with enterprise._DOC_READS_IN_FLIGHT_LOCK:
+        enterprise._DOC_READS_IN_FLIGHT.clear()
+
+
+def _as_another_process():
+    """The next request is served by another worker process: this one's in-flight set is not
+    there — only what the database says."""
+    with enterprise._DOC_READS_IN_FLIGHT_LOCK:
+        enterprise._DOC_READS_IN_FLIGHT.clear()
+
+
+def _scan_txns(c):
+    c.db.expire_all()
+    T = models.EnterpriseCreditTransaction
+    return [(t.type, t.credits) for t in c.db.query(T).filter_by(action_key="document_scan").order_by(T.id)]
+
+
+def _scan(c, client, doc):
+    return c.client.post(f"/api/enterprise/clients/{client.id}/documents/{doc.id}/scan")
+
+
+def _read_now(c, client, doc):
+    return c.client.post(f"/api/enterprise/clients/{client.id}/documents/{doc.id}/read")
+
+
+def test_paid_checks_uploaded_together_cannot_overcommit_the_wallet(ctx, deferred):
+    """The check used to be pre-checked in the request and debited only once its model call
+    returned: on an 8-credit wallet five 30-page uploads all passed, all five checks ran, and
+    four were free. The request now debits it."""
+    client = add_client(ctx)
+    block = credits.action_cost("document_scan")
+    funded(ctx, balance=2 * block)              # exactly one 30-page check
+    statuses = [upload(ctx, client, pages=30, scan=True, name=f"s{i}.pdf").status_code for i in range(5)]
+    assert statuses == [200, 402, 402, 402, 402]
+    assert wallet(ctx).balance_credits == 0     # taken before any model call
+    assert len(ctx.storage.blobs) == 1          # the refused uploads stored nothing
+    deferred.run()
+    assert len(ctx.checks) == 1
+    assert _scan_txns(ctx) == [("debit", -2 * block)]
+    (doc,) = ctx.db.query(models.EnterpriseClientDocument).all()
+    assert doc.validation_status == "invalid" and doc.validation_credits_charged == 2 * block
+
+
+def test_scan_clicks_on_stored_documents_are_debited_in_the_request(ctx, deferred):
+    client = add_client(ctx)
+    block = credits.action_cost("document_scan")
+    funded(ctx, balance=2 * block)
+    docs = [add_document(ctx, client, pages=30, read_status="read", text="t", name=f"d{i}.pdf") for i in range(5)]
+    assert [_scan(ctx, client, d).status_code for d in docs] == [200, 402, 402, 402, 402]
+    assert [doc_row(ctx, d.id).validation_status for d in docs[1:]] == ["not_scanned"] * 4
+    deferred.run()
+    assert len(ctx.checks) == 1 and _scan_txns(ctx) == [("debit", -2 * block)]
+
+
+@pytest.mark.parametrize("failure", ["no_verdict", "model_raises"])
+def test_a_check_with_no_verdict_is_refunded_to_the_bucket_it_came_from(ctx, monkeypatch, failure):
+    def broken(contents, filename, mime_type, **kw):
+        if failure == "model_raises":
+            raise RuntimeError("model down")
+        return None
+
+    monkeypatch.setattr(gemini_service, "validate_and_extract_document", broken)
+    client = add_client(ctx)
+    block = credits.action_cost("document_scan")
+    w = funded(ctx, balance=20)
+    w.plan_credits_remaining = 3                # 3 plan credits, 17 purchased
+    ctx.db.commit()
+    before = (20, 3, wallet(ctx).lifetime_spent_credits)
+    r = upload(ctx, client, pages=30, scan=True)
+    assert r.status_code == 200, r.text
+    doc = doc_row(ctx, r.json()["document"]["id"])
+    assert doc.validation_status == "error" and doc.validation_credits_charged == 0
+    w = wallet(ctx)
+    # Exactly undone: the 3 plan credits go back to the plan bucket, the 5 purchased ones stay
+    # purchased (a refund into the plan bucket would make them expire at rollover).
+    assert (w.balance_credits, w.plan_credits_remaining, w.lifetime_spent_credits) == before
+    assert _scan_txns(ctx) == [("debit", -2 * block), ("refund", 2 * block)]
+
+
+def test_a_check_whose_document_is_deleted_while_queued_is_refunded(ctx, deferred):
+    client = add_client(ctx)
+    block = credits.action_cost("document_scan")
+    funded(ctx, balance=20)
+    doc_id = upload(ctx, client, pages=1, scan=True).json()["document"]["id"]
+    assert wallet(ctx).balance_credits == 20 - block
+    ctx.db.query(models.EnterpriseClientDocument).filter_by(id=doc_id).delete()
+    ctx.db.commit()
+    deferred.run()
+    assert wallet(ctx).balance_credits == 20 and ctx.checks == []
+    assert _scan_txns(ctx) == [("debit", -block), ("refund", block)]
+
+
+def test_a_check_the_wallet_can_no_longer_pay_leaves_nothing_stored(ctx, monkeypatch):
+    """The pre-checks passed, then a concurrent action drained the wallet before the debit."""
+    client = add_client(ctx)
+    funded(ctx, balance=100)
+
+    def drained(*a, **kw):
+        raise HTTPException(status_code=402, detail="Not enough credits for Document check.")
+
+    monkeypatch.setattr(credits, "reserve_action", drained)
+    r = upload(ctx, client, pages=1, scan=True)
+    assert r.status_code == 402
+    assert ctx.storage.blobs == {}
+    assert ctx.db.query(models.EnterpriseClientDocument).count() == 0
+
+
+def test_a_scan_in_flight_hides_read_now_on_every_process_and_reads_once(ctx, deferred):
+    client = add_client(ctx)
+    funded(ctx, balance=100, reads_used=0)
+    doc = add_document(ctx, client, pages=40, read_status="not_read")
+    r = _scan(ctx, client, doc)
+    assert r.status_code == 200, r.text
+    assert r.json()["document"]["can_read_now"] is False
+    assert _read_now(ctx, client, doc).status_code == 409
+    _as_another_process()
+    listed = ctx.client.get(f"/api/enterprise/clients/{client.id}/documents").json()["documents"]
+    assert listed[0]["can_read_now"] is False
+    r = _read_now(ctx, client, doc)
+    assert r.status_code == 409 and "already reading" in r.json()["detail"]
+    deferred.run()
+    assert len(ctx.reader.calls) == 1 and wallet(ctx).reads_used == 0
+    row = doc_row(ctx, doc.id)
+    assert row.read_status == "read" and row.read_blocks == 0 and row.validation_status == "invalid"
+    # The check's own reading is the check's cost, not the reads allowance's.
+    assert ctx.reader.calls[0]["usage_source"] == gemini_service.ENTERPRISE_SCAN_READ_USAGE_SOURCE
+
+
+def test_a_read_in_flight_refuses_a_scan_without_charging_it(ctx, deferred):
+    client = add_client(ctx)
+    funded(ctx, balance=100, reads_used=0)
+    doc = add_document(ctx, client, pages=40, read_status="not_read")
+    assert _read_now(ctx, client, doc).status_code == 200
+    r = _scan(ctx, client, doc)
+    assert r.status_code == 409 and "already reading" in r.json()["detail"]
+    _as_another_process()
+    assert _scan(ctx, client, doc).status_code == 409
+    assert wallet(ctx).balance_credits == 100 and _scan_txns(ctx) == []
+    deferred.run()
+    assert len(ctx.reader.calls) == 1 and ctx.checks == []
+    assert ctx.reader.calls[0]["usage_source"] == gemini_service.ENTERPRISE_READ_USAGE_SOURCE
+
+
+def test_read_now_on_an_old_upload_cannot_be_claimed_again_by_another_process(ctx, deferred):
+    """Staleness was judged by the UPLOAD time, and "Read now" runs on old uploads: on a
+    second worker process a read that had just started already looked orphaned, so a second
+    click read the file again and took its reads twice."""
+    client = add_client(ctx)
+    funded(ctx, reads_used=0)
+    doc = add_document(ctx, client, pages=31, read_status="not_read",
+                       created_at=datetime.utcnow() - timedelta(days=2))
+    assert _read_now(ctx, client, doc).status_code == 200
+    assert wallet(ctx).reads_used == 3
+    _as_another_process()
+    listed = ctx.client.get(f"/api/enterprise/clients/{client.id}/documents").json()["documents"]
+    assert listed[0]["can_read_now"] is False
+    r = _read_now(ctx, client, doc)
+    assert r.status_code == 409 and "already reading" in r.json()["detail"]
+    assert wallet(ctx).reads_used == 3
+    deferred.run()
+    assert len(ctx.reader.calls) == 1
+
+
+def test_a_read_claimed_long_ago_is_still_reclaimed(ctx):
+    client = add_client(ctx)
+    funded(ctx, reads_used=0)
+    doc = add_document(ctx, client, read_status="pending", created_at=datetime.utcnow() - timedelta(days=2))
+    doc.read_started_at = datetime.utcnow() - timedelta(minutes=enterprise.ENTERPRISE_DOC_READ_STALE_MINUTES + 5)
+    ctx.db.commit()
+    assert enterprise._document_can_read_now(doc_row(ctx, doc.id)) is True
+    r = _read_now(ctx, client, doc)
+    assert r.status_code == 200, r.text
+    assert doc_row(ctx, doc.id).read_status == "read"
+
+
+def test_two_reclaims_of_one_orphan_cannot_both_win(ctx):
+    client = add_client(ctx)
+    old = datetime.utcnow() - timedelta(minutes=enterprise.ENTERPRISE_DOC_READ_STALE_MINUTES + 5)
+    doc = add_document(ctx, client, read_status="pending", created_at=old)
+    # What a second process loaded before the first claim landed: still a stale "pending".
+    stale_view = SimpleNamespace(id=doc.id, read_status="pending")
+    assert enterprise._claim_document_read(ctx.db, doc) is True
+    ctx.db.commit()
+    assert enterprise._claim_document_read(ctx.db, stale_view) is False
+    ctx.db.rollback()
+    assert doc_row(ctx, doc.id).read_started_at is not None
+
+
+def _docreq(c, client, *types):
+    req = models.EnterpriseDocumentRequest(
+        organization_id=c.org.id, client_id=client.id, token_hash=hash_token("docreq-token-2"),
+        email=client.email, expires_at=datetime.utcnow() + timedelta(days=5),
+    )
+    c.db.add(req)
+    c.db.flush()
+    items = [models.EnterpriseDocumentRequestItem(request_id=req.id, organization_id=c.org.id, document_type=t)
+             for t in types]
+    c.db.add_all(items)
+    c.db.commit()
+    return items, enterprise._issue_docreq_session_token(req.id)
+
+
+def _link_upload(c, token, item, *, pages, name):
+    return c.client.post(
+        "/api/enterprise/public/document-request/upload",
+        data={"session_token": token, "item_id": str(item.id)},
+        files={"file": (name, make_pdf(pages), "application/pdf")},
+    )
+
+
+def test_replacing_a_link_upload_does_not_read_it_again(ctx):
+    """Every re-upload through the emailed link was read against the agency's monthly reads
+    — an allowance that cannot be topped up — so a client re-uploading one big PDF could
+    spend all of it. An item gets one metered read; a replacement waits for "Read now"."""
+    client = add_client(ctx)
+    funded(ctx, reads_used=0)
+    (item,), token = _docreq(ctx, client, "Bank statement")
+    for i in range(4):
+        r = _link_upload(ctx, token, item, pages=31, name=f"statement-{i}.pdf")
+        assert r.status_code == 200, r.text
+    assert wallet(ctx).reads_used == 3 and len(ctx.reader.calls) == 1
+    docs = ctx.db.query(models.EnterpriseClientDocument).order_by(models.EnterpriseClientDocument.id).all()
+    assert [d.read_status for d in docs] == ["read", "not_read", "not_read", "not_read"]
+    assert [d.validation_status for d in docs[1:]] == ["not_scanned"] * 3
+    ctx.db.refresh(item)
+    assert item.status == "received" and item.document_id == docs[-1].id
+    listed = ctx.client.get(f"/api/enterprise/clients/{client.id}/documents").json()["documents"]
+    assert next(d for d in listed if d["id"] == docs[-1].id)["can_read_now"] is True
+    # Staff can still read the replacement: authenticated, rate-limited, metered in the request.
+    assert _read_now(ctx, client, docs[-1]).status_code == 200
+    assert wallet(ctx).reads_used == 6 and doc_row(ctx, docs[-1].id).read_status == "read"
+
+
+def test_each_requested_item_is_read_once(ctx):
+    client = add_client(ctx)
+    funded(ctx, reads_used=0)
+    items, token = _docreq(ctx, client, "Passport", "Bank statement")
+    assert _link_upload(ctx, token, items[0], pages=1, name="passport.pdf").status_code == 200
+    assert _link_upload(ctx, token, items[1], pages=17, name="statement.pdf").status_code == 200
+    assert wallet(ctx).reads_used == 1 + 2 and len(ctx.reader.calls) == 2
+
+
+def test_reading_is_booked_to_the_allowance_and_a_checks_reading_to_the_check(ctx):
+    client = add_client(ctx)
+    funded(ctx, balance=100, reads_used=0)
+    upload(ctx, client, pages=1, name="plain.pdf")
+    assert ctx.reader.calls[-1]["usage_source"] == gemini_service.ENTERPRISE_READ_USAGE_SOURCE
+    upload(ctx, client, pages=1, scan=True, name="checked.pdf")
+    assert ctx.reader.calls[-1]["usage_source"] == gemini_service.ENTERPRISE_SCAN_READ_USAGE_SOURCE
+    source = gemini_service.ENTERPRISE_SCAN_READ_USAGE_SOURCE
+    assert source in credits.ACTION_SOURCE_MAP["document_scan"]
+    assert source in credits.ENTERPRISE_COST_SOURCES and source in ai_usage.SOURCE_LABELS
+    assert gemini_service.ENTERPRISE_READ_USAGE_SOURCE not in credits.ACTION_SOURCE_MAP["document_scan"]
+
+
+# ---------------------------------------------------------------------------
 # 6. Staff mock interviews — server-side sessions
 # ---------------------------------------------------------------------------
 
@@ -979,6 +1268,41 @@ def test_public_start_that_cannot_be_paid_keeps_the_interview(ctx):
     assert "credit" not in r.json()["detail"].lower()
     ctx.db.refresh(invite)
     assert invite.used_count == 0 and ctx.officer.messages == []
+
+
+def test_public_start_releases_the_wallet_lock_before_the_opening_turn(ctx, monkeypatch):
+    """can_afford's plan-grant sync takes the wallet row lock (FOR UPDATE), which PostgreSQL
+    keeps until the transaction ends: without a commit before the 10-40 s opening turn, every
+    other wallet operation of the org waited for it."""
+    client = add_client(ctx)
+    funded(ctx, balance=100)
+    invite, token = _invite(ctx, client)
+    events = []
+    real_can_afford = credits.can_afford
+    real_turn = enterprise_interview.run_interview_turn
+
+    def can_afford(*a, **kw):
+        ok = real_can_afford(*a, **kw)
+        events.append("can_afford returned")   # anything the check itself commits is before this
+        return ok
+
+    monkeypatch.setattr(credits, "can_afford", can_afford)
+    monkeypatch.setattr(enterprise_interview, "run_interview_turn",
+                        lambda **kw: events.append("turn") or real_turn(**kw))
+
+    def on_commit(_session):
+        events.append("commit")
+
+    event.listen(ctx.db, "after_commit", on_commit)
+    try:
+        r = _public(ctx, "chat", session_token=token, start=True)
+    finally:
+        event.remove(ctx.db, "after_commit", on_commit)
+    assert r.status_code == 200, r.text
+    afford, turn = events.index("can_afford returned"), events.index("turn")
+    assert "commit" in events[afford:turn], events
+    # ...and the charge still happens once, after the turn.
+    assert wallet(ctx).balance_credits == 100 - credits.action_cost("mock_interview")
 
 
 def test_public_run_token_scopes_turns_and_feedback(ctx):

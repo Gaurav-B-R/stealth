@@ -755,6 +755,7 @@ SOURCE_LABELS = {
     "document_ai": "Document AI (validation & extraction)",
     "enterprise_document_scan": "Document scan & validate (per document, billed)",
     "enterprise_document_read": "Upload reading — monthly AI reads allowance (enterprise)",
+    "enterprise_document_scan_read": "Document scan — reading the file (billed, per 15 pages)",
     "student_ai_chat": "Student AI chat (website)",
     "student_mock_interview": "Mock interview conversation",
     "student_interview_report": "Mock interview feedback report",

@@ -486,11 +486,19 @@ def test_charge_currency_uses_geo_header_when_country_unknown(db):
     assert billing.charge_currency_for_org(db, _org(), "INR", request=request) == "GBP"
     request = SimpleNamespace(headers={"cf-ipcountry": "LK"})
     assert billing.charge_currency_for_org(db, _org(), "USD", request=request) == "INR"
-    # The org's own country beats the visitor's location.
+    # The org's own country beats the visitor's location...
     org = _org()
+    org.country_code = "GB"
+    assert billing.charge_currency_for_org(db, org, None, request=SimpleNamespace(
+        headers={"cf-ipcountry": "IN"})) == "GBP"
+    # ...except an INR-region claim the visitor's (known) location contradicts: the country
+    # is owner-editable, so "IN" set from London buys at GBP (ENTERPRISE_INR_REQUIRE_GEO_MATCH).
     org.country_code = "IN"
     assert billing.charge_currency_for_org(db, org, None, request=SimpleNamespace(
-        headers={"cf-ipcountry": "GB"})) == "INR"
+        headers={"cf-ipcountry": "GB"})) == "GBP"
+    assert billing.charge_currency_for_org(db, org, None, request=SimpleNamespace(
+        headers={"cf-ipcountry": "NP"})) == "INR"
+    assert billing.charge_currency_for_org(db, org, None, request=SimpleNamespace(headers={})) == "INR"
 
 
 def test_charge_currency_rejects_unsupported_hints_and_accepts_an_org_id(db):

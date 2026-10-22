@@ -504,6 +504,101 @@ def test_enterprise_reading_on_the_developer_api_uploads_each_block_and_cleans_u
     assert "[Pages 16–20 of 20]\nb" in text
 
 
+def _answer(text=None, finish="STOP", *, raises=False):
+    """A generate_content() response: candidates[0].finish_reason plus .text, which raises
+    on a part-less candidate the way the Developer SDK does (Vertex returns None instead)."""
+    reason = finish if isinstance(finish, int) else SimpleNamespace(name=finish)
+
+    class Response:
+        candidates = [SimpleNamespace(finish_reason=reason)]
+
+        @property
+        def text(self):
+            if raises:
+                raise ValueError("The response has no parts (finish_reason MAX_TOKENS).")
+            return text
+
+    return Response()
+
+
+def models_answering(monkeypatch, service, answers):
+    """Real _generate_content_with_fallback over fake models: answers = {model: [response, ...]}."""
+    calls = []
+
+    class Model:
+        def __init__(self, name, usage_source):
+            self.name, self.usage_source = name, usage_source
+
+        def generate_content(self, content, **kwargs):
+            calls.append((self.name, self.usage_source))
+            item = answers[self.name].pop(0)
+            if isinstance(item, Exception):
+                raise item
+            return item
+
+    monkeypatch.setattr(service, "build_generative_model",
+                        lambda name, usage_source="document_ai", **kw: Model(name, usage_source))
+    return calls
+
+
+@pytest.mark.parametrize("raises", [True, False], ids=["developer-raises", "vertex-none"])
+def test_enterprise_reading_falls_back_when_a_model_spends_its_cap_reasoning(monkeypatch, raises):
+    """A thinking model can spend the whole 2,048-token cap reasoning and answer MAX_TOKENS
+    with no text. The SDK call 'succeeded', so the chain used to stop there and the document
+    was marked failed without the next model ever being tried."""
+    service = load_vertex_service(monkeypatch)
+    calls = models_answering(monkeypatch, service, {
+        "lite": [_answer(None, "MAX_TOKENS", raises=raises)],
+        "flash": [_answer("Name: Asha Rao")],
+    })
+    text = service.extract_text_from_document(b"Name: Asha Rao", "n.txt", "text/plain", model_candidates=["lite", "flash"])
+    assert text == "Name: Asha Rao"
+    assert [name for name, _ in calls] == ["lite", "flash"]
+
+
+@pytest.mark.parametrize("finish", ["MAX_TOKENS", 2])
+def test_enterprise_reading_marks_a_transcription_cut_off_at_the_output_cap(monkeypatch, finish):
+    service = load_vertex_service(monkeypatch)
+    models_answering(monkeypatch, service, {"m": [_answer("Opening balance 1,200 on 3 Mar", finish)]})
+    text = service.extract_text_from_document(b"statement", "s.txt", "text/plain", model_candidates=["m"])
+    assert text.startswith("Opening balance 1,200 on 3 Mar")
+    assert "cut off at the output limit" in text
+
+    models_answering(monkeypatch, service, {"m": [_answer("block one", finish), _answer("block two", "STOP")]})
+    text = service.extract_text_from_document(make_pdf(20), "s.pdf", "application/pdf", model_candidates=["m"])
+    assert ("[Pages 1–15 of 20]\nblock one\n[The transcription of pages 1–15 was cut off at the "
+            "output limit; later facts in it are missing.]") in text
+    assert "[Pages 16–20 of 20]\nblock two" in text and text.count("cut off") == 1
+
+
+def test_enterprise_reading_leaves_a_complete_answer_alone(monkeypatch):
+    service = load_vertex_service(monkeypatch)
+    models_answering(monkeypatch, service, {"m": [_answer("All of it.", "STOP")]})
+    assert service.extract_text_from_document(b"x", "s.txt", "text/plain", model_candidates=["m"]) == "All of it."
+
+
+def test_a_first_block_no_model_could_answer_is_marked_and_the_rest_still_read(monkeypatch):
+    """No text from every model is that block's problem, not an outage: aborting the whole
+    document on it (the old behaviour on the Developer API) threw away readable pages."""
+    service = load_vertex_service(monkeypatch)
+    models_answering(monkeypatch, service, {"m": [_answer(None, "MAX_TOKENS", raises=True), _answer("block two")]})
+    text = service.extract_text_from_document(make_pdf(20), "s.pdf", "application/pdf", model_candidates=["m"])
+    assert "[Pages 1–15 of 20: could not be read]" in text
+    assert "[Pages 16–20 of 20]\nblock two" in text
+
+
+def test_the_paid_checks_reading_is_booked_to_its_own_source(monkeypatch):
+    service = load_vertex_service(monkeypatch)
+    calls = models_answering(monkeypatch, service, {"m": [_answer("one"), _answer("two")]})
+    service.extract_text_from_document(make_pdf(20), "s.pdf", "application/pdf", model_candidates=["m"],
+                                       usage_source=service.ENTERPRISE_SCAN_READ_USAGE_SOURCE)
+    assert calls == [("m", service.ENTERPRISE_SCAN_READ_USAGE_SOURCE)] * 2
+    calls = models_answering(monkeypatch, service, {"m": [_answer("one")]})
+    service.extract_text_from_document(b"x", "s.txt", "text/plain", model_candidates=["m"])
+    assert calls == [("m", service.ENTERPRISE_READ_USAGE_SOURCE)]
+    assert service.ENTERPRISE_SCAN_READ_USAGE_SOURCE in ai_usage.SOURCE_LABELS
+
+
 def test_generation_config_is_forwarded_only_when_given(monkeypatch):
     seen = []
 

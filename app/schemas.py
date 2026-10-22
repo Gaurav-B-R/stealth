@@ -235,6 +235,10 @@ class AdminEnterpriseOfflinePaymentRequest(BaseModel):
     # settlement). Required for non-INR, because revenue totals only ever sum INR settlement.
     settled_inr_minor: Optional[int] = None
     note: Optional[str] = None
+    # Inside a prepaid yearly term a payment for ANOTHER tier is refused (409): the new tier
+    # would apply to the whole remaining year. Set this after prorating by hand — the new
+    # coverage then starts TODAY instead of stacking after the old term (which is dropped).
+    change_tier_now: bool = False
 
 
 class AdminEnterpriseCreditAdjustRequest(BaseModel):
@@ -255,6 +259,10 @@ class AdminEnterpriseOverridesRequest(BaseModel):
     included_credits: Optional[int] = None    # AI credits per period
     monthly_reads: Optional[int] = None       # AI reads per period
     trial_ends_at: Optional[str] = None
+    # The org's billing country (ISO 3166-1 alpha-2). Admin-only once the org has paid for a
+    # plan: it decides whether INR may be charged (enterprise_billing.charge_currency_for_org),
+    # so owners can no longer change it themselves after their first verified payment.
+    country_code: Optional[str] = None
 
 
 class AdminCompanyFinanceSummary(BaseModel):

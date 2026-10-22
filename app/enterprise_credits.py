@@ -506,11 +506,12 @@ def consume_deep_scan_free(db: Session, organization_id: int) -> None:
 # the admin report can compute real per-action margin from app.ai_usage.
 ACTION_SOURCE_MAP = {
     "deep_scan": ["deep_scan", "deep_scan_extract"],
-    # Only the BILLED validation call. The free text extraction that also runs on every
-    # upload stays on its own sources below ("document_ai" for legacy rows,
-    # "enterprise_document_read" for the reads allowance), so it is never mistaken for
-    # revenue-bearing work in the per-action margin report.
-    "document_scan": ["enterprise_document_scan"],
+    # The BILLED check: its validation call, plus its own reading of a file that had no
+    # text yet ("enterprise_document_scan_read" — priced into the per-block check, never the
+    # reads allowance). The free upload reading stays on its own sources below
+    # ("document_ai" for legacy rows, "enterprise_document_read" for the reads allowance),
+    # so it is never mistaken for revenue-bearing work in the per-action margin report.
+    "document_scan": ["enterprise_document_scan", "enterprise_document_scan_read"],
     "mock_interview": ["mock_interview", "interview_feedback"],
     "ai_copilot": ["enterprise_copilot", "enterprise_copilot_extension"],
     "copilot_client": ["enterprise_copilot_client"],
@@ -527,7 +528,7 @@ ACTION_SOURCE_MAP = {
 # charged for it, but the plan fee pays for it, so it is a real cost against plan revenue.
 ENTERPRISE_COST_SOURCES = [
     "deep_scan", "deep_scan_extract", "document_ai", "enterprise_document_read",
-    "enterprise_document_scan",
+    "enterprise_document_scan", "enterprise_document_scan_read",
     "mock_interview", "interview_feedback",
     "enterprise_copilot", "enterprise_copilot_extension", "enterprise_copilot_client",
     "enterprise_university_shortlist",
@@ -1297,6 +1298,10 @@ def plan_credits_state(db: Session, organization_id: int, *, read_only: bool = F
         "included_credits": int(allowance),
         "recurring": bool(recurring),
         "remaining_this_period": int(wallet.plan_credits_remaining or 0),
+        # What this period actually granted (the high-water mark). It can exceed
+        # included_credits after a mid-period downgrade or a lowered allowance — the grant is
+        # kept, never clawed back — so a usage bar must measure against this, not the plan.
+        "granted_this_period": int(wallet.plan_credits_granted or 0),
         "used_this_period": max(0, int(wallet.plan_credits_granted or 0) - int(wallet.plan_credits_remaining or 0)),
         "rollover": PLAN_CREDITS_ROLLOVER,
         "renews_at": renews_at,
@@ -1804,6 +1809,97 @@ def charge_action(
             db.commit()
     except Exception:
         pass
+    return txn
+
+
+def reserve_action(
+    db: Session,
+    organization_id: int,
+    action_key: str,
+    *,
+    units: int = 1,
+    user: Optional[models.User] = None,
+    reference_type: Optional[str] = None,
+    reference_id: Optional[int] = None,
+    description: Optional[str] = None,
+    commit: bool = False,
+) -> dict:
+    """charge_action for an action whose result arrives LATER, from a background worker (the
+    paid document check). Raises 402 exactly like charge_action.
+
+    The cost is debited in the request, not after the model returns: a pre-check alone
+    reserves nothing, so every check started while an earlier one was still waiting on the
+    model passed against the same untouched balance — five 30-page checks on an 8-credit
+    wallet all ran, and only the first could be charged. Debiting up front makes each request
+    see what the others have already taken.
+
+    Returns the reservation that refund_reservation() takes when the action then produces
+    nothing. `plan_credits` is the part drawn from this period's plan allowance (a spend
+    draws that bucket first), so a refund puts back exactly what came from where — refunding
+    it all into the plan bucket would turn purchased credits into ones that expire."""
+    units = _units(units)
+    cost = max(0, action_cost(action_key, units))
+    # Grant first and lock, so plan_before is the bucket charge_action is about to draw from.
+    _sync_plan_credits_quietly(db, organization_id)
+    wallet = get_wallet_for_update(db, organization_id)
+    plan_before = max(0, int(wallet.plan_credits_remaining or 0))
+    charge_action(
+        db, organization_id, action_key, units=units, user=user,
+        reference_type=reference_type, reference_id=reference_id, description=description,
+        commit=commit,
+    )
+    return {
+        "organization_id": int(organization_id),
+        "action_key": action_key,
+        "units": units,
+        "credits": cost,
+        "plan_credits": min(cost, plan_before),
+        "reference_type": reference_type,
+        "reference_id": reference_id,
+    }
+
+
+def refund_reservation(
+    db: Session,
+    reservation: Optional[dict],
+    *,
+    user: Optional[models.User] = None,
+    description: Optional[str] = None,
+    commit: bool = True,
+) -> Optional[models.EnterpriseCreditTransaction]:
+    """Give back a reserve_action debit whose action produced nothing (the check returned no
+    verdict, or its document was deleted while it was queued) — a failed action is never
+    charged. Exactly reverses _spend_from_wallet, plus a "refund" ledger row.
+
+    A separate row, not a deleted or edited debit: the ledger's balance_after column stays
+    true row by row, and the customer sees both sides. The plan part goes back into the plan
+    bucket only up to this period's grant and the balance (the bucket can never exceed
+    either); anything a rolled period no longer has room for stays as ordinary credits."""
+    if not reservation:
+        return None
+    cost = max(0, int(reservation.get("credits") or 0))
+    if cost <= 0:
+        return None
+    organization_id = int(reservation["organization_id"])
+    wallet = get_wallet_for_update(db, organization_id)
+    wallet.balance_credits = int(wallet.balance_credits) + cost
+    wallet.lifetime_spent_credits = max(0, int(wallet.lifetime_spent_credits or 0) - cost)
+    plan_part = min(cost, max(0, int(reservation.get("plan_credits") or 0)))
+    if plan_part:
+        remaining = int(wallet.plan_credits_remaining or 0)
+        room = min(int(wallet.balance_credits), int(wallet.plan_credits_granted or 0))
+        wallet.plan_credits_remaining = max(remaining, min(remaining + plan_part, room))
+    txn = _record_transaction(
+        db, wallet=wallet, txn_type="refund", credits=cost,
+        action_key=reservation.get("action_key"),
+        description=description or "Refund — the action could not run",
+        reference_type=reservation.get("reference_type"),
+        reference_id=reservation.get("reference_id"),
+        user=user,
+    )
+    if commit:
+        db.commit()
+        db.refresh(txn)
     return txn
 
 
@@ -3010,7 +3106,12 @@ def spend_analytics(
             "deep_scan_free_per_client": DEEP_SCAN_FREE_SCANS_PER_CLIENT,
             "deep_scan_free_monthly_cap": DEEP_SCAN_FREE_MONTHLY_ORG_CAP,
             "deep_scan_free_used_this_month": free_scans_used,
-            "deep_scan_free_left_this_month": max(0, DEEP_SCAN_FREE_MONTHLY_ORG_CAP - free_scans_used),
+            # 0 while the per-client knob is off (the default): the budget is only a ceiling on
+            # a promotion, and the assistant reads this payload as "free scans left".
+            "deep_scan_free_left_this_month": (
+                max(0, DEEP_SCAN_FREE_MONTHLY_ORG_CAP - free_scans_used)
+                if DEEP_SCAN_FREE_SCANS_PER_CLIENT > 0 else 0
+            ),
             "interview_previews_free": INTERVIEW_FREE_STAFF_PREVIEWS,
             "interview_previews_used": previews_used,
             "interview_previews_left": max(0, INTERVIEW_FREE_STAFF_PREVIEWS - previews_used),

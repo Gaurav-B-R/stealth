@@ -330,6 +330,36 @@ def test_payment_link_pay_id_cannot_honour_a_checkout_payment_twice(ctx):
     assert _plan_rows(ctx, org_id)[-1].razorpay_payment_id == "pay_Link777xyz"
 
 
+def test_cross_tier_offline_payment_inside_a_prepaid_year_needs_an_explicit_tier_change(ctx):
+    org_id = _org(ctx)
+    assert _pay(ctx, org_id, plan="starter", billing_cycle="yearly", provider="invoice",
+                reference="INV-Y-1", amount_minor=_list_total("starter", cycle="yearly")).status_code == 200
+    year_end = _sub(ctx, org_id).current_period_end
+    controls = ctx.client.get(f"{ACCOUNTS}/{org_id}/details").json()["billing_controls"]
+    assert controls["term_locked_plan"] == "starter" and controls["term_locked_until"]
+
+    # A month of Multi-branch must not re-tier the rest of the Starter year.
+    refused = _pay(ctx, org_id, plan="scale", amount_minor=_list_total("scale"), reference="UTR-SCALE-1")
+    assert refused.status_code == 409, refused.text
+    assert "change_tier_now" in refused.json()["detail"]
+    assert len(_plan_rows(ctx, org_id)) == 1
+    assert _sub(ctx, org_id).plan == "starter" and _close(_sub(ctx, org_id).current_period_end, year_end)
+
+    # The same tier stacks as before.
+    same = _pay(ctx, org_id, plan="starter", amount_minor=_list_total("starter"), reference="UTR-STARTER-2")
+    assert same.status_code == 200, same.text
+    assert _close(_sub(ctx, org_id).current_period_end, year_end + timedelta(days=billing.PLAN_PERIOD_DAYS))
+
+    # Prorated by hand: the new tier starts today and replaces the old term.
+    forced = _pay(ctx, org_id, plan="scale", amount_minor=_list_total("scale"), reference="UTR-SCALE-2",
+                  change_tier_now=True)
+    assert forced.status_code == 200, forced.text
+    sub = _sub(ctx, org_id)
+    assert sub.plan == "scale"
+    assert _close(sub.current_period_end, datetime.utcnow() + timedelta(days=billing.PLAN_PERIOD_DAYS))
+    assert any("replaced from today" in w for w in forced.json()["warnings"])
+
+
 def test_offline_payment_warns_about_a_live_mandate_and_an_off_list_amount(ctx):
     org_id = _org(ctx, plan="growth", status="active", current_period_end=datetime.utcnow() + timedelta(days=3),
                   razorpay_subscription_id="sub_Mandate1", mandate_status="active")
@@ -524,6 +554,23 @@ def test_override_validation_never_half_applies(ctx, body, needle):
     assert (after.override_max_seats, after.branch_packs, after.trial_ends_at) == snapshot
 
 
+def test_staff_can_change_the_billing_country_owners_can_no_longer_touch(ctx):
+    org_id = _org(ctx)
+    assert _pay(ctx, org_id, reference="UTR-COUNTRY").status_code == 200   # now locked for owners
+    response = _overrides(ctx, org_id, country_code="ke")
+    assert response.status_code == 200, response.text
+    data = response.json()
+    assert data["changes"] == {"country_code": {"before": None, "after": "KE"}}
+    assert data["overrides"]["country_code"] == "KE"
+    assert "Billing country" in data["message"]
+    ctx.db.expire_all()
+    assert ctx.db.get(models.EnterpriseOrganization, org_id).country_code == "KE"
+    # Only the country: nothing else in the body means nothing else changes.
+    assert _sub(ctx, org_id).override_max_seats is None
+    assert _overrides(ctx, org_id, country_code="Kenya").status_code == 400
+    assert _overrides(ctx, org_id, country_code=None).json()["overrides"]["country_code"] is None
+
+
 def test_trial_extension_is_bounded(ctx):
     org_id = _org(ctx)
     too_far = (datetime.utcnow() + timedelta(days=admin.ADMIN_MAX_TRIAL_DAYS + 2)).date().isoformat()
@@ -556,6 +603,23 @@ def test_admin_cannot_create_or_raise_a_coupon_above_the_cap(ctx):
     paused = ctx.client.patch(f"{ACCOUNTS}/{org_id}/coupons/{legacy.id}", json={"is_active": False})
     assert paused.status_code == 200, paused.text
     assert paused.json()["coupon"]["is_active"] is False
+
+
+def test_promo_email_for_a_legacy_code_advertises_the_capped_percent(ctx, monkeypatch):
+    org_id = _org(ctx)
+    # Saved before the cap existed (bypasses the admin create validation).
+    coupon = models.EnterpriseCoupon(organization_id=org_id, code="LAUNCH50", percent_off=Decimal("50"),
+                                     is_active=True, applies_to="all")
+    ctx.db.add(coupon)
+    ctx.db.commit()
+    sent = []
+    monkeypatch.setattr(admin.email_service, "send_enterprise_discount_promo_email",
+                        lambda **kwargs: sent.append(kwargs) or True)
+    response = ctx.client.post(f"{ACCOUNTS}/{org_id}/coupons/{coupon.id}/send-email",
+                               json={"email": "owner@acme-visas.example"})
+    assert response.status_code == 200, response.text
+    cap = enterprise_coupons.max_percent_off()
+    assert [m["percent_display"] for m in sent] == [enterprise_coupons.format_percent_off(cap) + "%"]
 
 
 # ---------------------------------------------------------------------------
@@ -593,6 +657,34 @@ def test_details_list_offline_payments_and_the_admin_set_facts(ctx):
                         if (row["plan"], row["billing_cycle"], row["currency"]) == ("growth", "monthly", "INR")]
     assert team_monthly_inr[0]["total_minor"] == _list_total("growth")
     assert data["subscription"]["reads"]["granted"] >= 0
+
+
+@pytest.mark.parametrize("country,expected", [("AE", "AED"), ("GB", "GBP"), ("IN", "INR"), (None, "INR")])
+def test_offline_form_defaults_a_trial_org_to_its_billing_currency(ctx, country, expected):
+    # A trial org's subscription quote is the sandbox plan's, which is always INR — not
+    # what a UAE consultancy closing a deal after its demo call pays in.
+    org_id = _org(ctx)
+    ctx.db.get(models.EnterpriseOrganization, org_id).country_code = country
+    ctx.db.commit()
+    controls = ctx.client.get(f"{ACCOUNTS}/{org_id}/details").json()["billing_controls"]
+    assert controls["default_currency"] == expected
+    hint = [r for r in controls["price_list"]
+            if (r["plan"], r["billing_cycle"], r["currency"]) == ("growth", "monthly", expected)]
+    assert hint and (hint[0]["tax_minor"] == 0) == (expected != "INR")
+
+
+def test_offline_form_defaults_a_lapsed_payer_to_the_currency_it_paid_in(ctx):
+    org_id = _org(ctx, plan="growth", status="active",
+                  current_period_end=datetime.utcnow() - timedelta(days=40))
+    ctx.db.get(models.EnterpriseOrganization, org_id).country_code = "AE"
+    ctx.db.add(models.EnterpriseSubscriptionPayment(
+        organization_id=org_id, provider="bank_transfer", plan="growth", amount_paise=32_900,
+        currency="AED", razorpay_order_id="offline:UTR-AED-1", status="verified",
+        verified_at=datetime.utcnow() - timedelta(days=70),
+    ))
+    ctx.db.commit()
+    controls = ctx.client.get(f"{ACCOUNTS}/{org_id}/details").json()["billing_controls"]
+    assert controls["default_currency"] == "AED"
 
 
 def test_details_billing_controls_create_nothing_for_an_org_without_rows(ctx, monkeypatch):

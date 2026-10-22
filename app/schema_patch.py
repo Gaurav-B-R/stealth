@@ -3993,6 +3993,9 @@ _PRICING_V2_COLUMNS: dict[str, tuple[tuple[str, str], ...]] = {
         # hide the "Read now" action on exactly the documents that need it.
         ("read_status", "VARCHAR"),
         ("read_blocks", "INTEGER NOT NULL DEFAULT 0"),
+        # NULL on every existing row: their staleness falls back to created_at, which is
+        # exactly the rule they were stored under.
+        ("read_started_at", "{ts}"),
     ),
     "enterprise_interview_sessions": (
         # DEFAULT 'completed' fills every existing row: before server-side sessions, a row
@@ -4061,3 +4064,46 @@ def ensure_enterprise_pricing_v2_columns():
         for table, stmt in _PRICING_V2_INDEXES:
             if _table_exists(conn, table):
                 conn.execute(text(stmt))
+        _rescale_legacy_copilot_owed(conn)
+
+
+def _rescale_legacy_copilot_owed(conn) -> None:
+    """Convert the assistant's owed-message counter to the 2026-10-22 rate, exactly once.
+
+    copilot_unbilled_msgs counts billable messages accrued toward the next credit debit. The
+    ones on a wallet at deploy were accrued at the LEGACY rate (5 messages per credit) but are
+    drained at today's (2), so without this the first message after deploy billed 4 old
+    messages (0.8 credit's worth) as 2 credits — and an org with 2 credits left was refused
+    a turn for a debt worth less than one.
+
+    Idempotent by construction: the UPDATE runs only in the call that ADDS the marker column
+    copilot_unbilled_rescaled, so it can never run twice (a check like "last debit predates
+    the rate change" would stay true until the next bundle completes and rescale again on
+    every message). The column defaults to 0 — a DEFAULT 1 would mark every row as done
+    before the UPDATE ran — and the UPDATE sets it on the rows it converts. Integer division
+    rounds DOWN, i.e. in the customer's favour (4 → 1). A fresh database gets the column from
+    create_all and has nothing to convert."""
+    table = "enterprise_credit_wallets"
+    if not _table_exists(conn, table):
+        return
+    cols = _get_table_columns(conn, table)
+    if "copilot_unbilled_rescaled" in cols:
+        return
+    conn.execute(text(
+        f"ALTER TABLE {table} ADD COLUMN copilot_unbilled_rescaled INTEGER NOT NULL DEFAULT 0"
+    ))
+    if "copilot_unbilled_msgs" not in cols:
+        return
+    from app import enterprise_credits as credits
+
+    new_rate = int(credits.COPILOT_MSGS_PER_CREDIT)
+    legacy_rate = int(credits.COPILOT_LEGACY_MSGS_PER_CREDIT)
+    if new_rate == legacy_rate:
+        return
+    conn.execute(
+        text(
+            f"UPDATE {table} SET copilot_unbilled_msgs = (copilot_unbilled_msgs * :new) / :legacy, "
+            "copilot_unbilled_rescaled = 1 WHERE copilot_unbilled_msgs > 0"
+        ),
+        {"new": new_rate, "legacy": legacy_rate},
+    )

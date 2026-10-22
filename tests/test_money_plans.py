@@ -230,6 +230,21 @@ def test_public_plans_payload_quotes_the_requested_currency(code):
             assert plan["total_minor"] == plan["monthly_minor"]
 
 
+@pytest.mark.parametrize("code", money.LAUNCH_CHARGE_CURRENCIES)
+def test_free_trial_card_is_free_in_the_cards_own_currency(code):
+    # The trial has no price book entry; checkout_quote's INR fallback once put "₹0" with
+    # GST 18% on a US org's trial card, right beside "$39".
+    if billing.ENTERPRISE_FREE:
+        pytest.skip("billing disabled via ENTERPRISE_FREE")
+    [free] = [p for p in billing.public_plans_payload(code) if p["is_free"]]
+    assert free["currency"] == code
+    assert free["monthly_display"] == money.format_money(0, code)
+    if code != "INR":
+        assert "₹" not in free["monthly_display"] and "₹" not in free["total_display"]
+    assert free["tax_label"] is None and free["tax_percent"] == 0
+    assert free["tax_minor"] == 0 and free["total_minor"] == 0
+
+
 # ---------------------------------------------------------------------------
 # The org-level fallback chain (no-hint half of _resolve_charge_currency)
 # ---------------------------------------------------------------------------

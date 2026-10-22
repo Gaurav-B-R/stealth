@@ -320,10 +320,21 @@ def test_state_currency_uses_request_geo_without_an_org_country(ctx, geo, curren
     assert enterprise._resolve_charge_currency(None, ctx.org, db=ctx.db, request=_geo(geo)) == currency
 
 
-def test_org_country_beats_the_request_geo(ctx):
+def test_org_country_beats_the_request_geo(ctx, monkeypatch):
     _set_plan(ctx, "starter")
+    ctx.org.country_code = "GB"
+    ctx.db.commit()
+    state = billing.build_subscription_state(ctx.db, ctx.org.id, request=_geo("IN"))
+    assert state["currency"] == "GBP"
+    # ...except an INR-region claim that the request's known geo contradicts: the country is
+    # owner-editable (ENTERPRISE_INR_REQUIRE_GEO_MATCH). The quote follows checkout.
+    ctx.org.country_code = "IN"
+    ctx.db.commit()
     state = billing.build_subscription_state(ctx.db, ctx.org.id, request=_geo("GB"))
-    assert state["currency"] == "INR"
+    assert state["currency"] == "GBP" and state["inr_region"] is False
+    assert billing.build_subscription_state(ctx.db, ctx.org.id, request=_geo("NP"))["currency"] == "INR"
+    monkeypatch.setattr(billing, "INR_REQUIRE_GEO_MATCH", False)
+    assert billing.build_subscription_state(ctx.db, ctx.org.id, request=_geo("GB"))["currency"] == "INR"
 
 
 def test_state_without_a_request_is_unchanged(ctx):
@@ -746,6 +757,32 @@ def test_assistant_free_allowances_include_document_reads(ctx):
     assert reads["allowance"] == billing.PLANS["starter"]["max_reads"]
     assert reads["left"] == billing.PLANS["starter"]["max_reads"]
     assert reads["unlimited"] is False
+
+
+def test_assistant_reports_no_free_deep_scans_while_the_promotion_is_off(ctx, monkeypatch):
+    """It reported the workspace's monthly free-scan BUDGET (25) as "free Deep Scans left"
+    while every scan cost 40 credits — the per-client knob that makes a scan free is 0."""
+    monkeypatch.setattr(credits, "DEEP_SCAN_FREE_SCANS_PER_CLIENT", 0)
+    _set_plan(ctx, "starter")
+    client = _client(ctx)
+    out = _tools(ctx)["get_credit_free_allowances"]()
+    assert out["deep_scans_free_left_this_month"] == 0 and out["deep_scans_free_per_client"] == 0
+    assert "no free scans" in out["deep_scan_note"]
+    assert f"{credits.action_cost('deep_scan')} credits" in out["deep_scan_note"]
+    assert enterprise._deep_scan_pricing(ctx.db, ctx.org.id, client.id)["next_scan_free"] is False
+    # The spend summary tool forwards the analytics payload, which said 25 as well.
+    allowances = credits.spend_analytics(ctx.db, ctx.org.id)["allowances"]
+    assert allowances["deep_scan_free_left_this_month"] == 0
+
+    # A promotion turns the budget back on — the same rule the Deep Scan button prices by.
+    monkeypatch.setattr(credits, "DEEP_SCAN_FREE_SCANS_PER_CLIENT", 1)
+    out = _tools(ctx)["get_credit_free_allowances"]()
+    assert out["deep_scans_free_left_this_month"] == credits.DEEP_SCAN_FREE_MONTHLY_ORG_CAP
+    assert "first 1 Deep Scan is free" in out["deep_scan_note"]
+    assert enterprise._deep_scan_pricing(ctx.db, ctx.org.id, client.id)["next_scan_free"] is True
+    # ...and never while AI is paused.
+    _set_plan(ctx, "sandbox", trial_ends_at=datetime.utcnow() - timedelta(days=1))
+    assert _tools(ctx)["get_credit_free_allowances"]()["deep_scans_free_left_this_month"] == 0
 
 
 def test_workspace_profile_reports_open_files_next_to_the_limit(ctx):

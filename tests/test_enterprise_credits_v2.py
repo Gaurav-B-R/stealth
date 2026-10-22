@@ -471,6 +471,20 @@ def test_downgrade_mid_period_grants_nothing_and_takes_nothing(db):
     assert w.reads_granted == 500
 
 
+def test_panel_after_a_mid_period_downgrade_reports_the_period_grant(db):
+    # The kept grant (450) is bigger than the new plan's allowance (150): a usage bar
+    # measured against `included_credits` went to −200%. The panel says what was granted.
+    _paid(db, "growth")
+    _sync(db)
+    _sub(db, plan="starter")
+    _sync(db)
+    state = credits.plan_credits_state(db, _org(db))
+    assert state["included_credits"] == 150
+    assert state["granted_this_period"] == 450
+    assert state["remaining_this_period"] == 450 and state["used_this_period"] == 0
+    assert credits.wallet_state(db, _org(db))["plan_credits"]["granted_this_period"] == 450
+
+
 def test_tier_hopping_inside_one_period_cannot_mint_allowances(db):
     _paid(db, "starter")
     _sync(db)
@@ -855,6 +869,45 @@ def test_two_billable_messages_cost_one_credit(db, copilot_defaults):
     second = credits.record_copilot_message(db, org_id)
     assert second["credits_charged"] == 1
     assert _wallet(db).balance_credits == 9
+
+
+def test_owed_assistant_messages_are_rescaled_once_to_the_new_rate(tmp_path, monkeypatch):
+    # Owed messages on a wallet at deploy were accrued at 5 per credit; drained at 2 per
+    # credit, 4 of them (0.8 credit's worth) were billed as 2 credits.
+    from sqlalchemy import create_engine as make_engine, text
+
+    from app import schema_patch
+
+    engine = make_engine(f"sqlite:///{tmp_path / 'legacy.db'}")
+    monkeypatch.setattr(schema_patch, "engine", engine)
+    monkeypatch.setattr(credits, "COPILOT_MSGS_PER_CREDIT", 2)
+    monkeypatch.setattr(credits, "COPILOT_LEGACY_MSGS_PER_CREDIT", 5)
+    with engine.begin() as conn:
+        conn.execute(text(
+            "CREATE TABLE enterprise_credit_wallets (id INTEGER PRIMARY KEY, organization_id INTEGER, "
+            "copilot_unbilled_msgs INTEGER NOT NULL DEFAULT 0)"
+        ))
+        conn.execute(text(
+            "INSERT INTO enterprise_credit_wallets (id, organization_id, copilot_unbilled_msgs) "
+            "VALUES (1, 1, 4), (2, 2, 0), (3, 3, 3)"
+        ))
+    schema_patch.ensure_enterprise_pricing_v2_columns()
+    schema_patch.ensure_enterprise_pricing_v2_columns()     # a second startup changes nothing
+    with engine.connect() as conn:
+        rows = conn.execute(text(
+            "SELECT id, copilot_unbilled_msgs, copilot_unbilled_rescaled FROM enterprise_credit_wallets ORDER BY id"
+        )).all()
+    # Rounded down, in the customer's favour: 4 old messages → 1 new one, 3 → 1.
+    assert [tuple(r) for r in rows] == [(1, 1, 1), (2, 0, 0), (3, 1, 1)]
+    engine.dispose()
+
+
+def test_a_rescaled_debt_is_billed_and_budgeted_at_the_new_rate(db, copilot_defaults):
+    _copilot_wallet(db, used_today=5, balance=2, owed=1)
+    assert credits.copilot_turn_budget(db, _org(db))["allowed"] is True
+    out = credits.record_copilot_message(db, _org(db))
+    assert out["credits_charged"] == 1
+    assert _wallet(db).copilot_unbilled_msgs == 0 and _wallet(db).balance_credits == 1
 
 
 # ---------------------------------------------------------------------------

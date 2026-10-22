@@ -524,7 +524,8 @@
         iv.pending=true; stopRecognition(); hideErr("iChatError"); renderControls();
         var voice=iv.channel==="voice", thinking=voice?"VO is thinking...":"VO is typing...";
         setStatus(thinking); setPendingBubble(thinking);
-        if(!isInitial) history.push({role:"user",content:message});
+        var userTurn=isInitial?null:{role:"user",content:message};
+        if(userTurn) history.push(userTurn);
         var mode=voice?"voice":"chat";
         var body=isInitial?{session_token:sessionToken,start:true,mode:mode}:{session_token:sessionToken,run_token:runToken,message:message,mode:mode};
         var shouldListen=false, sessionOver=false;
@@ -549,6 +550,10 @@
               // refused as well, the run is over and a new interview is the only way on.
               history.pop(); concluded=true; return; }
             if(ex.status===400||ex.status===404){ history.pop(); sessionOver=true; endRun(safeError(ex)); return; }
+            // Any other failure (502, 429, network): the server stored nothing for this answer,
+            // so neither may the page — a Finish & Report counted on it would ask for a report
+            // the server refuses ("answer at least one question first").
+            if(userTurn&&history[history.length-1]===userTurn) history.pop();
             showErr("iChatError", safeError(ex)); })
           .then(function(){ iv.pending=false; renderControls();
             if(sessionOver||!iv.active) return;
@@ -612,12 +617,22 @@
             var ab=$("againBtn"); if(ab) ab.onclick=function(){ feedbackStarted=false; concluded=false; pendingDecision=null; iv.channel=null; iv.timerStart=0; renderTimer(); $("feedback").classList.add("hidden"); $("feedback").innerHTML=""; $("afterFb").innerHTML=""; resetLog(); setStatus("Idle"); renderControls(); };
             try{ $("feedback").scrollIntoView({behavior:"smooth",block:"nearest"}); }catch(e){} })
           .catch(function(ex){ iv.reportGenerating=false; stopTimer(); renderTimer();
-            if(ex.status===409||ex.status===400||ex.status===404){
+            if(ex.status===409||ex.status===404||(ex.status===400&&!runToken)){
               // This run is over for good (report already made, or the run expired): retrying
               // can only fail again, so hand back the Start button instead.
               gen.className="visa-mock-log-item system"; gen.textContent="This interview session has ended.";
               $("feedback").innerHTML='<div class="err">'+esc(safeError(ex))+'</div>';
               endRun(null); return; }
+            if(ex.status===400){
+              // "Answer at least one question first": the run is live and already paid for —
+              // only the report was premature. Ending it here threw away a charged interview.
+              feedbackStarted=false; concluded=false; pendingDecision=null; iv.active=true;
+              gen.className="visa-mock-log-item system"; gen.textContent=safeError(ex);
+              $("feedback").classList.add("hidden"); $("feedback").innerHTML="";
+              iv.timerId=setInterval(renderTimer,1000); renderTimer();
+              setStatus(iv.channel==="voice"?"Ready for answer":"Type your answer"); renderControls();
+              if(iv.channel==="voice") listen(); else { var a=$("answer"); if(a) a.focus(); }
+              return; }
             setStatus("Report error");
             gen.className="visa-mock-log-item system"; gen.textContent="The report could not be generated. You can try Finish & Report again.";
             $("feedback").innerHTML=decisionBanner(decision)+'<div class="err">'+esc(safeError(ex))+'</div>'; feedbackStarted=false; iv.active=true; renderControls(); }); }

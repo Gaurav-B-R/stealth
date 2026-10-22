@@ -2,7 +2,8 @@
 // session API (pricing v2, 2026-10-22): the start response's run_token is kept in memory and
 // presented on every turn and on the one feedback report; the page never sends its own
 // transcript or the officer's decision; a 409 on a turn goes to the report, and a run the
-// server says is over (409/400 on the report) hands back the Start button.
+// server says is over (409/404 on the report, or a 400 for a missing run token) hands back the
+// Start button — while a report refused because no answer was stored keeps the live run.
 //
 // The page's inline <script> runs in a vm with stub elements keyed by id (no real DOM).
 
@@ -135,4 +136,45 @@ test('a turn without a live run (400) ends the run with the server message inste
   assert.equal(posts(app, '/feedback').length, 0);
   assert.ok(app.get('iChatError').textContent.includes('This interview session has expired.'));
   assert.ok(app.get('iChatError').textContent.includes('You can start a new interview.'));
+});
+
+test('a first answer that failed (502) is not counted: Finish asks for an answer instead of ending the paid run', async () => {
+  const app = setup(
+    (body) => (body.start
+      ? jsonResponse({ reply: 'Opening question', finished: false, questions_asked: 1, max_questions: 12, remaining: 1, run_token: 'run-xyz' })
+      : jsonResponse({ detail: 'The interviewer ran into a problem. Please try again.' }, 502)),
+    () => jsonResponse({ detail: 'Answer at least one question first.' }, 400),
+  );
+  await startChat(app);
+  await answer(app, 'My first answer');
+  app.get('endBtn').onclick();
+  await settle();
+  assert.equal(posts(app, '/feedback').length, 0, 'the server stored no answer, so no report is asked for');
+  assert.ok(app.get('iChatError').textContent.includes('Answer at least one question first.'));
+  assert.ok(!/Session ended/.test(app.get('ivStatus').textContent));
+});
+
+test('a report refused for want of an answer (400 with a live run) keeps the run: the next answer still presents its token', async () => {
+  let release;
+  let chats = 0;
+  const app = setup(
+    (body) => {
+      if (body.start) return jsonResponse({ reply: 'Opening question', finished: false, questions_asked: 1, max_questions: 12, remaining: 1, run_token: 'run-xyz' });
+      chats += 1;
+      if (chats === 1) return new Promise((resolve) => { release = () => resolve(jsonResponse({ detail: 'Busy' }, 502)); });
+      return jsonResponse({ reply: 'Next question', finished: false, questions_asked: 2, max_questions: 12, remaining: 1 });
+    },
+    () => jsonResponse({ detail: 'Answer at least one question first.' }, 400),
+  );
+  await startChat(app);
+  await answer(app, 'My first answer');               // still waiting on the officer
+  app.get('endBtn').onclick();                        // Finish is queued behind it
+  release();
+  await settle();
+  assert.equal(posts(app, '/feedback').length, 1);
+  assert.ok(!/Session ended/.test(app.get('ivStatus').textContent), 'the paid run is not thrown away');
+  assert.equal(app.get('composer').classList.contains('hidden'), false, 'the student can answer again');
+  await answer(app, 'My answer again');
+  const last = posts(app, '/chat').pop();
+  assert.deepEqual(last, { session_token: 'sess-1', run_token: 'run-xyz', message: 'My answer again', mode: 'chat' });
 });

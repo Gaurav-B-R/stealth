@@ -3311,7 +3311,13 @@ def send_enterprise_account_coupon_email_admin(
     if not recipients:
         raise HTTPException(status_code=400, detail="No recipient email found for this account.")
 
-    percent_display = enterprise_coupons.format_percent_off(coupon.percent_off) + "%"
+    # The percent checkout will ACTUALLY take off: the stored value capped at
+    # ENTERPRISE_COUPON_MAX_PERCENT. A legacy code saved above the cap is still redeemable, but
+    # only at the cap — emailing its stored "50%" would promise members a discount checkout
+    # then refuses to give.
+    percent_display = enterprise_coupons.format_percent_off(
+        enterprise_coupons.effective_percent_off(coupon.percent_off)
+    ) + "%"
     applies_label = _COUPON_APPLIES_EMAIL_LABELS.get(str(coupon.applies_to or "all"), "your purchases")
     portal_url = _build_enterprise_portal_url(org.subdomain_slug, request)
     code = enterprise_coupons.normalize_code(coupon.code)
@@ -3435,6 +3441,7 @@ _OVERRIDE_LABELS = {
     "included_credits": "AI credits per period",
     "monthly_reads": "AI reads per period",
     "trial_ends_at": "Trial end",
+    "country_code": "Billing country",
 }
 
 
@@ -3517,6 +3524,31 @@ def _serialize_plan_payment(p: models.EnterpriseSubscriptionPayment, names: dict
     }
 
 
+def _offline_default_currency(db: Session, organization_id: int, currencies: list[str]) -> str:
+    """The currency the offline-payment form preselects: the one this org is BILLED in.
+
+    Not the subscription state's quote currency: for a trial (or lapsed) org that quotes the
+    sandbox plan, which has no price book entry and so always resolves to INR — a UAE trial
+    org's form came up in INR with a GST list price, and accepting the default recorded an
+    INR payment with an 18% GST line for an AED sale. Order: the latest verified plan
+    payment's currency (a lapsed AED payer is still an AED customer), else
+    charge_currency_for_org (sticky choice → country → INR); both clamped to the org's
+    currency region. No request here, so the org's stored country decides the region.
+    Read-only, like the rest of this block."""
+    with db.no_autoflush:
+        org = db.get(models.EnterpriseOrganization, int(organization_id))
+        code = None
+        latest = enterprise_billing._latest_plan_payment(db, organization_id)
+        if latest and latest[0] and money.is_chargeable(latest[0]):
+            code = enterprise_billing.region_charge_currency(
+                money.normalize_currency(latest[0], strict=False),
+                enterprise_billing.billing_country_for(getattr(org, "country_code", None)),
+            )
+        if not code:
+            code = enterprise_billing.charge_currency_for_org(db, org, None)
+    return code if code in currencies else money.DEFAULT_CURRENCY
+
+
 def _billing_controls_state(db: Session, organization_id: int, state: dict) -> dict:
     """What the console's billing controls need: the RAW admin-set facts (stored Branch Packs
     and overrides even where they don't currently apply — `subscription` reports only what
@@ -3527,6 +3559,7 @@ def _billing_controls_state(db: Session, organization_id: int, state: dict) -> d
     sub = enterprise_billing.subscription_snapshot(db, organization_id)
     limits = enterprise_billing.effective_limits(db, organization_id)
     plan = enterprise_billing.PLANS.get(limits.get("plan")) or {}
+    term_lock = enterprise_billing.live_term_lock(db, organization_id, sub=sub)
     demo_at = getattr(sub, "demo_bonus_granted_at", None)
     bonus = int(enterprise_billing.TRIAL_DEMO_BONUS_CREDITS or 0)
     currencies = list(money.supported_charge_currencies())
@@ -3560,6 +3593,11 @@ def _billing_controls_state(db: Session, organization_id: int, state: dict) -> d
         "trial_ends_at": _admin_iso(sub.trial_ends_at),
         "trial_domain_blocked": bool(getattr(sub, "trial_domain_blocked", False)),
         "has_mandate": bool(sub.razorpay_subscription_id),
+        # A running prepaid yearly term: an offline payment for ANOTHER plan is refused unless
+        # sent with change_tier_now (the form shows that option only while this is set).
+        "term_locked_until": _admin_iso(term_lock["ends_at"]) if term_lock else None,
+        "term_locked_plan": term_lock["plan"] if term_lock else None,
+        "term_locked_plan_label": term_lock["plan_label"] if term_lock else None,
         "branch_packs": max(0, int(getattr(sub, "branch_packs", 0) or 0)),
         "branch_packs_applied": int(limits.get("branch_packs") or 0),
         "branch_pack": enterprise_billing.branch_pack_facts(),
@@ -3584,7 +3622,7 @@ def _billing_controls_state(db: Session, organization_id: int, state: dict) -> d
         "plans": [{"key": k, "label": enterprise_billing.PLANS[k]["label"]} for k in paid_keys],
         "providers": [{"key": k, "label": v} for k, v in OFFLINE_PAYMENT_PROVIDERS.items()],
         "currencies": currencies,
-        "default_currency": state.get("currency") or money.DEFAULT_CURRENCY,
+        "default_currency": _offline_default_currency(db, organization_id, currencies),
         # Self-serve yearly may be off; an offline yearly sale is still allowed (see the
         # offline-payment endpoint), so the form always offers it and says which is which.
         "yearly_enabled": enterprise_billing.yearly_enabled(),
@@ -3869,9 +3907,30 @@ def record_enterprise_offline_payment_admin(
     previous_status = sub.status
     previous_end = _naive_utc(sub.current_period_end)
     period_days = enterprise_billing.period_days_for(cycle)
+    # A CHANGE OF TIER INSIDE A PREPAID YEARLY TERM (enterprise_billing.live_term_lock) is
+    # refused unless staff say they have prorated it: stacking would apply the new tier to
+    # the whole remaining year for the price of this payment (or, downwards, throw away the
+    # rest of a year the customer paid for at the higher tier).
+    term_lock = enterprise_billing.live_term_lock(db, org.id, sub=sub)
+    tier_change_now = bool(term_lock and term_lock["plan"] != plan_key)
+    if tier_change_now and not payload.change_tier_now:
+        db.rollback()
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                f"This account's {term_lock['plan_label']} plan is prepaid to "
+                f"{_naive_utc(term_lock['ends_at']).date().isoformat()}. Recording {plan['label']} "
+                "now would switch the whole remaining term to it. Prorate the invoice and resend "
+                "with change_tier_now to start the new plan today (the old term is replaced)."
+            ),
+        )
     # Stacks exactly like checkout (/billing/verify): time already paid for is never lost,
-    # and a lapsed org starts from today rather than from a period end in the past.
-    start = previous_end if (previous_end and previous_end > now) else now
+    # and a lapsed org starts from today rather than from a period end in the past — except
+    # a prorated tier change, which replaces the old term from today.
+    if tier_change_now:
+        start = now
+    else:
+        start = previous_end if (previous_end and previous_end > now) else now
     new_end = start + timedelta(days=period_days)
     sub.plan = plan_key
     sub.status = "active"
@@ -3939,13 +3998,18 @@ def record_enterprise_offline_payment_admin(
     logger.info(
         "Admin %s recorded an offline %s plan payment for org %s: ref=%s plan=%s cycle=%s "
         "amount_minor=%s %s tax_minor=%s settled_inr=%s; plan %s/%s -> %s/active, period_end %s -> %s; "
-        "payment_id=%s credits_granted=%s note=%r",
+        "payment_id=%s credits_granted=%s change_tier_now=%s note=%r",
         current_user.id, provider, org.id, reference, plan_key, cycle, amount, currency, tax,
         base_minor, previous_plan, previous_status, plan_key, previous_end, new_end, row.id,
-        credits_granted, note,
+        credits_granted, tier_change_now, note,
     )
 
     warnings: list[str] = []
+    if tier_change_now:
+        warnings.append(
+            f"Tier changed inside a prepaid term: the {term_lock['plan_label']} term that ran to "
+            f"{previous_end.date().isoformat() if previous_end else '—'} was replaced from today."
+        )
     if sub.razorpay_subscription_id and not sub.cancel_at_period_end and str(
         sub.mandate_status or ""
     ).lower() not in {"cancelled", "completed"}:
@@ -4237,13 +4301,25 @@ def update_enterprise_account_overrides_admin(
                 detail="Send a date to change the trial end — it can't be cleared.",
             )
         updates["trial_ends_at"] = _parse_trial_end(provided["trial_ends_at"])
+    # The billing country (decides INR eligibility — enterprise_billing.charge_currency_for_org).
+    # Owners lose the ability to change it at their first verified plan payment (see the
+    # enterprise router's branding endpoint); staff correct it here. null/"" clears it.
+    country_update = None
+    if "country_code" in provided:
+        country_update = str(provided["country_code"] or "").strip().upper()
+        if country_update and (len(country_update) != 2 or not country_update.isalpha()):
+            raise HTTPException(status_code=400, detail="Billing country must be a 2-letter country code.")
 
     sub = _locked_subscription(db, org.id)
     before = _overrides_snapshot(sub)
+    before["country_code"] = org.country_code
     limits_before = enterprise_billing.effective_limits(db, org.id)
     for column, value in updates.items():
         setattr(sub, column, value)
+    if "country_code" in provided:
+        org.country_code = country_update or None
     after = _overrides_snapshot(sub)
+    after["country_code"] = org.country_code
     changes = {key: {"before": before[key], "after": after[key]} for key in after if before[key] != after[key]}
     limits_after = enterprise_billing.effective_limits(db, org.id)
     db.commit()

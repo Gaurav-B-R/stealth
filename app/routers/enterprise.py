@@ -1092,6 +1092,11 @@ def _build_enterprise_context(
             "country_code": organization.country_code,
             "state_region": organization.state_region,
             "display_currency": _org_display_currency(organization),
+            # After the first verified plan payment only Rilono staff can change the country
+            # (it decides INR eligibility) — Settings shows it read-only with a support note.
+            "billing_country_locked": (
+                _billing_country_locked(db, organization.id) if not onboarding_required else False
+            ),
         },
         "membership": {
             # Still the legacy admin|editor|viewer string: the deployed SPA prints it, and a
@@ -2013,6 +2018,22 @@ def enterprise_team_members(
     }
 
 
+# THE BILLING COUNTRY IS SELF-DECLARED UNTIL SOMEONE PAYS. country_code decides whether INR
+# may be charged (enterprise_billing.charge_currency_for_org), and INR is ~60% below the
+# foreign ladders — so once an org holds a verified plan payment, the owner can no longer
+# change it from Settings; Rilono staff can, through the admin overrides endpoint. Before the
+# first payment it stays editable: that is when a wrong geo pre-fill gets corrected. (The
+# geo-match rule in billing_country_for covers the unpaid window.)
+ENTERPRISE_BILLING_COUNTRY_LOCKED_MESSAGE = (
+    "Your billing country can't be changed here once a plan has been paid for. "
+    "Contact support to change your billing country."
+)
+
+
+def _billing_country_locked(db: Session, organization_id: int) -> bool:
+    return bool(credits._has_ever_paid(db, organization_id))
+
+
 @router.patch("/organization/branding")
 def enterprise_update_branding(
     payload: EnterpriseBrandingUpdateRequest,
@@ -2028,6 +2049,16 @@ def enterprise_update_branding(
     )
 
     has_update = False
+    # Validated before anything is changed, so a refused country never half-applies the rest.
+    new_country_code: str | None = None
+    if payload.country_code is not None:
+        new_country_code = (payload.country_code or "").strip().upper()
+        if new_country_code and (len(new_country_code) != 2 or not new_country_code.isalpha()):
+            raise HTTPException(status_code=400, detail="Enter a valid 2-letter country code.")
+        current_country = (organization.country_code or "").strip().upper()
+        if (new_country_code or "") != current_country and _billing_country_locked(db, organization.id):
+            raise HTTPException(status_code=400, detail=ENTERPRISE_BILLING_COUNTRY_LOCKED_MESSAGE)
+
     new_company_name: str | None = None
     if payload.company_name is not None:
         new_company_name = (payload.company_name or "").strip()
@@ -2061,11 +2092,8 @@ def enterprise_update_branding(
     if new_company_name is not None:
         organization.company_name = new_company_name
 
-    if payload.country_code is not None:
-        country_code = (payload.country_code or "").strip().upper()
-        if country_code and (len(country_code) != 2 or not country_code.isalpha()):
-            raise HTTPException(status_code=400, detail="Enter a valid 2-letter country code.")
-        organization.country_code = country_code or None
+    if new_country_code is not None:
+        organization.country_code = new_country_code or None
         has_update = True
     if payload.state_region is not None:
         organization.state_region = (payload.state_region or "").strip()[:80] or None
@@ -2904,6 +2932,9 @@ def _serialize_subscription_state(state: dict) -> dict:
         "price_note": state.get("price_note", ""),
         # The cycle of the latest plan payment ("monthly" | "yearly"; None if never paid).
         "billing_cycle": state.get("billing_cycle"),
+        # End of a running prepaid yearly term: until then checkout refuses a change of tier
+        # (409) and the cards offer "contact us" instead of "Switch to …".
+        "term_locked_until": state.get("term_locked_until"),
         # Open files (the plan limit counts only stages with is_open=True). max_clients /
         # clients_used above keep their names and carry the same numbers.
         "open_files_used": state.get("open_files_used", state.get("clients_used", 0)),
@@ -8161,6 +8192,10 @@ def _reconcile_plan_payment(db: Session, *, plan_row, entity: dict, order_id: st
     sub = billing.get_or_create_org_subscription(db, plan_row.organization_id, commit=False)
     sub.plan = plan_row.plan
     sub.status = "active"
+    if not plan_row.razorpay_subscription_id:
+        # Same as /billing/verify: a one-off order (a yearly purchase) replaces any monthly
+        # mandate, which would otherwise keep debiting and re-tier the org on each charge.
+        _detach_mandate_for_one_off_payment(sub, plan_row.organization_id)
     base = sub.current_period_end
     if base is not None and getattr(base, "tzinfo", None):
         base = base.replace(tzinfo=None)
@@ -8183,6 +8218,53 @@ def _sub_by_mandate(db: Session, subscription_id: str):
         .filter(models.EnterpriseSubscription.razorpay_subscription_id == subscription_id)
         .first()
     )
+
+
+def _cancel_superseded_mandate(sub, organization_id: int, *, keep_id: str | None = None) -> Optional[str]:
+    """Cancel the Razorpay mandate `sub` points at when a newer plan payment replaces it.
+
+    Razorpay auto-debits EVERY mandate it holds, and each of those charges re-applies the
+    mandate's own tier (_handle_subscription_charged). So any verified plan purchase that is
+    not itself that mandate — a new mandate (keep_id = its id), a one-off yearly order, a
+    one-off monthly order, a 100%-off activation — must stop the old one, or the customer
+    is billed twice and the next renewal knocks a paid year back down to the old tier.
+
+    Immediate (not cycle-end): access is governed by `current_period_end`, which the
+    replacing payment has just extended. Never raises — a failed cancel must not fail a sale
+    the customer has already paid for — but it is LOUD, because an uncancelled mandate is a
+    double charge. Returns the id it tried to cancel (None when there was nothing to do).
+    """
+    superseded = (getattr(sub, "razorpay_subscription_id", None) or "").strip()
+    if not superseded or superseded == (keep_id or "").strip():
+        return None
+    if str(getattr(sub, "mandate_status", "") or "").lower() in {"cancelled", "completed"}:
+        # Razorpay already told us (subscription.cancelled/completed) it will never charge
+        # again; a cancel call would only fail and raise a false double-billing alarm.
+        return superseded
+    try:
+        _razorpay_request("POST", f"/subscriptions/{superseded}/cancel", {"cancel_at_cycle_end": 0})
+    except Exception:
+        # Already cancelled is fine. Anything else needs a human.
+        logger.exception(
+            "billing: could not cancel superseded mandate %s for org %s — CHECK FOR DOUBLE BILLING",
+            superseded, organization_id,
+        )
+    return superseded
+
+
+def _detach_mandate_for_one_off_payment(sub, organization_id: int) -> None:
+    """A one-off plan payment (order, offline-equivalent, 100%-off) now governs the plan:
+    cancel any live mandate and stop pointing at it. With razorpay_subscription_id cleared,
+    `auto_renews`/`has_mandate` read False — which is what the yearly copy ("doesn't renew
+    automatically") promises — and a stray late charge on the old mandate is recognised as
+    superseded by _handle_subscription_charged instead of re-tiering the org."""
+    if _cancel_superseded_mandate(sub, organization_id) is None:
+        return
+    sub.razorpay_subscription_id = None
+    sub.mandate_status = "cancelled"
+    # Not cancel_at_period_end: nothing is "about to stop" — the one-off payment's coverage
+    # simply ends when it ends, exactly like any other order-paid plan.
+    sub.cancel_at_period_end = False
 
 
 def _handle_mandate_lifecycle(db: Session, *, event_name: str, event: dict) -> dict:
@@ -8252,6 +8334,19 @@ def _handle_subscription_charged(db: Session, *, event: dict, payment_entity: di
     if plan_key not in billing.PAID_PLAN_KEYS:
         return {"status": "ignored", "reason": "not_a_paid_plan"}
 
+    # A CHARGE ON A MANDATE THE ORG HAS MOVED OFF. The org no longer points at this mandate,
+    # yet the mandate has been charged and verified before — so this is a renewal, not a first
+    # charge racing the browser verify (whose mandate has no verified charge yet). The org
+    # replaced it (a yearly order, a newer mandate) and the cancel failed or raced. Applying
+    # it would set sub.plan back to this mandate's tier for the rest of a period the customer
+    # paid for at another tier. Record the money (finance must refund it), cancel again, and
+    # leave the subscription alone.
+    superseded_charge = sub is None and db.query(models.EnterpriseSubscriptionPayment.id).filter(
+        models.EnterpriseSubscriptionPayment.razorpay_subscription_id == subscription_id,
+        models.EnterpriseSubscriptionPayment.razorpay_payment_id.isnot(None),
+        models.EnterpriseSubscriptionPayment.status.in_(credits.REVENUE_PAYMENT_STATUSES),
+    ).first() is not None
+
     amount = int(entity.get("amount") or 0)
     currency = money.normalize_currency(entity.get("currency"), strict=False)
     # Re-derive the tax split from the amount actually charged rather than copying the seed
@@ -8260,6 +8355,45 @@ def _handle_subscription_charged(db: Session, *, event: dict, payment_entity: di
     tax = max(0, amount - subtotal)
     # Razorpay's INR settlement figure for this renewal charge (entity in hand).
     base_minor, fx_rate = money.settled_inr_minor(entity)
+
+    if superseded_charge:
+        # Status "superseded", NOT a revenue status: it must not count as coverage
+        # (enterprise_credits._plan_coverage_chain), as the org's billing cycle
+        # (_latest_plan_payment) or as a term the org holds — it bought nothing.
+        db.add(models.EnterpriseSubscriptionPayment(
+            organization_id=org_id,
+            created_by_user_id=(seed_row.created_by_user_id if seed_row else None),
+            plan=plan_key,
+            billing_cycle="monthly",
+            amount_paise=amount,
+            subtotal_paise=subtotal,
+            tax_paise=tax,
+            tax_percent=(seed_row.tax_percent if seed_row else None),
+            tax_label=(seed_row.tax_label if seed_row else None),
+            included_credits=0,
+            currency=currency,
+            base_amount_paise=base_minor,
+            base_currency="INR",
+            fx_rate_used=fx_rate,
+            is_international=bool(entity.get("international")),
+            razorpay_order_id=payment_id,
+            razorpay_payment_id=payment_id,
+            razorpay_subscription_id=subscription_id,
+            status="superseded",
+            error_message="Charged on a superseded mandate — refund this payment.",
+            verified_at=datetime.utcnow(),
+        ))
+        db.commit()
+        try:
+            _razorpay_request("POST", f"/subscriptions/{subscription_id}/cancel", {"cancel_at_cycle_end": 0})
+        except Exception:
+            logger.exception("subscription-charged: re-cancel of superseded mandate %s failed", subscription_id)
+        logger.error(
+            "subscription-charged: org=%s was charged %s %s on SUPERSEDED mandate %s (payment %s) — "
+            "REFUND IT; plan left unchanged",
+            org_id, amount, currency, subscription_id, payment_id,
+        )
+        return {"status": "superseded", "refund_required": True}
 
     db.add(models.EnterpriseSubscriptionPayment(
         organization_id=org_id,
@@ -8289,6 +8423,10 @@ def _handle_subscription_charged(db: Session, *, event: dict, payment_entity: di
     sub = billing.get_or_create_org_subscription(db, org_id, commit=False)
     sub.plan = plan_key
     sub.status = "active"
+    # A new mandate's FIRST charge arriving here before the browser verify (closed tab, slow
+    # 3DS) replaces the org's old mandate just as verify would — and verify then takes the
+    # "already applied" branch and never reaches its own cancel. No-op on a renewal.
+    _cancel_superseded_mandate(sub, org_id, keep_id=subscription_id)
     sub.razorpay_subscription_id = subscription_id
     sub.mandate_status = "active"
     # A successful charge means the mandate is healthy again. _handle_mandate_lifecycle sets
@@ -8845,10 +8983,11 @@ def _org_charge_currencies(organization, request: Request | None) -> list[str]:
     to each (an INR-region org: ["INR"]; elsewhere: every ladder currency except INR; country
     unknown: all of them). What a currency selector should offer, so a buyer can never pick
     a currency checkout would then refuse or silently replace."""
-    raw = str(getattr(organization, "country_code", None) or "").strip().upper()
-    # The same country charge_currency_for_org decides by: the org's own, else the request's
-    # CDN geo country, else unknown (every launch currency, INR included, stays allowed).
-    country = (raw if len(raw) == 2 and raw.isalpha() else None) or billing.request_geo_country(request)
+    # The same country charge_currency_for_org decides by (billing.billing_country_for): the
+    # org's own — unless it claims the INR region while the request's known geo country is
+    # outside it — else the request's CDN geo country, else unknown (every launch currency,
+    # INR included, stays allowed).
+    country = billing.billing_country_for(getattr(organization, "country_code", None), request)
     return [
         code for code in money.supported_charge_currencies()
         if billing.region_charge_currency(code, country) == code
@@ -9035,6 +9174,9 @@ def _activate_free_plan(
     sub = billing.get_or_create_org_subscription(db, organization.id, commit=False)
     sub.plan = plan["key"]
     sub.status = "active"
+    # A comped activation is a one-off payment like any order: a live mandate would keep
+    # charging on top of it and re-tier the org at its next charge.
+    _detach_mandate_for_one_off_payment(sub, organization.id)
     base = sub.current_period_end
     if base is not None and getattr(base, "tzinfo", None):
         base = base.replace(tzinfo=None)
@@ -9063,6 +9205,10 @@ def enterprise_billing_checkout(
     if not plan or plan["key"] not in billing.PAID_PLAN_KEYS:
         raise HTTPException(status_code=400, detail="Please choose a valid paid plan.")
     cycle = _checkout_cycle_or_400(payload.billing_cycle)
+    # No change of tier inside a prepaid yearly term (billing.live_term_lock): the new tier
+    # would apply at once to the whole remaining year while its payment only buys time after
+    # it. Before any gateway call, and before the 100%-off activation below.
+    billing.enforce_no_tier_change_during_term_or_409(db, organization.id, plan["key"])
     # The buyer's selected currency (validated strictly; falls back to the org's sticky
     # choice, then country, then INR) and clamped to the org's currency region, then by
     # resolve_plan_currency so price and currency still come from the same PRICE_BOOK entry.
@@ -9499,25 +9645,21 @@ def enterprise_billing_verify(
         # NOW cancel the mandate this one replaces — the replacement is paid for, so there is
         # no window in which the org has neither. Razorpay auto-debits EVERY mandate it holds,
         # so leaving the old one live would charge an upgrading customer for both tiers every
-        # month. Immediate (not cycle-end) because access is governed by `current_period_end`,
-        # which this payment just extended.
-        superseded = (sub.razorpay_subscription_id or "").strip()
-        if superseded and superseded != payment_row.razorpay_subscription_id:
-            try:
-                _razorpay_request("POST", f"/subscriptions/{superseded}/cancel", {"cancel_at_cycle_end": 0})
-            except Exception:
-                # Already cancelled is fine. Anything else must not fail the sale the customer
-                # just paid for, but it MUST be loud: an uncancelled mandate is a double charge.
-                logger.exception(
-                    "billing: could not cancel superseded mandate %s for org %s — CHECK FOR DOUBLE BILLING",
-                    superseded, organization.id,
-                )
+        # month. See _cancel_superseded_mandate.
+        _cancel_superseded_mandate(sub, organization.id, keep_id=payment_row.razorpay_subscription_id)
         # Record the mandate so a renewal webhook can find this org, and clear any earlier
         # cancellation — re-subscribing must not stay flagged to stop at period end.
         sub.razorpay_subscription_id = payment_row.razorpay_subscription_id
         sub.mandate_status = "active"
         sub.cancel_at_period_end = False
         sub.canceled_at = None
+    else:
+        # A ONE-OFF order (every yearly purchase; monthly with ENTERPRISE_AUTO_RENEW=false)
+        # replaces a live monthly mandate just as a new mandate would. Left alone, the old
+        # mandate keeps debiting every month AND each charge re-applies its own tier — a
+        # customer who paid for a year of Team is billed for Starter monthly and knocked
+        # down to Starter at the next charge.
+        _detach_mandate_for_one_off_payment(sub, organization.id)
     # Stack rather than reset, so paying early never shortens the period already bought.
     base = sub.current_period_end
     if base is not None and getattr(base, "tzinfo", None):
@@ -10015,6 +10157,9 @@ def enterprise_coupon_validate(
         if not plan or plan["key"] not in billing.PAID_PLAN_KEYS:
             raise HTTPException(status_code=400, detail="Please choose a valid paid plan.")
         cycle = _checkout_cycle_or_400(payload.billing_cycle)
+        # The same tier-change refusal checkout applies, so a preview never offers a price
+        # the checkout would then refuse.
+        billing.enforce_no_tier_change_during_term_or_409(db, organization.id, plan["key"])
         # Same resolver, same price book, same currency as /billing/checkout — this is a
         # PREVIEW of that checkout and must price exactly the way it will, including the
         # explicit-hint refusal, or the card shows one discount and Razorpay charges
@@ -10649,13 +10794,22 @@ ENTERPRISE_TRIAL_DOMAIN_BLOCKED_MESSAGE = (
 
 def _company_domain_already_trialled(db: Session, domain: str) -> bool:
     """Whether an enterprise workspace already exists whose owner or ANY member (active or
-    not) has an address at `domain`.
+    not) who has actually USED an account has an address at `domain`.
 
     Any member, not just owners: the abuse is the same consultancy coming back under a
     colleague's address, and a colleague of theirs is by definition a member of the first
     workspace. Inactive members count too — offboarding everyone at the domain must not
     reopen the trial. The org's creator is checked separately because a workspace whose owner
-    row was reassigned still records who created it.
+    row was reassigned still records who created it (a creator proved the inbox with the
+    signup OTP, so that branch needs no sign-in check).
+
+    A member row created ONLY by an invite never counts. POST /team/users creates the user
+    and an active membership for any typed address, at once, with nothing proving that inbox
+    — so counting it let any workspace (a free gmail trial included) mark an arbitrary
+    company's domain as "already trialled" by inviting and removing one address, and that
+    company's real founder was then refused a trial. Signing in (users.last_login_at /
+    first_login_at) or using the portal (membership.last_active_at) is the evidence that the
+    company itself used a workspace.
 
     Matched with an escaped LIKE suffix on the lower-cased address, so "%" / "_" can never
     widen it, and only on exactly this domain (a subsidiary on its own domain is its own
@@ -10666,6 +10820,11 @@ def _company_domain_already_trialled(db: Session, domain: str) -> bool:
         db.query(models.EnterpriseOrganizationMember.id)
         .join(models.User, models.User.id == models.EnterpriseOrganizationMember.user_id)
         .filter(email_lc.like(pattern, escape="\\"))
+        .filter(or_(
+            models.User.last_login_at.isnot(None),
+            models.User.first_login_at.isnot(None),
+            models.EnterpriseOrganizationMember.last_active_at.isnot(None),
+        ))
         .first()
     )
     if via_member is not None:
@@ -11715,10 +11874,10 @@ def enterprise_list_client_documents(
         ],
         # So the upload card and every Scan button can price themselves without a second call.
         "scan_pricing": _document_scan_pricing(db, organization.id),
-        # A scan is debited by the background worker, AFTER the upload/scan response has
-        # already been sent — so this list (which the UI polls for the verdict) is where the
-        # post-charge balance actually becomes visible. Without it the sidebar badge would
-        # keep showing the pre-scan balance until the next full page load.
+        # A scan is debited in the upload/scan request but REFUNDED by the background worker
+        # when it returns no verdict, after the response has been sent — so this list (which
+        # the UI polls for the verdict) is where the settled balance becomes visible. Without
+        # it the sidebar badge would keep showing a refunded charge until the next page load.
         "wallet": (
             credits.wallet_state(
                 db, organization.id,
@@ -11825,10 +11984,32 @@ async def enterprise_upload_client_document(
         logger.exception("Failed to store client document (org_id=%s, client_id=%s)", organization.id, client.id)
         raise HTTPException(status_code=502, detail="Could not store the document right now. Please try again.")
 
+    document_type_key = catalog.normalize_document_type(document_type)
+    # Debit the check NOW, in the transaction that inserts the row (refunded by the worker if
+    # the check returns no verdict). The pre-checks above reserve nothing, so a batch of
+    # uploads all passed them against the same balance and only the first could be charged
+    # once its model call returned. A wallet a concurrent action drained since the pre-check
+    # 402s here, and the blob just stored goes with it.
+    scan_reservation = None
+    if want_scan:
+        try:
+            scan_reservation = credits.reserve_action(
+                db, organization.id, ENTERPRISE_DOC_SCAN_ACTION_KEY, units=scan_units,
+                user=current_user, reference_type="client", reference_id=client.id,
+                description=f"Document scan — {document_type_key} · {client.full_name}",
+            )
+        except HTTPException:
+            db.rollback()
+            try:
+                await run_in_threadpool(enterprise_storage.delete_document, storage_key)
+            except Exception:
+                logger.warning("Could not delete an unpaid upload's blob (key=%s)", storage_key, exc_info=True)
+            raise
+
     doc = models.EnterpriseClientDocument(
         organization_id=organization.id,
         client_id=client.id,
-        document_type=catalog.normalize_document_type(document_type),
+        document_type=document_type_key,
         original_filename=original,
         storage_key=storage_key,
         file_size=len(data),
@@ -11837,6 +12018,7 @@ async def enterprise_upload_client_document(
         uploaded_by_name=current_user.full_name or current_user.email,
         # The background reader settles this to read / not_read / failed.
         read_status=DOC_READ_PENDING,
+        validation_credits_charged=(scan_reservation["credits"] if scan_reservation else 0),
     )
     db.add(doc)
     db.commit()
@@ -11847,7 +12029,7 @@ async def enterprise_upload_client_document(
     # itself instead of using reads. Both run in the background so neither slows the upload.
     _start_document_processing(
         doc.id, data, original, file.content_type,
-        validate=want_scan, charge_user_id=current_user.id, scan_units=scan_units,
+        validate=want_scan, charge_user_id=current_user.id, scan_reservation=scan_reservation,
     )
 
     message = "Document uploaded." + (" Rilono AI is scanning it." if want_scan else "")
@@ -11863,7 +12045,7 @@ async def enterprise_upload_client_document(
         # Why a requested scan did not run: "no_permission" (no credits.spend),
         # "ai_unavailable" (AI not configured), "ai_paused" (trial ended / plan lapsed), or null.
         "scan_skipped_reason": scan_skipped_reason,
-        # What this check will be debited once it returns a verdict (blocks × block price).
+        # What this check was debited (blocks × block price) — given back if it returns no verdict.
         "scan_units": scan_units if want_scan else 0,
         "scan_cost_credits": (
             credits.action_cost(ENTERPRISE_DOC_SCAN_ACTION_KEY, scan_units) if want_scan else 0
@@ -11984,13 +12166,14 @@ DOC_READ_PENDING = "pending"
 DOC_READ_FAILED = "failed"
 # A document left "pending" longer than this has lost its reader: the reading runs on a
 # daemon thread, which dies with the process on a deploy or restart and never writes the
-# outcome. Past this age "Read now" may claim it again (see _document_can_read_now).
+# outcome. Past this age "Read now" may claim it again (see _document_can_read_now). The age
+# runs from read_started_at — when the read was claimed — not from the upload.
 ENTERPRISE_DOC_READ_STALE_MINUTES = int(os.getenv("ENTERPRISE_DOC_READ_STALE_MINUTES", "30") or "30")
 
-# Documents whose reader is running in THIS process. A "pending" row listed here is alive
-# however old the upload is, so the staleness rule above can never hand a document that is
-# being read right now to a second, double-charged read (e.g. "Read now" double-clicked on
-# an old upload). Rows another process is reading are covered by the age rule alone.
+# Documents a worker is reading or checking in THIS process. Listed here, a document is
+# never handed to a second, double-charged read, whatever its read_status says — a paid check
+# reads a "not_read" file without changing that status first. Rows another process is
+# working on are covered by the "pending" stamp: a fresh read_started_at is a live reader.
 _DOC_READS_IN_FLIGHT: set[int] = set()
 _DOC_READS_IN_FLIGHT_LOCK = threading.Lock()
 
@@ -12008,23 +12191,65 @@ def _document_has_text(doc) -> bool:
     return bool((getattr(doc, "extracted_text", None) or "").strip())
 
 
+def _doc_read_stale_cutoff() -> datetime:
+    return datetime.utcnow() - timedelta(minutes=max(1, ENTERPRISE_DOC_READ_STALE_MINUTES))
+
+
+def _document_read_is_live(doc) -> bool:
+    """Something may be reading this document right now: a worker of this process has it,
+    or it is "pending" with a claim (or, unclaimed, an upload) younger than the stale age."""
+    with _DOC_READS_IN_FLIGHT_LOCK:
+        if int(doc.id) in _DOC_READS_IN_FLIGHT:
+            return True
+    if getattr(doc, "read_status", None) != DOC_READ_PENDING:
+        return False
+    started = _utc_naive(getattr(doc, "read_started_at", None) or getattr(doc, "created_at", None))
+    if started is None:
+        return True
+    return started >= _doc_read_stale_cutoff()
+
+
 def _document_can_read_now(doc) -> bool:
     """Whether "Read now" may read this document: never read (not_read), a read that
-    failed, a legacy row with no text, or a "pending" read orphaned by a restart."""
+    failed, a legacy row with no text, or a "pending" read orphaned by a restart — and in
+    every case only while nothing is reading it (a paid check in flight reads it too)."""
+    if _document_read_is_live(doc):
+        return False
     status_value = getattr(doc, "read_status", None)
-    if status_value in (DOC_READ_NOT_READ, DOC_READ_FAILED):
+    if status_value in (DOC_READ_NOT_READ, DOC_READ_FAILED, DOC_READ_PENDING):
         return True
     if status_value is None:
         return not _document_has_text(doc)
-    if status_value == DOC_READ_PENDING:
-        with _DOC_READS_IN_FLIGHT_LOCK:
-            if int(doc.id) in _DOC_READS_IN_FLIGHT:
-                return False
-        created = _utc_naive(getattr(doc, "created_at", None))
-        if created is None:
-            return False
-        return created < datetime.utcnow() - timedelta(minutes=max(1, ENTERPRISE_DOC_READ_STALE_MINUTES))
     return False
+
+
+def _claim_document_read(db: Session, doc) -> bool:
+    """Mark `doc` "pending" with read_started_at = now, atomically, from the read_status the
+    caller just judged it by. False = another request claimed it first (the caller answers
+    409). Uncommitted: the caller commits it with whatever it pays for the read.
+
+    A conditional UPDATE, so two clicks (two tabs, two staff, two processes) cannot both
+    claim it. Re-claiming an orphaned "pending" read is a compare-and-set on its staleness
+    in SQL: pending→pending would otherwise match for every caller, and the first claim's
+    fresh stamp is exactly what makes the second one miss."""
+    Doc = models.EnterpriseClientDocument
+    previous_status = doc.read_status
+    query = db.query(Doc).filter(Doc.id == doc.id)
+    if previous_status is None:
+        query = query.filter(Doc.read_status.is_(None))
+    else:
+        query = query.filter(Doc.read_status == previous_status)
+    if previous_status == DOC_READ_PENDING:
+        cutoff = _doc_read_stale_cutoff()
+        query = query.filter(or_(
+            Doc.read_started_at < cutoff,
+            and_(Doc.read_started_at.is_(None), Doc.created_at < cutoff),
+        ))
+    claimed = query.update(
+        {"read_status": DOC_READ_PENDING, "read_started_at": datetime.utcnow()},
+        synchronize_session=False,
+    )
+    return bool(claimed)
 
 
 def _action_price_label(action_key: str) -> str:
@@ -12260,7 +12485,8 @@ def _ent_read_document_text(
     answer 402 synchronously).
 
     metered=False is the paid document check's own reading: the check reads the file itself
-    and is priced per block, so it never touches the reads allowance.
+    and is priced per block, so it never touches the reads allowance, and its model usage is
+    booked under ENTERPRISE_SCAN_READ_USAGE_SOURCE (the check's cost), not the allowance's.
     """
     org_id = row.organization_id
     reads_taken = 0
@@ -12293,6 +12519,12 @@ def _ent_read_document_text(
             data, filename, mime_type or "application/octet-stream",
             model_candidates=gemini_service.enterprise_read_model_candidates(),
             max_blocks=ENTERPRISE_DOC_READ_MAX_BLOCKS,
+            # The paid check's reading is part of what the check costs, so the margin report
+            # books it to document_scan — not to the reads allowance it never touches.
+            usage_source=(
+                gemini_service.ENTERPRISE_READ_USAGE_SOURCE if metered
+                else gemini_service.ENTERPRISE_SCAN_READ_USAGE_SOURCE
+            ),
         )
     except Exception:
         logger.exception("Enterprise doc reading failed (document_id=%s)", row.id)
@@ -12319,7 +12551,7 @@ def _start_document_processing(
     *,
     validate: bool,
     charge_user_id: int | None = None,
-    scan_units: int = 1,
+    scan_reservation: dict | None = None,
     prepaid_reads: dict | None = None,
 ) -> None:
     """Background work for a stored document, in two halves.
@@ -12330,13 +12562,14 @@ def _start_document_processing(
     allowance is used up (or AI is paused) the document is stored "not_read" with no model
     call at all — see _ent_read_document_text.
 
-    ONLY when `validate` (billed, credits action "document_scan", `scan_units` 15-page
-    blocks): run Rilono AI's validation + structured extraction, cross-checked against the
-    client profile and their already-validated documents, and auto-fill empty profile fields
-    from a passed identity document. The caller must already have run
-    credits.enforce_action_or_402 for those units — this worker debits the wallet *after* a
-    successful scan, so a failed scan is never billed. A paid check reads the file itself:
-    a document with no text yet is read as part of the check, without using reads.
+    ONLY when `validate` (billed, credits action "document_scan"): run Rilono AI's validation
+    + structured extraction, cross-checked against the client profile and their
+    already-validated documents, and auto-fill empty profile fields from a passed identity
+    document. The caller has already DEBITED the check (`scan_reservation`, from
+    credits.reserve_action, committed with the row); this worker refunds it when the check
+    returns no verdict, so a failed check is still never billed. A paid check reads the file
+    itself: a document with no text yet is read as part of the check, without using reads.
+    `charge_user_id` attributes that refund to the member who ran the check.
 
     `prepaid_reads` ({"organization_id", "reads", "period_key"}) comes from "Read now", which
     consumed the reads in the request; the worker only reads, and returns them on failure.
@@ -12345,6 +12578,21 @@ def _start_document_processing(
     which validate — no authenticated member chose to spend), the on-demand scan endpoint
     and "Read now".
     """
+    def _refund_check(db2: Session, row, document_type=None) -> None:
+        """Give the check's reservation back (uncommitted). A row is stamped 0 charged."""
+        if not scan_reservation:
+            return
+        charging_user = (
+            db2.query(models.User).filter(models.User.id == int(charge_user_id)).first()
+            if charge_user_id else None
+        )
+        credits.refund_reservation(
+            db2, scan_reservation, user=charging_user, commit=False,
+            description=f"Refund — Rilono AI couldn't check {document_type or 'a document'}",
+        )
+        if row is not None:
+            row.validation_credits_charged = 0
+
     def _worker():
         import json
         from datetime import timezone
@@ -12365,6 +12613,10 @@ def _start_document_processing(
                         )
                     except Exception:
                         logger.exception("Could not give back reads for a deleted document (document_id=%s)", document_id)
+                # ...and so does a check debited for it: nothing was checked.
+                if scan_reservation:
+                    _refund_check(db2, None)
+                    db2.commit()
                 return
             # Fresh thread = fresh contextvars: attribute this worker's Gemini calls
             # (reading + validation) to the org so their cost isn't unattributed.
@@ -12398,7 +12650,6 @@ def _start_document_processing(
                 db2.commit()
                 return
 
-            units_to_charge = max(1, int(scan_units or 1))
             # 2) Validate the document + extract structured identity fields.
             destination_code = client.destination_country_code if client is not None else None
             destination_summary = (
@@ -12487,43 +12738,38 @@ def _start_document_processing(
 
             # Bill only a scan that actually returned a verdict. "error" means Rilono AI
             # could not read the document — the agency gets that for free, same invariant
-            # every other AI action here holds (a failed action is never charged).
-            if row.validation_status in {"valid", "invalid"}:
-                charging_user = (
-                    db2.query(models.User).filter(models.User.id == int(charge_user_id)).first()
-                    if charge_user_id else None
-                )
-                try:
-                    # Priced per 15-page block (scan_units, counted by the endpoint that
-                    # pre-checked the wallet for exactly this amount); the row records the
-                    # same total the ledger row debits.
-                    credits.charge_action(
-                        db2, row.organization_id, ENTERPRISE_DOC_SCAN_ACTION_KEY,
-                        units=units_to_charge,
-                        user=charging_user, reference_type="client", reference_id=row.client_id,
-                        description=(
-                            f"Document scan — {row.document_type}"
-                            + (f" · {client.full_name}" if client is not None else "")
-                        ),
-                        commit=False,
-                    )
-                    row.validation_credits_charged = credits.action_cost(
-                        ENTERPRISE_DOC_SCAN_ACTION_KEY, units_to_charge,
-                    )
-                except Exception:
-                    # The wallet was drained by a concurrent action between this scan's
-                    # pre-check and here. The Gemini call is already paid for, so keep the
-                    # result rather than discarding work — but record 0 charged so the
-                    # ledger and this row never disagree about what was actually billed.
-                    logger.warning(
-                        "Document scan completed but could not be charged (document_id=%s, org_id=%s)",
-                        document_id, row.organization_id, exc_info=True,
-                    )
-                    row.validation_credits_charged = 0
+            # every other AI action here holds (a failed action is never charged): the
+            # request's reservation goes back. A verdict keeps it, and the row already
+            # records the same total the ledger row debited.
+            if row.validation_status not in {"valid", "invalid"}:
+                _refund_check(db2, row, row.document_type)
 
             db2.commit()
         except Exception:
             logger.exception("Background document processing failed (document_id=%s)", document_id)
+            if scan_reservation:
+                # The check never finished: refund it, and settle the row so it is not left
+                # "scanning" (or "reading") with a charge on it.
+                try:
+                    db2.rollback()
+                    row = (
+                        db2.query(models.EnterpriseClientDocument)
+                        .filter(models.EnterpriseClientDocument.id == int(document_id))
+                        .first()
+                    )
+                    _refund_check(db2, row, row.document_type if row is not None else None)
+                    if row is not None:
+                        if row.validation_status is None:
+                            row.validation_status = "error"
+                            row.validation_message = "Rilono AI could not validate this document automatically."
+                        if row.read_status == DOC_READ_PENDING and not _document_has_text(row):
+                            row.read_status = DOC_READ_FAILED
+                    db2.commit()
+                except Exception:
+                    logger.exception(
+                        "Could not refund a failed document check — REFUND IT BY HAND "
+                        "(document_id=%s, reservation=%s)", document_id, scan_reservation,
+                    )
         finally:
             db2.close()
             with _DOC_READS_IN_FLIGHT_LOCK:
@@ -12578,6 +12824,10 @@ def enterprise_scan_client_document(
         # NULL means a scan is already in flight; a second one would bill twice for the
         # same document and race the first worker's write.
         raise HTTPException(status_code=409, detail="Rilono AI is already scanning this document.")
+    if _document_read_is_live(doc):
+        # A "Read now" (or an upload's read) is still running: a check would read the same
+        # file a second time and race it for extracted_text / read_status.
+        raise HTTPException(status_code=409, detail="Rilono AI is already reading this document.")
     if not gemini_service.is_ai_configured():
         raise HTTPException(status_code=503, detail="Document scanning isn't available right now.")
 
@@ -12599,16 +12849,34 @@ def enterprise_scan_client_document(
             db, organization.id, ENTERPRISE_DOC_SCAN_ACTION_KEY, units=scan_units,
         )
 
+    # One transaction: claim the read (when the check will read the file), debit the check
+    # (refunded by the worker if it returns no verdict — see the upload endpoint for why it is
+    # debited here), and mark the scan in flight. Any refusal rolls all of it back.
+    try:
+        if not _document_has_text(doc) and not _claim_document_read(db, doc):
+            # The check reads a file with no text itself, so it takes the read the way "Read
+            # now" does: the stamp hides "Read now" on every process while it runs.
+            raise HTTPException(status_code=409, detail="Rilono AI is already reading this document.")
+        scan_reservation = credits.reserve_action(
+            db, organization.id, ENTERPRISE_DOC_SCAN_ACTION_KEY, units=scan_units,
+            user=current_user, reference_type="client", reference_id=client.id,
+            description=f"Document scan — {doc.document_type} · {client.full_name}",
+        )
+    except HTTPException:
+        db.rollback()
+        raise
+
     # Hand the worker a clean slate: a re-scan that fails must not leave the previous
     # verdict on screen looking like the new one. NULL marks the scan as in flight.
     doc.validation_status = None
     doc.validation_message = None
+    doc.validation_credits_charged = scan_reservation["credits"]
     db.commit()
     db.refresh(doc)
 
     _start_document_processing(
         doc.id, data, doc.original_filename, doc.mime_type,
-        validate=True, charge_user_id=current_user.id, scan_units=scan_units,
+        validate=True, charge_user_id=current_user.id, scan_reservation=scan_reservation,
     )
 
     return {
@@ -12680,7 +12948,9 @@ def enterprise_read_client_document(
     if not doc:
         raise HTTPException(status_code=404, detail="Document not found.")
     if not _document_can_read_now(doc):
-        if doc.read_status == DOC_READ_PENDING:
+        if doc.read_status == DOC_READ_PENDING or (
+            _document_read_is_live(doc) and not _document_has_text(doc)
+        ):
             raise HTTPException(status_code=409, detail="Rilono AI is already reading this document.")
         raise HTTPException(status_code=409, detail="Rilono AI has already read this document.")
     if not gemini_service.is_ai_configured():
@@ -12693,20 +12963,11 @@ def enterprise_read_client_document(
         data, doc.original_filename, doc.mime_type or "", max_blocks=ENTERPRISE_DOC_READ_MAX_BLOCKS,
     )
 
-    # Claim the document ATOMICALLY before consuming: a conditional UPDATE from the state we
-    # just judged readable, so two clicks (two tabs, two staff) cannot both pass the check
-    # above and spend the reads twice. The loser gets the same 409 as a read in flight.
-    previous_status = doc.read_status
-    if previous_status is None:
-        status_match = Doc.read_status.is_(None)
-    else:
-        status_match = Doc.read_status == previous_status
-    claimed = (
-        db.query(Doc)
-        .filter(Doc.id == doc.id, status_match)
-        .update({"read_status": DOC_READ_PENDING}, synchronize_session=False)
-    )
-    if not claimed:
+    # Claim the document ATOMICALLY before consuming (see _claim_document_read), so two
+    # clicks cannot both pass the check above and spend the reads twice. The loser gets the
+    # same 409 as a read in flight.
+    previous_status, previous_started = doc.read_status, doc.read_started_at
+    if not _claim_document_read(db, doc):
         db.rollback()
         raise HTTPException(status_code=409, detail="Rilono AI is already reading this document.")
 
@@ -12715,9 +12976,11 @@ def enterprise_read_client_document(
     # wallet row lock. Committed together with the claim below.
     reads = credits.reads_state(db, organization.id)
     if not credits.consume_reads(db, organization.id, units, commit=False):
-        # Put the document back exactly as it was; the period grant above is kept.
+        # Put the document back exactly as it was — the stamp too, or a refused re-claim of
+        # an orphan would look freshly started for another stale period. The grant is kept.
         db.query(Doc).filter(Doc.id == doc.id).update(
-            {"read_status": previous_status}, synchronize_session=False,
+            {"read_status": previous_status, "read_started_at": previous_started},
+            synchronize_session=False,
         )
         db.commit()
         raise HTTPException(status_code=402, detail=_reads_exhausted_detail(reads, units))
@@ -14528,6 +14791,12 @@ def public_interview_chat(payload: PublicInterviewChatRequest, request: Request,
         # so the "send to student" links can't be used to run Gemini for free.
         if not credits.can_afford(db, org.id, "mock_interview"):
             raise HTTPException(status_code=402, detail=_PUBLIC_INTERVIEW_UNAVAILABLE)
+        # can_afford's plan-grant sync takes the wallet row lock (SELECT … FOR UPDATE), and a
+        # released savepoint does not release it on PostgreSQL: without this commit the lock
+        # was held through the 10-40 s opening turn, queueing every other wallet operation of
+        # the org (other students' starts, staff uploads' reads, the assistant) behind it.
+        # Nothing else is pending here; the charge below re-locks and re-checks the balance.
+        db.commit()
         try:
             turn = enterprise_interview.run_interview_turn(
                 client=client, organization=org, recent_notes=[],  # never leak staff notes to the client
@@ -15122,9 +15391,29 @@ async def public_document_request_upload(
     db.add(doc)
     db.flush()
 
+    # Each requested item gets ONE metered read from this link. The link holder is an
+    # outsider and "Replace file" is a normal action on the client page, so reading every
+    # re-upload let one client spend the agency's whole monthly reads allowance — which cannot
+    # be topped up — by re-uploading a 150-page PDF. The first upload of an item claims it with
+    # a conditional UPDATE (two parallel first uploads cannot both win); a replacement is
+    # stored "not_read" with no model call, and staff can "Read now" it. Its predecessor's
+    # reads are NOT given back: that read really ran.
+    Item = models.EnterpriseDocumentRequestItem
+    received_at = datetime.utcnow()
+    first_upload = bool(
+        db.query(Item)
+        .filter(Item.id == item.id, or_(Item.status != "received", Item.document_id.is_(None)))
+        .update({"status": "received", "document_id": doc.id, "received_at": received_at},
+                synchronize_session=False)
+    )
+    if not first_upload:
+        doc.read_status = DOC_READ_NOT_READ
+        doc.read_blocks = 0
+        doc.validation_status = "not_scanned"
+
     item.document_id = doc.id
     item.status = "received"
-    item.received_at = datetime.utcnow()
+    item.received_at = received_at
     was_completed = bool(req.completed_at)
     _recompute_docreq_status(req)
     db.commit()
@@ -15145,7 +15434,8 @@ async def public_document_request_upload(
     # holding an emailed link, with no authenticated member and no capability check, so
     # auto-scanning would let an outsider spend the agency's credits at will (and, by
     # re-uploading, without limit). Staff scan these from the document card instead.
-    _start_document_processing(doc.id, data, original, file.content_type, validate=False)
+    if first_upload:
+        _start_document_processing(doc.id, data, original, file.content_type, validate=False)
 
     return {
         "message": "Uploaded.",

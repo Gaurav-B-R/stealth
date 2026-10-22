@@ -331,12 +331,21 @@ def _plans_block() -> str:
         "India, Plans & Billing also shows an approximate US$ amount)."
         if region_names else "Workspaces in India are billed in INR only."
     )
+    # The geo-match sentence only while billing.INR_REQUIRE_GEO_MATCH is on — the guide must
+    # not describe a check the server isn't making.
+    geo_text = (
+        " A workspace set to one of the INR countries but paying from a country outside them "
+        "is billed in that country's currency (or USD), not INR."
+        if billing.INR_REQUIRE_GEO_MATCH else ""
+    )
     lines.append(
         "Prices above are the INR list prices. " + region_text + " Workspaces in any other "
         "country are billed at fixed prices in " + _join(others) + " — their own currency "
         "where it's on that list, otherwise USD — and can't be billed in INR. The country is "
         "the workspace's company location (Settings), or where you are browsing from if none "
-        "is set. Plans & Billing always shows the currency you will actually be charged in."
+        "is set." + geo_text + " Once a plan has been paid for, the company location can only "
+        "be changed by Rilono support. Plans & Billing always shows the currency you will "
+        "actually be charged in."
     )
 
     # Tax. Worded from the live rate; at 0% nothing here may say "GST".

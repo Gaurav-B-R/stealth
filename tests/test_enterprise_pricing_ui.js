@@ -26,7 +26,7 @@ const EXPORTS = [
   'renderCredits', 'openCreditCheckout', 'renderClientPage', 'tmDrawRoles', 'tmPaintBranches',
   'branchFilterHtml', 'docReadBadge', 'planFeature', 'aiPausedMessage', 'isAiPausedError',
   'priceLabelFor', 'creditCostFor', 'billingStartPrice', 'setStatus', 'applyAiMeta', 'sendAi',
-  'renderAiThread', 'updatePlanChip', 'notOpenStageLabels', 'planAllowanceSummary',
+  'renderAiThread', 'updatePlanChip', 'notOpenStageLabels', 'planAllowanceSummary', 'creditTxnMeta',
 ];
 const patched = source
   .replace(HOOK, `  globalThis.__entTest = { ${EXPORTS.join(', ')} };\n${HOOK}`)
@@ -365,6 +365,95 @@ test('usage panel: open files with the grace deadline, team seats and the reads 
   assert.ok(html.includes('120 left'));
 });
 
+test('the current paid tier can be renewed or moved to the other cycle; a live mandate never gets a second one', async () => {
+  const yearlyPlans = PLANS().map((c) => ({ ...c, yearly_enabled: true }));
+  const routes = (s) => ({
+    'GET /billing/subscription': billingPayload({ yearly_enabled: true, plans: yearlyPlans, subscription: s }),
+    'POST /billing/checkout': ({ body }) => jsonResponse({ action: 'contact_sales', message: 'x', echo: body }),
+  });
+  const btn = (plan, label) => `__ent.checkout('${plan}',this)">${label}`;
+
+  // Team paid for a year (one-off order, nothing renews it): Renew in the Yearly view.
+  const teamYear = sub({ plan: 'growth', plan_label: 'Team', billing_cycle: 'yearly', auto_renews: false, has_mandate: false });
+  const app = setup({ routes: routes(teamYear) });
+  app.state.billingCycle = 'yearly';
+  await app.renderBilling();
+  let html = content(app);
+  assert.ok(html.includes('✓ Current plan') && html.includes(btn('growth', 'Renew Team · yearly')), 'renew the current yearly tier');
+  await app.checkout('growth', null);
+  const sent = app.requests.find((r) => r.url.endsWith('/billing/checkout'));
+  assert.equal(sent.body.plan, 'growth');
+  assert.equal(sent.body.billing_cycle, 'yearly');
+  // ...and in the Monthly view the same card moves it to monthly (in the year's last month)...
+  app.state.billingCycle = 'monthly';
+  await app.renderBilling();
+  assert.ok(content(app).includes(btn('growth', 'Switch to monthly')));
+  // ...but not while months of the prepaid year are still to run (a mandate would debit
+  // monthly from today on top of it).
+  const midYear = setup({ routes: routes({ ...teamYear, term_locked_until: '2027-08-01T00:00:00' }) });
+  await midYear.renderBilling();
+  assert.ok(!content(midYear).includes("__ent.checkout('growth',this)"));
+  midYear.state.billingCycle = 'yearly';
+  await midYear.renderBilling();
+  assert.ok(content(midYear).includes(btn('growth', 'Renew Team · yearly')), 'renewing the year early is fine');
+
+  // A live monthly mandate already renews the tier: no button in the Monthly view…
+  const mandate = sub({ auto_renews: true, has_mandate: true, billing_cycle: 'monthly' });
+  const m = setup({ routes: routes(mandate) });
+  await m.renderBilling();
+  assert.ok(!content(m).includes("__ent.checkout('starter',this)"), 'no second mandate for the same tier');
+  // …and the Yearly view says the mandate will be cancelled, on its own card and the others.
+  m.state.billingCycle = 'yearly';
+  await m.renderBilling();
+  html = content(m);
+  assert.ok(html.includes(btn('starter', 'Switch to yearly')));
+  assert.ok(html.includes(btn('growth', 'Switch to Team · yearly')));
+  assert.equal(html.split('your monthly auto-renewal will be cancelled').length - 1, 3, 'starter, team and multi-branch');
+
+  // Monthly with auto-renewal turned off: Renew (monthly), and no mandate note anywhere.
+  const off = setup({ routes: routes(sub({ auto_renews: false, has_mandate: true, cancel_at_period_end: true })) });
+  await off.renderBilling();
+  html = content(off);
+  assert.ok(html.includes(btn('starter', 'Renew Starter<')));
+  assert.ok(!html.includes('auto-renewal will be cancelled'));
+});
+
+test('inside a prepaid year the other tiers offer "contact us", not a Switch button the server would refuse', async () => {
+  const locked = sub({ plan: 'growth', plan_label: 'Team', billing_cycle: 'yearly', term_locked_until: '2027-08-01T00:00:00' });
+  const app = setup({ routes: {
+    'GET /billing/subscription': billingPayload({ subscription: locked }),
+    'POST /coupons/validate': ({ body }) => jsonResponse({ code: body.code, percent_off: 10, percent_display: '10%', echo: body }),
+  } });
+  await app.renderBilling();
+  const html = content(app);
+  assert.ok(html.includes(`Your plan is paid to ${day('2027-08-01T00:00:00')}`));
+  assert.ok(html.includes("__ent.go('support')"));
+  assert.ok(!html.includes("__ent.checkout('starter',this)") && !html.includes("__ent.checkout('scale',this)"));
+  // Its own card offers no monthly purchase mid-year either (see the renew test for yearly).
+  assert.ok(!html.includes("__ent.checkout('growth',this)"));
+  // The coupon preview validates against the tier the org can actually buy now.
+  app.dom.get('billingCouponInput').value = 'TEN';
+  await app.applyBillingCoupon();
+  const validate = app.requests.find((r) => r.url.endsWith('/coupons/validate'));
+  assert.equal(validate.body.plan, 'growth');
+});
+
+test('a lapsed paid plan is headed "<plan> plan · expired", never as a fresh trial with 0 days left', async () => {
+  const lapsed = sub({
+    plan: 'sandbox', plan_label: '14-day free trial', is_sandbox: true, is_trial: true, status: 'lapsed',
+    plan_lapsed: true, lapsed_plan: 'growth', lapsed_plan_label: 'Team', lapsed_at: '2026-09-22T10:00:00',
+    trial_expired: false, trial_days_left: 0, trial_ends_at: '2026-09-08T10:00:00', current_period_end: '2026-09-22T10:00:00',
+    ai_paused: true, ai_paused_reason: 'plan_lapsed', ai_paused_message: 'Your Team plan has expired — AI features are paused.',
+  });
+  const app = setup({ routes: { 'GET /billing/subscription': billingPayload({ subscription: lapsed }) } });
+  await app.renderBilling();
+  const html = content(app);
+  assert.ok(html.includes('Team plan <span') && html.includes('· expired'));
+  assert.ok(html.includes(`Expired ${day('2026-09-22T10:00:00')} — on trial limits until you renew`));
+  assert.ok(!html.includes('days left') && !html.includes('Trial ends'), 'no stale trial countdown');
+  assert.equal(app.dom.get('brandPlan').textContent, 'Team (expired)');
+});
+
 // ---------------------------------------------------------------------------
 // Banners
 // ---------------------------------------------------------------------------
@@ -425,6 +514,26 @@ test('wallet: per-unit price_label rows, server low-balance threshold, reads, an
   assert.ok(!html.includes('First Deep Scan'), 'deep_scans_per_client = 0 → no free-scan promise');
   assert.ok(!/first Deep Scan on each client/.test(html));
   assert.ok(!html.includes('1,000 / 3,500 / 10,000'));
+});
+
+test('the plan-credit bar measures what this period granted and never goes negative or full by mistake', async () => {
+  const draw = async (planCredits) => {
+    const w = wallet({ plan_credits: { plan_label: 'Starter', included_credits: 150, recurring: true, renews_at: '2026-11-21T10:00:00', ...planCredits } });
+    const app = setup({ routes: { 'GET /credits/wallet': { wallet: w, usage: {}, packages: PACKAGES, charge_currencies: ['INR'], topup_allowed: true } } });
+    app.state.view = 'credits';
+    await app.renderCredits();
+    const html = content(app);
+    const m = /Starter includes 150 AI credits[\s\S]*?class="usage-fill" style="width:([^"]*)"/.exec(html);
+    assert.ok(m, 'plan panel bar rendered');
+    return m[1];
+  };
+  // Downgraded mid-period (Team → Starter): 450 granted and untouched — an EMPTY bar, not
+  // width:-200% (invalid, dropped by the browser, drawn full).
+  assert.equal(await draw({ remaining_this_period: 450, granted_this_period: 450, used_this_period: 0 }), '0%');
+  assert.equal(await draw({ remaining_this_period: 300, granted_this_period: 450, used_this_period: 150 }), '33%');
+  // An older server without granted/used still clamps.
+  assert.equal(await draw({ remaining_this_period: 600 }), '0%');
+  assert.equal(await draw({ remaining_this_period: 50 }), '67%');
 });
 
 test('top-ups while AI is paused: disabled with the server message, and a 402 at checkout repaints the wallet', async () => {
@@ -626,6 +735,22 @@ test('assistant: AI paused locks the composer with the server message; a plan bo
   app.updatePlanChip();
   assert.equal(app.state.aiMeta.ai_paused, false);
   assert.equal(ta.disabled, false);
+});
+
+test('the sidebar Clients badge counts every client, not open files, so it does not flip between screens', () => {
+  const app = setup({ subscription: sub({ clients_used: 12, open_files_used: 12, clients_total: 20 }) });
+  app.dom.get('clientsBadge').textContent = '20';      // what the client list's total_clients wrote
+  app.updatePlanChip();                                // e.g. after a wallet refresh
+  assert.equal(app.dom.get('clientsBadge').textContent, '20');
+  app.state.subscription = sub({ clients_used: 12, clients_total: undefined });
+  app.updatePlanChip();                                // an older payload without clients_total
+  assert.equal(app.dom.get('clientsBadge').textContent, '12');
+});
+
+test('a refunded document check reads as a Refund in the ledger, not as a second charge', () => {
+  const app = setup({});
+  assert.equal(app.creditTxnMeta({ type: 'refund', action_key: 'document_scan', credits: 8 }).label, 'Refund');
+  assert.notEqual(app.creditTxnMeta({ type: 'debit', action_key: 'document_scan', credits: -8 }).label, 'Refund');
 });
 
 test('price helpers read the server and never invent a default', () => {

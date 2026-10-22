@@ -779,6 +779,12 @@ class EnterpriseClientDocument(Base):
     # "read" | "not_read" (allowance exhausted or AI paused — the file IS stored; staff can
     #   "Read now" later) | "pending" | "failed" | NULL (legacy row / unknown).
     read_status = Column(String, nullable=True)
+    # When the current "pending" read was CLAIMED ("Read now", or a paid check that reads the
+    # file itself). Staleness is judged from this, not created_at: "Read now" runs on old
+    # uploads, so an age rule on the upload time let a second process re-claim — and
+    # re-charge — a read that had only just started. NULL = a row read at upload (its
+    # created_at is the start).
+    read_started_at = Column(DateTime(timezone=True), nullable=True)
     # Reads this document consumed (ceil(pages / 15)), so a re-read is auditable.
     read_blocks = Column(Integer, nullable=False, default=0, server_default="0")
     uploaded_by_user_id = Column(Integer, ForeignKey("users.id"), nullable=True, index=True)
@@ -1537,6 +1543,10 @@ class EnterpriseCreditWallet(Base):
     copilot_usage_date = Column(String, nullable=True)
     copilot_msgs_today = Column(Integer, nullable=False, default=0)
     copilot_unbilled_msgs = Column(Integer, nullable=False, default=0)
+    # 1 on a wallet whose copilot_unbilled_msgs was converted from the pre-2026-10-22 rate
+    # (5 messages per credit) to today's (2) — once, by schema_patch when this column landed.
+    # Nothing reads it at runtime; it records which counters were rescaled.
+    copilot_unbilled_rescaled = Column(Integer, nullable=False, default=0, server_default="0")
     # Free staff-run mock interview "previews" consumed (the self-serve link is the
     # real product; staff can run a few in-browser test interviews free, then it costs
     # the normal mock_interview price). See app/enterprise_credits.py.

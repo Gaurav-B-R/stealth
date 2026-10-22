@@ -5024,13 +5024,18 @@ function buildPlanPaymentsBlock(data) {
     const body = rows.map((p) => {
         let statusCls = 'created';
         if (p.status === 'verified') statusCls = 'verified';
-        else if (p.status === 'failed') statusCls = 'failed';
+        // "superseded" = charged on a mandate the org had already replaced: money taken for
+        // nothing, to be refunded — red, like a failure, so it is not read as a normal row.
+        else if (p.status === 'failed' || p.status === 'superseded') statusCls = 'failed';
         else if (p.status === 'refunded' || p.status === 'partially_refunded') statusCls = 'refunded';
         const statusLabel = String(p.status || '').replace(/_/g, ' ');
         const offlineTag = p.is_offline ? ' <span class="account-coupon-tag">offline</span>' : '';
         const reference = p.reference ? `<div class="enterprise-meta">${escapeHtml(p.reference)}</div>` : '';
         const recordedBy = (p.is_offline && p.created_by_name)
             ? `<div class="enterprise-meta">recorded by ${escapeHtml(p.created_by_name)}</div>` : '';
+        // The admin's note on an offline payment (deal terms, who confirmed the transfer). Free
+        // text typed by staff, so always escaped; it exists nowhere else in the console.
+        const note = p.note ? `<div class="enterprise-meta">${escapeHtml(p.note)}</div>` : '';
         // Tax is shown only when the row actually carries some — a 0% GST payment has no line.
         const tax = p.tax_display ? `<div class="enterprise-meta">incl. ${escapeHtml(p.tax_label || 'tax')} ${escapeHtml(p.tax_display)}</div>` : '';
         const settled = (currencyCode(p.currency) !== 'INR' && p.settled_inr_display)
@@ -5040,7 +5045,7 @@ function buildPlanPaymentsBlock(data) {
             <td>${escapeHtml(formatDateTime(p.verified_at || p.created_at))}</td>
             <td>${escapeHtml(p.plan_label || p.plan || '—')}<div class="enterprise-meta">${escapeHtml(p.billing_cycle || 'monthly')}</div></td>
             <td>${escapeHtml(moneyOr(p.amount_display, p.currency))}${tax}${settled}${list}</td>
-            <td>${escapeHtml(p.provider_label || p.provider || '—')}${offlineTag}${reference}${recordedBy}</td>
+            <td>${escapeHtml(p.provider_label || p.provider || '—')}${offlineTag}${reference}${recordedBy}${note}</td>
             <td><span class="account-status-chip ${statusCls}">${escapeHtml(statusLabel)}</span></td>
         </tr>`;
     }).join('');
@@ -5097,6 +5102,8 @@ function buildBillingControlsBlock(data) {
                     <input type="text" id="billingPayReference" maxlength="80" autocomplete="off"></label>
                 <label class="coupon-field coupon-field-wide"><span>Note (optional)</span>
                     <input type="text" id="billingPayNote" maxlength="500" placeholder="e.g. NEFT after the demo call"></label>
+                ${c.term_locked_until ? `<label class="coupon-field coupon-field-wide"><span><input type="checkbox" id="billingPayTierNow">
+                    Change tier now: the prepaid ${escapeHtml(c.term_locked_plan_label || c.term_locked_plan || '')} term (to ${escapeHtml(formatDateTime(c.term_locked_until))}) is replaced from today. Prorate the invoice first — without this, a different plan is refused while the term runs.</span></label>` : ''}
             </div>
             <p id="billingPayHint" class="account-meta-line" style="margin:-0.3rem 0 0.6rem"></p>
             <button type="button" id="billingPayBtn" class="primary-btn small-btn">Record payment</button>
@@ -5210,6 +5217,8 @@ function readOfflinePaymentForm(controls) {
         return { error: 'Enter the payment reference (UTR, pay_… id or invoice number) — 3 to 80 characters, no spaces.' };
     }
     if (note) body.note = note;
+    // Only offered while a prepaid yearly term runs (the server 409s a different plan then).
+    if (billingInput('billingPayTierNow').checked) body.change_tier_now = true;
     return { body };
 }
 
@@ -5389,7 +5398,11 @@ function renderCouponTable() {
         return `
             <tr>
                 <td><div class="user-name coupon-code-cell">${escapeHtml(c.code)}</div>${noteRow}</td>
-                <td>${escapeHtml(c.percent_display || (c.percent_off + '%'))}</td>
+                <td>${c.above_cap && c.effective_percent_display
+                    // A legacy code saved above ENTERPRISE_COUPON_MAX_PERCENT: checkout (and the
+                    // promo email) give the cap, so lead with what the code really takes off.
+                    ? `${escapeHtml(c.effective_percent_display)}<div class="enterprise-meta">saved as ${escapeHtml(c.percent_display || (c.percent_off + '%'))} · above cap</div>`
+                    : escapeHtml(c.percent_display || (c.percent_off + '%'))}</td>
                 <td>${escapeHtml(appliesLabel)}</td>
                 <td>${escapeHtml(String(used))} / ${cap}</td>
                 <td>${statusChip}</td>

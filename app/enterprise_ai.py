@@ -1308,7 +1308,8 @@ def build_org_tools(db: Session, organization_id: int, ctx=None, viewer_user_id=
 
     def get_credit_free_allowances() -> dict:
         """Get how much FREE usage is left before credits are charged: free AI assistant
-        messages remaining today, free Deep Scans left this month, free staff mock
+        messages remaining today, free Deep Scans left this month (0 unless a free-scan
+        promotion is on — read deep_scan_note), free staff mock
         interview previews left, and the AI document reads (free upload reading, one per 15
         pages) left this period. Use for 'do I have free scans left', 'am I being charged',
         'why wasn't my document read'."""
@@ -1316,12 +1317,29 @@ def build_org_tools(db: Session, organization_id: int, ctx=None, viewer_user_id=
         wallet = c.get_or_create_wallet(db, org_id, commit=False)
         used_today = int(wallet.copilot_msgs_today or 0) \
             if wallet.copilot_usage_date == datetime.utcnow().strftime("%Y-%m-%d") else 0
+        # Same rule as the router's _deep_scan_pricing: a scan is free only while the per-client
+        # promotion knob is on AND the workspace's monthly free-scan budget lasts. The budget
+        # alone (25 by default) read as "25 free scans left" while every scan cost 40 credits.
+        free_per_client = max(0, int(c.DEEP_SCAN_FREE_SCANS_PER_CLIENT or 0))
+        deep_scan_cost = c.action_cost("deep_scan")
+        if free_per_client > 0:
+            free_budget = c.deep_scan_free_budget_left(db, org_id)
+            deep_scan_note = (
+                f"Each client's first {free_per_client} Deep Scan{'s are' if free_per_client != 1 else ' is'} "
+                f"free while the workspace's monthly free-scan budget lasts ({free_budget} left this "
+                f"month); every other scan costs {deep_scan_cost} credits."
+            )
+        else:
+            free_budget = 0
+            deep_scan_note = f"Every Deep Scan is charged ({deep_scan_cost} credits) — there are no free scans."
         out = {
             "assistant_free_per_day": c.COPILOT_FREE_DAILY,
             "assistant_used_today": used_today,
             "assistant_free_remaining_today": max(0, c.COPILOT_FREE_DAILY - used_today),
             "assistant_messages_per_credit": c.COPILOT_MSGS_PER_CREDIT,
-            "deep_scans_free_left_this_month": c.deep_scan_free_budget_left(db, org_id),
+            "deep_scans_free_left_this_month": free_budget,
+            "deep_scans_free_per_client": free_per_client,
+            "deep_scan_note": deep_scan_note,
             "staff_interview_previews_left": c.staff_interview_preview_remaining(db, org_id),
         }
         try:

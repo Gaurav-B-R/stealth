@@ -392,6 +392,107 @@ def test_resolve_charge_currency_still_refuses_unsupported_hints(ctx):
     assert exc.value.status_code == 400
 
 
+# The org's country is owner-editable, so an INR-region claim must agree with where the
+# request comes from (ENTERPRISE_INR_REQUIRE_GEO_MATCH, default on).
+@pytest.mark.parametrize("country,hint,geo,expected", [
+    ("IN", None, "GB", "GBP"),      # a London office that set IN in Settings
+    ("IN", "INR", "US", "USD"),     # ...whatever it hints
+    ("IN", "EUR", "US", "EUR"),     # a non-INR ladder currency it picks is fine
+    ("NP", None, "JP", "USD"),      # geo country with no ladder of its own → USD
+    ("IN", None, None, "INR"),      # geo unknown: the org's country is trusted
+    ("IN", None, "IN", "INR"),
+    ("IN", "USD", "NP", "INR"),     # geo inside the region: INR only, as before
+    ("GB", "INR", "IN", "GBP"),     # the rule only ever takes INR away, never grants it
+])
+def test_inr_needs_the_request_geo_to_agree_with_the_org_country(ctx, country, hint, geo, expected):
+    ctx.org.country_code = country
+    ctx.db.commit()
+    request = SimpleNamespace(headers={"cf-ipcountry": geo} if geo else {})
+    assert enterprise._resolve_charge_currency(hint, ctx.org, db=ctx.db, request=request) == expected
+
+
+def test_inr_geo_match_kill_switch(ctx, monkeypatch):
+    monkeypatch.setattr(billing, "INR_REQUIRE_GEO_MATCH", False)
+    ctx.org.country_code = "IN"
+    ctx.db.commit()
+    request = SimpleNamespace(headers={"cf-ipcountry": "GB"})
+    assert enterprise._resolve_charge_currency("GBP", ctx.org, db=ctx.db, request=request) == "INR"
+
+
+def test_inr_claim_from_abroad_is_quoted_and_charged_in_the_geo_ladder(ctx):
+    set_plan(ctx, "sandbox")
+    ctx.org.country_code = "IN"
+    ctx.org.billing_currency = "INR"
+    ctx.db.commit()
+    geo = {"CF-IPCountry": "GB"}
+    body = ctx.client.get("/api/enterprise/billing/plans", headers=geo).json()
+    assert body["currency"] == "GBP" and "INR" not in body["charge_currencies"]
+    assert body["subscription"]["inr_region"] is False
+    assert all(p["currency"] == "GBP" for p in body["plans"])
+    res = ctx.client.post(
+        "/api/enterprise/billing/checkout", headers=geo,
+        json={"plan": "starter", "billing_cycle": "monthly", "currency": "INR"},
+    )
+    assert res.status_code == 200, res.text
+    assert res.json()["currency"] == "GBP"
+    assert res.json()["amount"] == billing.checkout_quote("starter", "GBP")["total_minor"]
+    topup = ctx.client.post(
+        "/api/enterprise/credits/topup/checkout", headers=geo, json={"package": "starter", "currency": "INR"},
+    )
+    assert topup.status_code == 200, topup.text
+    assert topup.json()["currency"] == "GBP"
+    # The same org from inside India is still an INR customer.
+    assert ctx.client.get("/api/enterprise/billing/plans", headers={"CF-IPCountry": "IN"}).json()["currency"] == "INR"
+
+
+def _verified_plan_payment(c, ref="order_PAID0001"):
+    c.db.add(models.EnterpriseSubscriptionPayment(
+        organization_id=c.org.id, plan="starter", amount_paise=176_882, currency="INR",
+        razorpay_order_id=ref, status="verified", verified_at=datetime.utcnow(),
+    ))
+    c.db.commit()
+
+
+def test_owner_can_set_the_country_until_the_first_plan_payment(ctx):
+    res = ctx.client.patch("/api/enterprise/organization/branding", json={"country_code": "KE"})
+    assert res.status_code == 200, res.text
+    assert res.json()["organization"]["country_code"] == "KE"
+    assert res.json()["organization"]["billing_country_locked"] is False
+
+
+def test_owner_cannot_change_the_billing_country_after_paying(ctx):
+    _verified_plan_payment(ctx)
+    res = ctx.client.patch(
+        "/api/enterprise/organization/branding", json={"country_code": "GB", "state_region": "London"},
+    )
+    assert res.status_code == 400
+    assert "Contact support to change your billing country" in res.json()["detail"]
+    ctx.db.expire_all()
+    org = ctx.db.get(models.EnterpriseOrganization, ctx.org.id)
+    assert org.country_code == "IN" and org.state_region is None    # nothing half-applied
+    # Clearing it is a change too.
+    assert ctx.client.patch("/api/enterprise/organization/branding", json={"country_code": ""}).status_code == 400
+    # Saving the location form with the SAME country (it always sends it) still works.
+    same = ctx.client.patch(
+        "/api/enterprise/organization/branding", json={"country_code": "in", "state_region": "Karnataka"},
+    )
+    assert same.status_code == 200, same.text
+    assert same.json()["organization"]["state_region"] == "Karnataka"
+    assert same.json()["organization"]["billing_country_locked"] is True
+
+
+def test_settings_country_list_covers_the_whole_inr_region():
+    # "Other" (XX) means OUTSIDE the INR region, so every region member must be pickable.
+    import re
+    from pathlib import Path
+
+    source = (Path(__file__).resolve().parents[1] / "static" / "enterprise.js").read_text(encoding="utf-8")
+    block = re.search(r"const ORG_COUNTRIES = \[(.*?)\];", source, re.S)
+    assert block, "ORG_COUNTRIES moved — update this test"
+    codes = set(re.findall(r'\["([A-Z]{2})",', block.group(1)))
+    assert set(billing.INR_REGION_COUNTRIES) <= codes, sorted(set(billing.INR_REGION_COUNTRIES) - codes)
+
+
 def test_topup_checkout_charges_the_region_currency(ctx):
     set_plan(ctx, "starter")
     ctx.org.country_code = "GB"
@@ -572,6 +673,222 @@ def test_webhook_reconcile_of_a_yearly_order_buys_365_days(ctx):
     assert billing._as_naive(sub.current_period_end) - before > timedelta(days=364)
 
 
+# ---------------------------------------------------------------------------
+# A one-off plan payment replaces a live monthly mandate (no double billing, no re-tier)
+# ---------------------------------------------------------------------------
+
+def _sign_mandate(payment_id, subscription_id):
+    return hmac.new(KEY_SECRET.encode(), f"{payment_id}|{subscription_id}".encode(), hashlib.sha256).hexdigest()
+
+
+def _buy_monthly_mandate(c, plan="starter", payment_id="pay_MANDATE0001"):
+    """Checkout + browser verify of a monthly mandate; returns its subscription id."""
+    body = c.client.post("/api/enterprise/billing/checkout", json={"plan": plan, "billing_cycle": "monthly"}).json()
+    assert body["checkout_mode"] == "subscription", body
+    sub_id = body["subscription_id"]
+    c.rzp.payments[payment_id] = {"amount": body["amount"], "currency": body["currency"], "captured": True}
+    res = c.client.post("/api/enterprise/billing/verify", json={
+        "razorpay_order_id": sub_id, "razorpay_payment_id": payment_id,
+        "razorpay_signature": _sign_mandate(payment_id, sub_id),
+    })
+    assert res.status_code == 200, res.text
+    return sub_id, body["amount"]
+
+
+def _buy_yearly_order(c, plan="growth", payment_id="pay_YEARLYOVER1"):
+    body = c.client.post("/api/enterprise/billing/checkout", json={"plan": plan, "billing_cycle": "yearly"}).json()
+    assert body["checkout_mode"] == "order", body
+    c.rzp.payments[payment_id] = {
+        "amount": body["amount"], "currency": body["currency"], "order_id": body["order_id"], "captured": True,
+    }
+    return body, c.client.post("/api/enterprise/billing/verify", json={
+        "razorpay_order_id": body["order_id"], "razorpay_payment_id": payment_id,
+        "razorpay_signature": _sign(body["order_id"], payment_id),
+    })
+
+
+def _sub_row(c):
+    c.db.expire_all()
+    return c.db.query(models.EnterpriseSubscription).filter_by(organization_id=c.org.id).one()
+
+
+def _charged_event(subscription_id, payment_id, amount, currency="INR"):
+    return {"event": "subscription.charged", "payload": {
+        "payment": {"entity": {"id": payment_id, "subscription_id": subscription_id,
+                               "amount": amount, "currency": currency}},
+        "subscription": {"entity": {"id": subscription_id}},
+    }}
+
+
+def test_yearly_order_cancels_the_live_monthly_mandate(ctx, monkeypatch):
+    monkeypatch.setattr(billing, "YEARLY_ENABLED", True)
+    set_plan(ctx, "sandbox")
+    mandate, _ = _buy_monthly_mandate(ctx, "starter")
+    assert _sub_row(ctx).razorpay_subscription_id == mandate
+
+    _, res = _buy_yearly_order(ctx, "growth")
+    assert res.status_code == 200, res.text
+    assert ("POST", f"/subscriptions/{mandate}/cancel", {"cancel_at_cycle_end": 0}) in ctx.rzp.calls
+    state = res.json()["subscription"]
+    assert state["plan"] == "growth" and state["billing_cycle"] == "yearly"
+    assert state["has_mandate"] is False and state["auto_renews"] is False
+    sub = _sub_row(ctx)
+    assert sub.razorpay_subscription_id is None and sub.mandate_status == "cancelled"
+
+
+def test_late_charge_on_the_superseded_mandate_does_not_re_tier_a_paid_year(ctx, monkeypatch):
+    monkeypatch.setattr(billing, "YEARLY_ENABLED", True)
+    set_plan(ctx, "sandbox")
+    mandate, monthly_amount = _buy_monthly_mandate(ctx, "starter")
+    _buy_yearly_order(ctx, "growth")
+    end_before = billing._as_naive(_sub_row(ctx).current_period_end)
+    calls_before = len(ctx.rzp.calls)
+
+    out = enterprise._handle_subscription_charged(
+        ctx.db, event=_charged_event(mandate, "pay_STRAY0001", monthly_amount),
+    )
+    assert out["status"] == "superseded" and out["refund_required"] is True
+    sub = _sub_row(ctx)
+    assert sub.plan == "growth"                                   # not knocked down to Starter
+    assert billing._as_naive(sub.current_period_end) == end_before  # no extra 30 days stacked
+    assert sub.razorpay_subscription_id is None
+    # The money is on record for a refund, but it is not coverage or the org's cycle.
+    stray = ctx.db.query(models.EnterpriseSubscriptionPayment).filter_by(razorpay_payment_id="pay_STRAY0001").one()
+    assert stray.status == "superseded" and stray.amount_paise == monthly_amount
+    assert billing.build_subscription_state(ctx.db, ctx.org.id)["billing_cycle"] == "yearly"
+    # ...and the mandate is cancelled again.
+    assert ("POST", f"/subscriptions/{mandate}/cancel", {"cancel_at_cycle_end": 0}) in ctx.rzp.calls[calls_before:]
+
+
+def test_webhook_reconciled_yearly_order_also_cancels_the_mandate(ctx, monkeypatch):
+    monkeypatch.setattr(billing, "YEARLY_ENABLED", True)
+    set_plan(ctx, "sandbox")
+    mandate, _ = _buy_monthly_mandate(ctx, "starter")
+    body = ctx.client.post("/api/enterprise/billing/checkout", json={"plan": "growth", "billing_cycle": "yearly"}).json()
+    row = ctx.db.query(models.EnterpriseSubscriptionPayment).filter_by(razorpay_order_id=body["order_id"]).one()
+    out = enterprise._reconcile_plan_payment(
+        ctx.db, plan_row=row, entity={"id": "pay_WHY0001", "amount": body["amount"], "currency": "INR"},
+        order_id=body["order_id"],
+    )
+    assert out == {"status": "ok"}
+    assert f"/subscriptions/{mandate}/cancel" in ctx.rzp.paths()
+    sub = _sub_row(ctx)
+    assert sub.plan == "growth" and sub.razorpay_subscription_id is None
+
+
+def test_first_charge_of_a_new_mandate_by_webhook_still_applies_and_replaces_the_old(ctx):
+    set_plan(ctx, "sandbox")
+    old_mandate, _ = _buy_monthly_mandate(ctx, "starter")
+    # Upgrade: a new mandate is opened, and its FIRST charge arrives by webhook before the
+    # browser verify (closed tab). It is not a superseded charge — it must apply.
+    body = ctx.client.post("/api/enterprise/billing/checkout", json={"plan": "growth", "billing_cycle": "monthly"}).json()
+    new_mandate = body["subscription_id"]
+    end_before = billing._as_naive(_sub_row(ctx).current_period_end)
+    out = enterprise._handle_subscription_charged(
+        ctx.db, event=_charged_event(new_mandate, "pay_FIRST0001", body["amount"]),
+    )
+    assert out["status"] == "ok", out
+    sub = _sub_row(ctx)
+    assert sub.plan == "growth" and sub.razorpay_subscription_id == new_mandate
+    assert billing._as_naive(sub.current_period_end) > end_before
+    # The browser verify then finds it already applied — so the old mandate had to be
+    # cancelled here, not there.
+    assert f"/subscriptions/{old_mandate}/cancel" in ctx.rzp.paths()
+    # A renewal on the CURRENT mandate is never mistaken for a superseded one.
+    renewal = enterprise._handle_subscription_charged(
+        ctx.db, event=_charged_event(new_mandate, "pay_RENEW0001", body["amount"]),
+    )
+    assert renewal["status"] == "ok"
+
+
+def test_fully_covered_activation_cancels_a_live_mandate(ctx, monkeypatch):
+    monkeypatch.setattr(enterprise_coupons, "MAX_PERCENT_OFF", Decimal("100"))
+    set_plan(ctx, "sandbox")
+    mandate, _ = _buy_monthly_mandate(ctx, "starter")
+    add_coupon(ctx, "COMPTEAM", "100")
+    res = ctx.client.post(
+        "/api/enterprise/billing/checkout",
+        json={"plan": "growth", "billing_cycle": "monthly", "coupon_code": "COMPTEAM"},
+    )
+    assert res.status_code == 200 and res.json()["action"] == "activated", res.text
+    assert f"/subscriptions/{mandate}/cancel" in ctx.rzp.paths()
+    assert _sub_row(ctx).razorpay_subscription_id is None
+
+
+# ---------------------------------------------------------------------------
+# No change of tier inside a prepaid yearly term (billing.live_term_lock)
+# ---------------------------------------------------------------------------
+
+def _yearly_term(c, plan="starter", days_left=300, order_id="offline:INV-Y1"):
+    """An org holding a prepaid yearly term with `days_left` to run (an offline invoice)."""
+    sub = set_plan(c, plan, current_period_end=datetime.utcnow() + timedelta(days=days_left))
+    c.db.add(models.EnterpriseSubscriptionPayment(
+        organization_id=c.org.id, provider="invoice", plan=plan, billing_cycle="yearly",
+        amount_paise=1_768_820, currency="INR", razorpay_order_id=order_id, status="verified",
+        verified_at=datetime.utcnow() - timedelta(days=365 - days_left),
+    ))
+    c.db.commit()
+    return sub
+
+
+def test_tier_change_is_refused_inside_a_prepaid_year(ctx):
+    _yearly_term(ctx, "starter")
+    end_before = billing._as_naive(_sub_row(ctx).current_period_end)
+    for plan in ("scale", "growth"):
+        res = ctx.client.post("/api/enterprise/billing/checkout", json={"plan": plan, "billing_cycle": "monthly"})
+        assert res.status_code == 409, res.text
+        assert "paid up to" in res.json()["detail"] and "contact us" in res.json()["detail"]
+    assert ctx.rzp.calls == []
+    # The coupon preview refuses the same purchase.
+    add_coupon(ctx, "TEN", "10")
+    preview = ctx.client.post(
+        "/api/enterprise/coupons/validate", json={"code": "TEN", "context": "billing", "plan": "scale"},
+    )
+    assert preview.status_code == 409
+    # Renewing the SAME tier early is still allowed and simply stacks a month.
+    res = ctx.client.post("/api/enterprise/billing/checkout", json={"plan": "starter", "billing_cycle": "monthly"})
+    assert res.status_code == 200, res.text
+    assert billing._as_naive(_sub_row(ctx).current_period_end) == end_before   # nothing applied yet
+    state = ctx.client.get("/api/enterprise/billing/subscription").json()["subscription"]
+    assert state["term_locked_until"] is not None
+    assert state["term_locked_until"].startswith(end_before.date().isoformat())
+
+
+def test_downgrade_inside_a_prepaid_year_is_refused_too(ctx):
+    _yearly_term(ctx, "growth")
+    res = ctx.client.post("/api/enterprise/billing/checkout", json={"plan": "starter", "billing_cycle": "monthly"})
+    assert res.status_code == 409
+    assert _sub_row(ctx).plan == "growth"
+
+
+def test_monthly_orgs_and_the_last_month_of_a_year_can_change_tier(ctx):
+    set_plan(ctx, "starter")      # monthly coverage only: no lock
+    assert billing.live_term_lock(ctx.db, ctx.org.id) is None
+    res = ctx.client.post("/api/enterprise/billing/checkout", json={"plan": "scale", "billing_cycle": "monthly"})
+    assert res.status_code == 200, res.text
+    assert ctx.client.get("/api/enterprise/billing/subscription").json()["subscription"]["term_locked_until"] is None
+
+
+def test_last_month_of_a_yearly_term_is_not_locked(ctx):
+    _yearly_term(ctx, "starter", days_left=20)
+    assert billing.live_term_lock(ctx.db, ctx.org.id) is None
+    res = ctx.client.post("/api/enterprise/billing/checkout", json={"plan": "growth", "billing_cycle": "monthly"})
+    assert res.status_code == 200, res.text
+
+
+def test_a_month_stacked_on_a_yearly_term_keeps_the_lock(ctx):
+    _yearly_term(ctx, "starter", days_left=200)
+    sub = _sub_row(ctx)
+    sub.current_period_end = billing._as_naive(sub.current_period_end) + timedelta(days=30)
+    ctx.db.add(models.EnterpriseSubscriptionPayment(
+        organization_id=ctx.org.id, plan="starter", billing_cycle="monthly", amount_paise=176_882,
+        currency="INR", razorpay_order_id="order_STACKED1", status="verified", verified_at=datetime.utcnow(),
+    ))
+    ctx.db.commit()
+    lock = billing.live_term_lock(ctx.db, ctx.org.id)
+    assert lock and lock["plan"] == "starter"
+
+
 def test_fully_covered_yearly_plan_activates_for_a_year(ctx, monkeypatch):
     monkeypatch.setattr(billing, "YEARLY_ENABLED", True)
     monkeypatch.setattr(enterprise_coupons, "MAX_PERCENT_OFF", Decimal("100"))
@@ -706,7 +1023,8 @@ def test_second_workspace_on_a_company_domain_gets_no_trial(ctx):
 
 
 def test_domain_rule_matches_any_member_case_insensitively(ctx):
-    colleague = models.User(email="Former.Staff@Widget-Agency.example", hashed_password="x")
+    colleague = models.User(email="Former.Staff@Widget-Agency.example", hashed_password="x",
+                            last_login_at=datetime.utcnow() - timedelta(days=90))
     ctx.db.add(colleague)
     ctx.db.flush()
     ctx.db.add(models.EnterpriseOrganizationMember(
@@ -715,6 +1033,40 @@ def test_domain_rule_matches_any_member_case_insensitively(ctx):
     ))
     ctx.db.commit()
     assert _signup(ctx, "boss@widget-agency.example", "widget-new").json()["trial_domain_blocked"] is True
+
+
+def _invite_then_remove(c, monkeypatch, email):
+    monkeypatch.setattr(enterprise, "send_enterprise_team_invite_email", lambda **kw: True)
+    res = c.client.post("/api/enterprise/team/users", json={"email": email, "role": "viewer"})
+    assert res.status_code == 200, res.text
+    user = c.db.query(models.User).filter_by(email=email).one()
+    assert c.client.delete(f"/api/enterprise/team/users/{user.id}").status_code == 200
+    return user
+
+
+def test_an_invite_alone_cannot_use_up_another_companys_trial(ctx, monkeypatch):
+    # Any workspace can type any address into "Add user". That row proves nothing about the
+    # invitee's company, so it must not deny that company its trial.
+    set_plan(ctx, "sandbox")
+    _invite_then_remove(ctx, monkeypatch, "nobody@victim-agency.example")
+    res = _signup(ctx, "founder@victim-agency.example", "victim")
+    assert res.status_code == 200, res.text
+    assert res.json()["trial_domain_blocked"] is False
+    assert res.json()["subscription"]["ai_paused"] is False
+
+
+def test_an_invited_member_who_signed_in_does_count(ctx, monkeypatch):
+    set_plan(ctx, "sandbox")
+    user = _invite_then_remove(ctx, monkeypatch, "staff@used-agency.example")
+    user.last_login_at = datetime.utcnow() - timedelta(days=3)
+    ctx.db.commit()
+    assert _signup(ctx, "founder@used-agency.example", "used").json()["trial_domain_blocked"] is True
+    # Using the portal (membership.last_active_at) is the same evidence.
+    other = _invite_then_remove(ctx, monkeypatch, "staff@active-agency.example")
+    membership = ctx.db.query(models.EnterpriseOrganizationMember).filter_by(user_id=other.id).one()
+    membership.last_active_at = datetime.utcnow()
+    ctx.db.commit()
+    assert enterprise._company_domain_already_trialled(ctx.db, "active-agency.example") is True
 
 
 @pytest.mark.parametrize("email", [
