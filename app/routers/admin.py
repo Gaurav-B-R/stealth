@@ -3407,8 +3407,9 @@ _PLAN_PAYMENT_PROVIDER_LABELS = {"razorpay": "Razorpay checkout", **OFFLINE_PAYM
 # An offline payment's reference is stored as its razorpay_order_id with this prefix. That
 # column is NOT NULL and UNIQUE, so the reference inherits a database-level "recorded once"
 # guarantee — the idempotency key — and the prefix keeps it from ever colliding with a real
-# Razorpay order id ("order_…"). Customer receipts print razorpay_order_id as the payment
-# reference, which then reads "offline:<UTR>": still the number on their bank statement.
+# Razorpay order id ("order_…"). Customer receipts (routers/enterprise.py GET
+# /credits/payments) strip the prefix and print "<method> · <reference>" — the number on the
+# customer's own bank statement or invoice.
 OFFLINE_ORDER_PREFIX = "offline:"
 # No spaces: a reference is compared as a key, and "UTR 123" vs "UTR123" being two different
 # payments is how one transfer gets recorded twice.
@@ -3508,6 +3509,8 @@ def _serialize_plan_payment(p: models.EnterpriseSubscriptionPayment, names: dict
         "refunded_amount_minor": refunded,
         "refunded_amount_display": money.format_money(refunded, cur) if refunded else None,
         "status": p.status,
+        # The admin's note on an offline payment (None for checkout rows and older rows).
+        "note": getattr(p, "note", None),
         "created_by_name": names.get(int(p.created_by_user_id)) if p.created_by_user_id else None,
         "created_at": _admin_iso(p.created_at),
         "verified_at": _admin_iso(p.verified_at),
@@ -3900,6 +3903,9 @@ def record_enterprise_offline_payment_admin(
         original_amount_paise=(
             quote["list_minor"] if list_total is not None and subtotal < quote["list_minor"] else None
         ),
+        # Stored with the payment it explains (internal; never on a customer receipt), so the
+        # deal terms survive log rotation and show in the console's plan-payments table.
+        note=note,
         verified_at=now,
     )
     db.add(row)

@@ -373,15 +373,17 @@ const PASS_PRICE_LADDER_FALLBACK = Object.freeze([
     { currency: 'AED', amount_minor: 4900 },
     { currency: 'SGD', amount_minor: 1699 }
 ]);
-// The Enterprise plan ladders — one owner-chosen price per currency per plan, mirroring
-// app/money.py PRICE_BOOK["plan_starter"/"plan_growth"/"plan_scale"]; the two must be
-// updated together. Same deal as PASS_PRICE_LADDER_FALLBACK above: this copy exists only
-// so the PUBLIC pricing page can show real prices, it is display-only, and the amount
-// charged is always resolved server-side. Amounts are ex-tax minor units; GST (+18%)
-// applies ONLY to INR — every other currency is a zero-rated export, so the listed price
-// IS the charged price and "+ GST" must never be shown next to a non-INR amount.
+// The Enterprise plan ladders, OFFLINE FALLBACK ONLY. The server is the source of truth:
+// the /pricing card renders from GET /api/enterprise/public/plans (app/money.py PRICE_BOOK +
+// app/enterprise_billing.py PLANS, the same numbers checkout charges), and the page itself is
+// served with the INR card already filled in from that catalog. This table is used only when
+// that request fails, to repaint the tier prices for a non-INR currency — it mirrors
+// PRICE_BOOK["plan_starter"/"plan_growth"/"plan_scale"] as of 2026-10-22 (Starter / Team /
+// Multi-branch) and drift here can only show a stale price, never charge one. Amounts are
+// ex-tax minor units. The fallback never adds "+ GST" of its own: a non-INR price is a
+// zero-rated export, and for INR the card keeps the tax note the server rendered.
 const ENTERPRISE_PLAN_LADDER_FALLBACK = Object.freeze({
-    INR: { plan_starter: 299900, plan_growth: 699900, plan_scale: 1499900 },
+    INR: { plan_starter: 149900, plan_growth: 399900, plan_scale: 999900 },
     USD: { plan_starter: 3900, plan_growth: 8900, plan_scale: 19500 },
     GBP: { plan_starter: 2900, plan_growth: 6900, plan_scale: 14500 },
     EUR: { plan_starter: 3500, plan_growth: 7900, plan_scale: 17500 },
@@ -9851,30 +9853,164 @@ function updatePricingByCurrency(currencyCode) {
         hintEl.textContent = 'Each currency has its own fixed price — nothing is converted at checkout.';
     }
 
-    // Enterprise card. Plans are priced per currency in ENTERPRISE_PLAN_LADDER_FALLBACK;
-    // with no ladder entry for this currency, fall back to INR for THIS card only (the
-    // INR markup is the no-JS fallback, so re-rendering it in INR is always safe).
-    // "+ GST" is INR-only: every other currency is a zero-rated export, so the listed
-    // price is exactly what is charged.
-    const enterpriseCurrency = ENTERPRISE_PLAN_LADDER_FALLBACK[currency] ? currency : 'INR';
-    const enterprisePlans = ENTERPRISE_PLAN_LADDER_FALLBACK[enterpriseCurrency];
-    const enterprisePriceEl = document.getElementById('pricingEnterprisePrice');
-    if (enterprisePriceEl && enterprisePlans) {
-        const enterpriseSuffix = enterpriseCurrency === 'INR' ? '&nbsp;/month + GST' : '&nbsp;/month';
-        enterprisePriceEl.innerHTML =
-            `${escapeHtml(formatMoneyMinor(enterprisePlans.plan_starter, enterpriseCurrency))}<span>${enterpriseSuffix}</span>`;
-    }
-    const enterpriseTierEls = {
-        plan_starter: document.getElementById('pricingEnterpriseTierStarter'),
-        plan_growth: document.getElementById('pricingEnterpriseTierGrowth'),
-        plan_scale: document.getElementById('pricingEnterpriseTierScale')
-    };
-    Object.keys(enterpriseTierEls).forEach((planKey) => {
-        const tierEl = enterpriseTierEls[planKey];
-        if (tierEl && enterprisePlans) {
-            tierEl.textContent = formatMoneyMinor(enterprisePlans[planKey], enterpriseCurrency);
+    // The Enterprise card follows the same selector, but its prices come from the server.
+    void refreshEnterprisePricingCard(currency);
+}
+
+// ---------------------------------------------------------------------------
+// Enterprise card on /pricing (server price list)
+// ---------------------------------------------------------------------------
+//
+// Prices, limits, the tax note, the yearly offer and the US$ estimate all come from
+// GET /api/enterprise/public/plans — the same catalog checkout charges from — and the SERVER
+// decides the currency: it applies the visitor's currency region exactly as checkout will (a
+// visitor in India or a nearby INR-region country is always quoted INR, one elsewhere never
+// is). So the card may answer in a different currency than the one selected for the Visa
+// Success Pass, and that is correct: it shows what this visitor would actually be charged.
+// "+ GST" is only ever the server's `price_note` (empty while no tax is charged).
+//
+// Until the response lands the card keeps the server-rendered INR markup. Responses are
+// cached per requested currency (switching back and forth never refetches), a failed
+// request is not cached, and a slow response for a currency the visitor has already moved
+// away from is dropped.
+const enterprisePublicPlansCache = new Map();
+let enterprisePricingRenderSeq = 0;
+let enterprisePricingInitialHtml = null;
+const ENTERPRISE_TIER_PRICE_IDS = Object.freeze({
+    starter: 'pricingEnterpriseTierStarter',
+    growth: 'pricingEnterpriseTierGrowth',
+    scale: 'pricingEnterpriseTierScale'
+});
+
+function fetchEnterprisePublicPlans(currencyCode) {
+    const hint = String(currencyCode || '').trim().toUpperCase();
+    if (enterprisePublicPlansCache.has(hint)) return enterprisePublicPlansCache.get(hint);
+    const query = hint ? `?currency=${encodeURIComponent(hint)}` : '';
+    const request = (async () => {
+        const response = await fetch(`${API_BASE}/api/enterprise/public/plans${query}`, { credentials: 'same-origin' });
+        if (!response.ok) throw new Error(`Enterprise price list request failed: ${response.status}`);
+        const data = await response.json();
+        if (!data || !Array.isArray(data.plans) || !data.plans.some((plan) => plan && !plan.is_free)) {
+            throw new Error('Enterprise price list has no paid plans');
         }
+        return data;
+    })();
+    enterprisePublicPlansCache.set(hint, request);
+    request.catch(() => {
+        if (enterprisePublicPlansCache.get(hint) === request) enterprisePublicPlansCache.delete(hint);
     });
+    return request;
+}
+
+function formatEnterpriseCount(value) {
+    return Number(value || 0).toLocaleString('en-US');
+}
+
+function setEnterprisePricingNote(text) {
+    const noteEl = document.getElementById('pricingEnterpriseNote');
+    if (!noteEl) return;
+    noteEl.textContent = text || '';
+    noteEl.style.display = noteEl.textContent ? 'block' : 'none';
+}
+
+function enterpriseTierRowHtml(plan) {
+    const priceId = ENTERPRISE_TIER_PRICE_IDS[plan.key];
+    const price = escapeHtml(String(plan.monthly_display || ''));
+    return `${escapeHtml(String(plan.label || ''))} `
+        + (priceId ? `<span id="${priceId}">${price}</span>` : `<span>${price}</span>`)
+        + `/mo — ${escapeHtml(formatEnterpriseCount(plan.max_seats))} staff, `
+        + `${escapeHtml(formatEnterpriseCount(plan.max_open_files ?? plan.max_clients))} open files, `
+        + `${escapeHtml(formatEnterpriseCount(plan.included_credits))} AI credits/mo`;
+}
+
+function renderEnterprisePricingFromServer(data) {
+    const plans = (data.plans || []).filter((plan) => plan && !plan.is_free && Number(plan.monthly_minor) > 0);
+    if (!plans.length) return false;
+    const entry = plans.reduce((low, plan) => (Number(plan.monthly_minor) < Number(low.monthly_minor) ? plan : low));
+
+    const priceEl = document.getElementById('pricingEnterprisePrice');
+    if (priceEl) {
+        const taxNote = String(entry.price_note || '').trim();
+        priceEl.innerHTML = `${escapeHtml(String(entry.monthly_display || ''))}`
+            + `<span>&nbsp;/month${taxNote ? ` ${escapeHtml(taxNote)}` : ''}</span>`;
+    }
+    document.querySelectorAll('[data-enterprise-plan]').forEach((row) => {
+        const plan = plans.find((candidate) => candidate.key === row.getAttribute('data-enterprise-plan'));
+        if (plan) row.innerHTML = enterpriseTierRowHtml(plan);
+    });
+
+    const noteParts = [];
+    // Non-Indian members of the INR region are charged rupees but think in dollars; the
+    // estimate is of the total (tax included), so say so rather than imply it is the price.
+    if (data.show_usd_estimate && entry.usd_estimate && entry.usd_estimate.monthly_display) {
+        noteParts.push(`Billed in ${entry.currency} · ${entry.usd_estimate.monthly_display} a month in total`);
+    }
+    // Yearly is promoted only while it can actually be bought.
+    if (data.yearly_enabled && entry.yearly_display && Number(entry.yearly_months_free) > 0) {
+        noteParts.push(`or ${entry.yearly_display} a year (${entry.yearly_months_free} months free)`);
+    }
+    setEnterprisePricingNote(noteParts.join(' · '));
+
+    const packs = (data.packages || []).filter((pack) => pack && Number(pack.amount_minor) > 0);
+    const topupRow = document.getElementById('pricingEnterpriseTopupRow');
+    const topupFrom = document.getElementById('pricingEnterpriseTopupFrom');
+    if (topupRow && topupFrom) {
+        if (packs.length) {
+            const cheapest = packs.reduce((low, pack) => (Number(pack.amount_minor) < Number(low.amount_minor) ? pack : low));
+            topupFrom.textContent = String(cheapest.amount_display || '');
+            topupRow.style.display = '';
+        } else {
+            topupRow.style.display = 'none';
+        }
+    }
+    const trialEl = document.getElementById('pricingEnterpriseTrial');
+    if (trialEl && data.trial && data.trial.label) {
+        trialEl.textContent = `${data.trial.label} · no card required`;
+    }
+    return true;
+}
+
+// Offline / API down. The server-rendered markup is already the real INR card (tax note
+// included), so INR — or a currency the ladder doesn't price — just restores it; a ladder
+// currency repaints the tier prices from ENTERPRISE_PLAN_LADDER_FALLBACK with no tax note
+// (non-INR plans are zero-rated exports). Nothing else in the card is guessed: the INR-only
+// top-up price and the server's notes are hidden rather than shown in the wrong currency.
+function renderEnterprisePricingFallback(currencyCode) {
+    const card = document.getElementById('pricingEnterpriseCard');
+    if (card && enterprisePricingInitialHtml !== null) card.innerHTML = enterprisePricingInitialHtml;
+    const code = String(currencyCode || '').trim().toUpperCase();
+    const ladder = code !== 'INR' ? ENTERPRISE_PLAN_LADDER_FALLBACK[code] : null;
+    if (!ladder) return;
+    const priceEl = document.getElementById('pricingEnterprisePrice');
+    if (priceEl) {
+        priceEl.innerHTML = `${escapeHtml(formatMoneyMinor(ladder.plan_starter, code))}<span>&nbsp;/month</span>`;
+    }
+    const ladderKeys = { starter: 'plan_starter', growth: 'plan_growth', scale: 'plan_scale' };
+    Object.keys(ENTERPRISE_TIER_PRICE_IDS).forEach((planKey) => {
+        const tierEl = document.getElementById(ENTERPRISE_TIER_PRICE_IDS[planKey]);
+        const minor = ladder[ladderKeys[planKey]];
+        if (tierEl && Number.isFinite(Number(minor))) tierEl.textContent = formatMoneyMinor(minor, code);
+    });
+    setEnterprisePricingNote('');
+    const topupRow = document.getElementById('pricingEnterpriseTopupRow');
+    if (topupRow) topupRow.style.display = 'none';
+}
+
+async function refreshEnterprisePricingCard(currencyCode) {
+    const card = document.getElementById('pricingEnterpriseCard');
+    if (!card) return;
+    if (enterprisePricingInitialHtml === null) enterprisePricingInitialHtml = card.innerHTML;
+    const seq = ++enterprisePricingRenderSeq;
+    let data = null;
+    try {
+        data = await fetchEnterprisePublicPlans(currencyCode);
+    } catch (error) {
+        console.warn('Using the server-rendered Enterprise prices (price list unavailable):', error);
+    }
+    if (seq !== enterprisePricingRenderSeq) return;  // the visitor already picked another currency
+    if (!data || !renderEnterprisePricingFromServer(data)) {
+        renderEnterprisePricingFallback(currencyCode);
+    }
 }
 
 // The single money formatter for the student app. `minor` is an integer in the MINOR unit

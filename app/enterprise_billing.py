@@ -1397,13 +1397,22 @@ def enforce_ai_access_or_402(db: Session, organization_id: int, *, client_facing
 # Subscription state (what the portal, admin console and help KB render)
 # ---------------------------------------------------------------------------
 
-def build_subscription_state(db: Session, organization_id: int, *, read_only: bool = False) -> dict:
-    """Render subscription state; read-only callers never initialize billing rows."""
+def build_subscription_state(
+    db: Session, organization_id: int, *, read_only: bool = False, request=None,
+) -> dict:
+    """Render subscription state; read-only callers never initialize billing rows.
+
+    `request` (optional) is the HTTP request the state is rendered for. It only matters for
+    an org with no country_code on file: the quote currency then follows the request's CDN
+    geo country — the same fallback charge_currency_for_org applies at /billing/plans and at
+    checkout — so `currency`, the cards and the amount charged agree. Without it (admin
+    console, background paths) an org with no country is quoted as before (INR allowed).
+    """
     if read_only:
         # Suppress implicit writes too: a SELECT must not flush unrelated pending work.
         with db.no_autoflush:
-            return _build_subscription_state(db, organization_id, read_only=True)
-    return _build_subscription_state(db, organization_id)
+            return _build_subscription_state(db, organization_id, read_only=True, request=request)
+    return _build_subscription_state(db, organization_id, request=request)
 
 
 def _reads_snapshot(db: Session, organization_id: int, limits: dict) -> dict:
@@ -1449,7 +1458,7 @@ def _latest_plan_payment(db: Session, organization_id: int):
 
 
 def _build_subscription_state(
-    db: Session, organization_id: int, *, read_only: bool = False, sub=None,
+    db: Session, organization_id: int, *, read_only: bool = False, sub=None, request=None,
 ) -> dict:
     if ENTERPRISE_FREE:
         return _free_subscription_state(db, organization_id)
@@ -1483,7 +1492,12 @@ def _build_subscription_state(
         .first()
     )
     org_created_at = org_row[0] if org_row else None
-    org_country = _norm_country(org_row[2]) if org_row else None
+    # The org's own country, else the request's geo country — exactly the country
+    # charge_currency_for_org decides by, so the region clamp below, `inr_region` and the
+    # US$-estimate flag all match what /billing/plans shows and checkout charges. Ignoring
+    # the request here once quoted a London office with no country on file in INR while its
+    # cards (and its checkout) were in GBP.
+    org_country = (_norm_country(org_row[2]) if org_row else None) or request_geo_country(request)
     grandfathered = is_grandfathered(sub, org_created_at)
     files = _file_limit_state(sub, clients_used, max_clients)
     can_add_client = files["can_add"] and not trial_expired

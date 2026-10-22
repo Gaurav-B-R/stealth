@@ -31,7 +31,7 @@ import json
 from datetime import date, datetime, timedelta
 from typing import Iterable, Optional
 
-from sqlalchemy import func
+from sqlalchemy import case, func
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
@@ -1497,6 +1497,17 @@ def _by_counterparty(rows: list[dict]) -> list[dict]:
     return ranked
 
 
+def _branch_reporting_allowed(db: Session, org_id: int) -> bool:
+    """Whether this org's plan includes per-branch reporting. Read-only (never creates a
+    billing row), and fails OPEN: a billing lookup error must not blank part of the books."""
+    from app import enterprise_billing as billing
+
+    try:
+        return bool(billing.has_feature(db, org_id, "branch_reporting"))
+    except Exception:
+        return True
+
+
 def _client_dimensions(db: Session, org_id: int, rows: list[dict]) -> dict:
     """Revenue sliced by the client attributes an owner actually steers on:
     destination, lead source and branch."""
@@ -1885,9 +1896,20 @@ def analytics(db: Session, organization_id: int, rng: dict, *,
                                     "label": "previous"}, today=today, cache=cache)["rows"]
         )
 
+    # Revenue BY BRANCH is per-branch reporting, which is a Team / Multi-branch feature
+    # (billing.has_feature "branch_reporting"; a live trial has it). On Starter, or a lapsed
+    # plan, the branch split is withheld — the rest of the report is every plan's, and the
+    # client data behind it is untouched. `branch_reporting` lets the page say why the card
+    # is missing instead of looking broken.
+    dimensions = _client_dimensions(db, org_id, rows)
+    branch_reporting = _branch_reporting_allowed(db, org_id)
+    if not branch_reporting:
+        dimensions["branches"] = []
+
     return {
         "range": range_payload(rng),
         "totals": totals,
+        "branch_reporting": branch_reporting,
         "previous": ({
             "label": previous_label,
             "income_paise": previous_totals["income_paise"],
@@ -1902,7 +1924,7 @@ def analytics(db: Session, organization_id: int, rng: dict, *,
         "expense_by_category": _by_category(rows, "expense"),
         "by_client": _by_client(db, org_id, rows),
         "top_counterparties": _by_counterparty(rows),
-        "dimensions": _client_dimensions(db, org_id, rows),
+        "dimensions": dimensions,
         "receivables": _receivables(db, org_id, today),
         "collections": _collections(db, org_id, start, end),
         "by_member": _by_member(db, org_id, start, end),
@@ -1932,9 +1954,16 @@ def _activity_units(db: Session, org_id: int, start: Optional[date], end: date) 
             query = query.filter(stamp_column >= lo)
         return _int(query.filter(stamp_column < hi).scalar())
 
+    S = models.EnterpriseInterviewSession
     units: dict[str, int] = {
         "deep_scan": _count(models.EnterpriseClientDeepScan, models.EnterpriseClientDeepScan.created_at),
-        "mock_interview": _count(models.EnterpriseInterviewSession, models.EnterpriseInterviewSession.created_at),
+        # COMPLETED interviews only (the officer's questions plus the feedback report). Since
+        # server-side sessions a row exists from the moment an interview STARTS, so the bare
+        # row count also took in-progress and abandoned runs — charged, but they did not save
+        # a counsellor the 40 minutes this unit is valued at. The charge for an abandoned run
+        # still shows on the COST side (the credit ledger in the book), so the ROI figure
+        # under-claims rather than inflates — the same rule as unopened portals below.
+        "mock_interview": _count(S, S.created_at, S.counts_as_interview()),
         "course_finder": _count(models.EnterpriseCourseFinderRec, models.EnterpriseCourseFinderRec.created_at),
         "client_email": _count(
             models.EnterpriseClientEmail, models.EnterpriseClientEmail.created_at,
@@ -1973,18 +2002,29 @@ def _activity_units(db: Session, org_id: int, start: Optional[date], end: date) 
     # University shortlists and copilot answers leave no table of their own — the
     # credit ledger is their record. Copilot counts BILLED bundles only (the free
     # daily allowance isn't logged), so this under-counts rather than inflates.
+    #
+    # Credits -> messages uses the rate in force when each debit was WRITTEN: 5 messages a
+    # credit before credits.COPILOT_RATE_CHANGED_AT (the 2026-10-22 re-price), 2 since.
+    # Multiplying a range that spans the change by today's rate would quietly report the old
+    # months' answers at 40% of what they were.
     T = models.EnterpriseCreditTransaction
-    txn = db.query(T.action_key, func.count(T.id), func.coalesce(func.sum(-T.credits), 0)).filter(
+    cutover = credits.COPILOT_RATE_CHANGED_AT
+    spent = func.coalesce(func.sum(-T.credits), 0)
+    spent_before = func.coalesce(func.sum(case((T.created_at < cutover, -T.credits), else_=0)), 0)
+    txn = db.query(T.action_key, func.count(T.id), spent, spent_before).filter(
         T.organization_id == org_id, T.type == "debit",
         T.action_key.in_(("university_match", "ai_copilot")),
     )
     if lo is not None:
         txn = txn.filter(T.created_at >= lo)
-    for action_key, count, spent in txn.filter(T.created_at < hi).group_by(T.action_key).all():
+    for action_key, count, total, before in txn.filter(T.created_at < hi).group_by(T.action_key).all():
         if action_key == "university_match":
             units["university_match"] = _int(count)
         else:
-            units["copilot_message"] = _int(spent) * credits.COPILOT_MSGS_PER_CREDIT
+            legacy = _int(before)
+            units["copilot_message"] = credits.copilot_messages_for_credits(
+                legacy, max(0, _int(total) - legacy)
+            )
     units.setdefault("university_match", 0)
     units.setdefault("copilot_message", 0)
     return units

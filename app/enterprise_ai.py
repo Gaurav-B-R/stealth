@@ -1141,9 +1141,15 @@ def build_org_tools(db: Session, organization_id: int, ctx=None, viewer_user_id=
         try:
             from app import enterprise_billing
             plan = enterprise_billing.build_subscription_state(db, org_id) or {}
+            # The plan's client limit counts OPEN files only (Approved/Rejected/Closed/On Hold
+            # don't), while "active_clients" above is every client in the book — so the
+            # open count travels with the limit, or "how many more can we add" is answered
+            # against the wrong number.
             out["plan"] = {k: plan.get(k) for k in
                            ("plan", "plan_label", "status", "is_trial", "trial_ends_at",
-                            "max_clients", "max_seats") if k in plan}
+                            "max_clients", "max_open_files", "open_files_used",
+                            "max_seats", "seats_used", "ai_paused", "ai_paused_message")
+                           if k in plan}
         except Exception:
             logger.debug("subscription state unavailable for org %s", org_id, exc_info=True)
         return out
@@ -1302,13 +1308,15 @@ def build_org_tools(db: Session, organization_id: int, ctx=None, viewer_user_id=
 
     def get_credit_free_allowances() -> dict:
         """Get how much FREE usage is left before credits are charged: free AI assistant
-        messages remaining today, free Deep Scans left this month, and free staff mock
-        interview previews left. Use for 'do I have free scans left', 'am I being charged'."""
+        messages remaining today, free Deep Scans left this month, free staff mock
+        interview previews left, and the AI document reads (free upload reading, one per 15
+        pages) left this period. Use for 'do I have free scans left', 'am I being charged',
+        'why wasn't my document read'."""
         c = _credits_mod()
         wallet = c.get_or_create_wallet(db, org_id, commit=False)
         used_today = int(wallet.copilot_msgs_today or 0) \
             if wallet.copilot_usage_date == datetime.utcnow().strftime("%Y-%m-%d") else 0
-        return {
+        out = {
             "assistant_free_per_day": c.COPILOT_FREE_DAILY,
             "assistant_used_today": used_today,
             "assistant_free_remaining_today": max(0, c.COPILOT_FREE_DAILY - used_today),
@@ -1316,6 +1324,19 @@ def build_org_tools(db: Session, organization_id: int, ctx=None, viewer_user_id=
             "deep_scans_free_left_this_month": c.deep_scan_free_budget_left(db, org_id),
             "staff_interview_previews_left": c.staff_interview_preview_remaining(db, org_id),
         }
+        try:
+            # Pure read (no grant, no flush) — this runs inside the assistant's turn.
+            reads = c.reads_state(db, org_id, read_only=True) or {}
+            out["document_reads"] = {
+                "unlimited": bool(reads.get("unlimited")),
+                "allowance": reads.get("granted"),
+                "used": reads.get("used"),
+                "left": reads.get("remaining"),
+                "refreshes_on": _iso(reads.get("period_ends_at")),
+            }
+        except Exception:
+            logger.debug("reads state unavailable for org %s", org_id, exc_info=True)
+        return out
 
     def get_credit_pricing() -> dict:
         """List what every premium AI action costs in Rilono Credits and rupees (Deep Scan,
@@ -1325,8 +1346,12 @@ def build_org_tools(db: Session, organization_id: int, ctx=None, viewer_user_id=
         # actions_payload/packages_payload are UI payloads whose `description` fields are
         # multi-sentence marketing copy (~4.9 KB together). A price question needs the
         # number, and this result is re-sent on every later round of the turn.
+        # `price` is the price list's own wording ("4 credits per 15 pages", "1 credit per 2
+        # messages"): `credits` alone is the price of ONE unit, and quoting it bare would tell
+        # a user a 60-page document check costs 4 credits when it costs 16.
         return {
-            "actions": [{"action": a.get("label"), "credits": a.get("credits"),
+            "actions": [{"action": a.get("label"), "price": a.get("price_label"),
+                         "credits": a.get("credits"), "unit": a.get("unit_label"),
                          "price_inr": a.get("price_inr")} for a in c.actions_payload()],
             "packs": [{"pack": p.get("label"), "price": p.get("amount_display"),
                        "credits": p.get("total_credits") or p.get("credits"),
@@ -1621,16 +1646,20 @@ def build_org_tools(db: Session, organization_id: int, ctx=None, viewer_user_id=
             return {"error": "No matching client found."}
         cid = int(client.id)
 
-        def _count(model):
+        def _count(model, *criteria):
             try:
-                return int(db.query(func.count(model.id)).filter(model.client_id == cid).scalar() or 0)
+                return int(db.query(func.count(model.id))
+                           .filter(model.client_id == cid, *criteria).scalar() or 0)
             except Exception:
                 return 0
 
+        # Interviews = COMPLETED sessions only. A session row is created when an interview
+        # STARTS, so without the filter an in-progress or abandoned run (partial transcript,
+        # no feedback) would be reported as this client's latest interview, "not scored".
+        S = models.EnterpriseInterviewSession
         latest_interview = None
         try:
-            S = models.EnterpriseInterviewSession
-            row = (db.query(S).filter(S.client_id == cid)
+            row = (db.query(S).filter(S.client_id == cid, S.counts_as_interview())
                      .order_by(S.created_at.desc()).first())
             if row:
                 latest_interview = {
@@ -1665,7 +1694,7 @@ def build_org_tools(db: Session, organization_id: int, ctx=None, viewer_user_id=
         return {
             "client": client.full_name,
             "stage": _stage_label(client.status),
-            "mock_interviews": _count(models.EnterpriseInterviewSession),
+            "mock_interviews": _count(S, S.counts_as_interview()),
             "latest_interview": latest_interview,
             "writing_drafts": _count(models.EnterpriseClientWritingDraft),
             "deep_scans": _count(models.EnterpriseClientDeepScan),
@@ -1680,7 +1709,9 @@ def build_org_tools(db: Session, organization_id: int, ctx=None, viewer_user_id=
         the red flags and how to improve. Get the session id from
         get_client_casework_summary. The raw transcript is deliberately not included."""
         S = models.EnterpriseInterviewSession
-        row = db.query(S).filter(S.id == int(session_id)).first()
+        # Completed sessions only: an unfinished run has no report yet, and the ids this
+        # tool is pointed at (get_client_casework_summary) are completed ones.
+        row = db.query(S).filter(S.id == int(session_id), S.counts_as_interview()).first()
         if not row:
             return {"error": "No such interview session."}
         # Cross-tenant guard: these rows are reached by id, so re-check the client is one
@@ -2576,10 +2607,13 @@ def _deep_scan_universities_block(db: Session, client_id: int) -> str:
 
 
 def _deep_scan_interviews_block(db: Session, client_id: int) -> str:
+    # Completed interviews only: an in-progress or abandoned run has a partial transcript and
+    # no verdict, and the audit would otherwise flag "verdict: n/a" interviews as a risk.
+    S = models.EnterpriseInterviewSession
     rows = (
-        db.query(models.EnterpriseInterviewSession)
-        .filter(models.EnterpriseInterviewSession.client_id == int(client_id))
-        .order_by(models.EnterpriseInterviewSession.created_at.desc())
+        db.query(S)
+        .filter(S.client_id == int(client_id), S.counts_as_interview())
+        .order_by(S.created_at.desc())
         .limit(DEEP_SCAN_MAX_INTERVIEWS)
         .all()
     )

@@ -1068,7 +1068,7 @@ def _build_enterprise_context(
     if not onboarding_required:
         try:
             subscription_summary = _serialize_subscription_state(
-                billing.build_subscription_state(db, organization.id)
+                billing.build_subscription_state(db, organization.id, request=request)
             )
         except Exception:
             logger.exception("Failed to build subscription state for org_id=%s", organization.id)
@@ -1922,6 +1922,9 @@ def enterprise_onboarding(
         )
         existing_org.company_name = company_name
         existing_org.subdomain_slug = subdomain_slug
+        if not str(existing_org.country_code or "").strip():
+            # Same geo pre-fill as enterprise_signup (only when nothing is on file).
+            existing_org.country_code = billing.request_geo_country(request)
         if not str(existing_org.logo_url or "").strip():
             existing_org.logo_url = _build_default_enterprise_logo_url(
                 organization_id=existing_org.id,
@@ -1947,6 +1950,8 @@ def enterprise_onboarding(
             randomize=True,
         ),
         created_by_user_id=current_user.id,
+        # Pre-filled from the request's geo country — see the note in enterprise_signup.
+        country_code=billing.request_geo_country(request),
     )
     db.add(organization)
     db.flush()
@@ -4426,7 +4431,7 @@ def enterprise_create_client(
             client, member_names,
             include_sensitive=role.ctx.has("clients.view_sensitive"),
         ),
-        "subscription": _serialize_subscription_state(billing.build_subscription_state(db, organization.id)),
+        "subscription": _serialize_subscription_state(billing.build_subscription_state(db, organization.id, request=request)),
     }
 
 
@@ -5837,7 +5842,7 @@ def enterprise_dashboard(
         "recent_clients": [
             _serialize_client(c, member_names, include_sensitive=_sensitive) for c in recent
         ],
-        "subscription": _serialize_subscription_state(billing.build_subscription_state(db, org_id)),
+        "subscription": _serialize_subscription_state(billing.build_subscription_state(db, org_id, request=request)),
     }
 
 
@@ -8859,7 +8864,7 @@ def _billing_catalog_payload(db: Session, organization, request: Request | None)
     the non-Indian members of the INR region — the same flag the subscription state reports,
     so the chip and the cards never disagree about whether to show it."""
     org_currency = _resolve_charge_currency(None, organization, db=db, request=request)
-    state = billing.build_subscription_state(db, organization.id)
+    state = billing.build_subscription_state(db, organization.id, request=request)
     return {
         "plans": billing.public_plans_payload(
             org_currency, usd_estimate=bool(state.get("show_usd_estimate")),
@@ -9128,7 +9133,7 @@ def enterprise_billing_checkout(
             "free": True,
             "message": f"Your {plan['label']} plan is now active.",
             "subscription": _serialize_subscription_state(
-                billing.build_subscription_state(db, organization.id)
+                billing.build_subscription_state(db, organization.id, request=request)
             ),
             "wallet": credits.wallet_state(db, organization.id),
         }
@@ -9331,7 +9336,7 @@ def enterprise_billing_cancel(
     if sub.cancel_at_period_end:
         return {
             "message": "Auto-renewal is already off.",
-            "subscription": _serialize_subscription_state(billing.build_subscription_state(db, organization.id)),
+            "subscription": _serialize_subscription_state(billing.build_subscription_state(db, organization.id, request=request)),
         }
     try:
         _razorpay_request("POST", f"/subscriptions/{mandate_id}/cancel", {"cancel_at_cycle_end": 1})
@@ -9346,7 +9351,7 @@ def enterprise_billing_cancel(
     db.commit()
     return {
         "message": "Auto-renewal is off. Your plan stays active until the end of the current period.",
-        "subscription": _serialize_subscription_state(billing.build_subscription_state(db, organization.id)),
+        "subscription": _serialize_subscription_state(billing.build_subscription_state(db, organization.id, request=request)),
     }
 
 
@@ -9388,7 +9393,7 @@ def enterprise_billing_verify(
     if payment_row.status == "verified":
         return {
             "message": "This payment has already been verified.",
-            "subscription": _serialize_subscription_state(billing.build_subscription_state(db, organization.id)),
+            "subscription": _serialize_subscription_state(billing.build_subscription_state(db, organization.id, request=request)),
         }
 
     # THE TWO FLOWS SIGN DIFFERENT STRINGS, IN DIFFERENT ORDERS. A one-off order signs
@@ -9441,7 +9446,7 @@ def enterprise_billing_verify(
         db.commit()
         return {
             "message": "This payment has already been applied.",
-            "subscription": _serialize_subscription_state(billing.build_subscription_state(db, organization.id)),
+            "subscription": _serialize_subscription_state(billing.build_subscription_state(db, organization.id, request=request)),
             "wallet": credits.wallet_state(db, organization.id),
         }
 
@@ -9539,7 +9544,7 @@ def enterprise_billing_verify(
     return {
         "message": message,
         "credits_granted": granted,
-        "subscription": _serialize_subscription_state(billing.build_subscription_state(db, organization.id)),
+        "subscription": _serialize_subscription_state(billing.build_subscription_state(db, organization.id, request=request)),
         "wallet": credits.wallet_state(db, organization.id),
     }
 
@@ -9869,7 +9874,18 @@ def enterprise_credits_payments(
         .limit(limit)
         .all()
     )
-    plan_buyer_ids = {p.created_by_user_id for p in plan_rows if p.created_by_user_id} - set(buyer_names)
+    # Offline plan payments (Payment Link / bank transfer / invoice) are recorded by Rilono
+    # staff in the admin console. Lazy import: the admin router owns how they are stored.
+    from app.routers import admin as admin_router
+
+    offline_providers = admin_router.OFFLINE_PAYMENT_PROVIDERS
+    offline_prefix = admin_router.OFFLINE_ORDER_PREFIX
+    # created_by_user_id on an OFFLINE row is the Rilono admin who recorded it, not anyone
+    # at this org — their name and email must not be looked up into a customer receipt.
+    plan_buyer_ids = {
+        p.created_by_user_id for p in plan_rows
+        if p.created_by_user_id and str(p.provider or "").strip().lower() not in offline_providers
+    } - set(buyer_names)
     if plan_buyer_ids:
         for uid, full_name, email in (
             db.query(models.User.id, models.User.full_name, models.User.email)
@@ -9881,9 +9897,27 @@ def enterprise_credits_payments(
         pay_currency = money.normalize_currency(p.currency, strict=False)
         amount = int(p.amount_paise or 0)
         tax = int(p.tax_paise or 0)
+        # A refunded plan charge must read net of the refund, exactly like a top-up row —
+        # these were hardcoded to 0 refunded, so a refunded plan still showed (and summed)
+        # its full amount.
+        refunded = min(amount, int(getattr(p, "refunded_amount_paise", 0) or 0))
+        net = max(0, amount - refunded)
         if p.status in credits.REVENUE_PAYMENT_STATUSES:
-            collected_by_currency[pay_currency] = collected_by_currency.get(pay_currency, 0) + amount
+            collected_by_currency[pay_currency] = collected_by_currency.get(pay_currency, 0) + net
         plan_meta = billing.get_plan(p.plan) or {}
+        provider = str(p.provider or "razorpay").strip().lower()
+        is_offline = provider in offline_providers
+        order_id = str(p.razorpay_order_id or "")
+        if is_offline or order_id.startswith(offline_prefix):
+            # The customer's own reference (UTR, invoice number, pay_ id) — the stored
+            # "offline:" prefix is a uniqueness device of ours, not part of their number —
+            # with how it was paid, since an offline row has no Razorpay payment to name.
+            reference = order_id[len(offline_prefix):] if order_id.startswith(offline_prefix) else order_id
+            provider_label = offline_providers.get(provider) or provider.replace("_", " ").title()
+            payment_reference = f"{provider_label} · {reference}" if reference else provider_label
+        else:
+            provider_label = "Razorpay"
+            payment_reference = p.razorpay_payment_id or p.razorpay_order_id
         payments.append({
             "id": p.id,
             "kind": "plan",
@@ -9909,12 +9943,17 @@ def enterprise_credits_payments(
             "coupon_code": p.coupon_code,
             "coupon_percent_off": (float(p.coupon_percent_off) if p.coupon_percent_off is not None else None),
             "status": p.status,
-            "refunded_amount_paise": 0,
-            "refunded_display": money.format_money(0, pay_currency),
-            "net_amount_paise": amount,
-            "net_amount_display": money.format_money(amount, pay_currency),
-            "payment_reference": p.razorpay_payment_id or p.razorpay_order_id,
-            "created_by_name": buyer_names.get(p.created_by_user_id),
+            "refunded_amount_paise": refunded,
+            "refunded_display": money.format_money(refunded, pay_currency),
+            "net_amount_paise": net,
+            "net_amount_display": money.format_money(net, pay_currency),
+            "payment_reference": payment_reference,
+            "payment_provider": provider,
+            "payment_provider_label": provider_label,
+            "is_offline": is_offline,
+            "created_by_name": (
+                "Recorded by Rilono" if is_offline else buyer_names.get(p.created_by_user_id)
+            ),
             "created_at": _iso(p.created_at),
             "verified_at": _iso(p.verified_at),
         })
@@ -10292,7 +10331,7 @@ def enterprise_infra_fee_checkout(
 def _retired_infra_fee_checkout_body(organization, current_user, payload, db):
     # Dead code retained for one release so the retirement is a one-line revert if the
     # rollout is halted. Nothing calls it.
-    currency = _resolve_charge_currency(payload.currency if payload else None, organization)
+    currency = _resolve_charge_currency(payload.currency if payload else None, organization, db=db)
     amount = money.price_minor("infra_fee", currency)
     if amount <= 0:
         raise HTTPException(status_code=400, detail="The infrastructure fee is not configured.")
@@ -10763,6 +10802,13 @@ def enterprise_signup(
         dpa_accepted_at=datetime.utcnow(),
         dpa_accepted_version=LEGAL_DPA_VERSION,
         dpa_accepted_by_user_id=user.id,
+        # The company's country, pre-filled from the CDN geo header of the signup request
+        # (None when there is none; the owner can correct it in Settings). Billing decides the
+        # charge currency by org.country_code, falling back to the geo of WHATEVER request is
+        # being served — so without this an org's prices and currency would follow the
+        # owner's location on each visit (a trip abroad would flip the quote), and paths with
+        # no request (webhooks, the admin console) would quote differently from checkout.
+        country_code=billing.request_geo_country(request),
     )
     db.add(organization)
     db.flush()
@@ -10820,6 +10866,8 @@ def enterprise_signup(
             full_name=user.full_name or "",
             company=company_name,
             portal_url=portal_url,
+            # A repeat company domain got no trial — the email must not promise one.
+            trial_domain_blocked=trial_domain_blocked,
         )
     except Exception:
         logger.exception("Enterprise welcome email failed for %s", user.email)
@@ -13598,7 +13646,7 @@ ENTERPRISE_INTERVIEW_ABANDON_HOURS = max(
     1, int(os.getenv("ENTERPRISE_INTERVIEW_ABANDON_HOURS", "3") or "3"),
 )
 INTERVIEW_STATUS_IN_PROGRESS = "in_progress"
-INTERVIEW_STATUS_COMPLETED = "completed"
+INTERVIEW_STATUS_COMPLETED = models.INTERVIEW_SESSION_COMPLETED
 INTERVIEW_STATUS_ABANDONED = "abandoned"
 # Transcript turns a legacy client may still post. Ignored (the server's transcript is the
 # only one used) but bounded, because validation runs before any auth or rate limit — and the
@@ -14008,9 +14056,9 @@ def enterprise_interview_feedback(
 def _completed_interview_filter():
     """Sessions that count as interviews: completed ones. Rows from before server-side
     sessions were only ever saved once finished, and their status column was backfilled
-    "completed" (NULL is accepted too, defensively)."""
-    S = models.EnterpriseInterviewSession
-    return or_(S.status == INTERVIEW_STATUS_COMPLETED, S.status.is_(None))
+    "completed" (NULL is accepted too, defensively). The criterion lives on the model so
+    the assistant and the finance report count interviews exactly the way these lists do."""
+    return models.EnterpriseInterviewSession.counts_as_interview()
 
 
 @router.get("/clients/{client_id}/interview/sessions")
@@ -16143,6 +16191,10 @@ def enterprise_create_copilot_invite(
         destination_country=client.destination_country_name,
         visa_type=client.visa_type,
         logo_url=_absolute_enterprise_logo_url(organization),
+        # The link's real limits (a carried-over paid window keeps its own), so the email
+        # states what the chat page will enforce.
+        messages_included=_copilot_invite_remaining(invite),
+        expires_at=invite.expires_at,
     )
     message = (f"Copilot access sent to {email}."
                if sent else f"Invite created but the email could not be sent right now. {err or ''}".strip())

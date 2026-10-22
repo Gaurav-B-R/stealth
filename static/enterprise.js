@@ -24,8 +24,8 @@
     clients: [],
     statusCounts: {},
     filters: { status: "", category: "", country: "", q: "", branch_id: "" },
-    // Monthly-only since 2026-08-02 (no annual tier is sold); kept so the /billing
-    // request body stays shaped the way the server expects.
+    // The Plans & Billing cycle toggle. "yearly" is only ever SENT while the server reports
+    // yearly_enabled (billingCycleNow) — yearly while it's off is a 400 at checkout.
     billingCycle: "monthly",
     // The billing currency picked on Plans & Billing. Stays null until a payload that
     // actually offers a choice arrives (price_options / charge_currencies), so an old
@@ -487,6 +487,130 @@
         ? ` Amounts elsewhere in this portal display in ${esc(display)}.` : ""}
       Your bank may add a foreign-transaction fee and, if it converts, uses its own rate.</div>`;
   }
+
+  /* ---- Pricing v2 (2026-10-22): the server is the only price list. ----------------------
+     Every price, limit, allowance and tax line on these screens is read from a payload
+     (subscription state, /billing/plans, the wallet's `actions`, per-feature `pricing`).
+     Nothing here re-types a number the server already sends: a constant typed into this file
+     is exactly how the old "1,000 / 3,500 / 10,000 credits" and "+ GST at 0%" copy drifted
+     away from what checkout charged. When a figure is missing (an older server), the copy
+     leaves it out rather than guessing. */
+
+  // Whether this org's PLAN includes a tier-gated feature ("branches", "custom_roles",
+  // "branch_reporting"). /team/meta's plan_features wins on the Team screen (it is fetched
+  // with the editors it gates); elsewhere the subscription state's `features`. A payload
+  // without the flags reads as "allowed" — the server still answers 402, so the worst case
+  // is an editor whose save explains the upgrade, never a control hidden by mistake.
+  function planFeature(key) {
+    const sources = [teamUi.meta && teamUi.meta.plan_features, state.subscription && state.subscription.features];
+    for (const f of sources) {
+      if (f && typeof f[key] === "boolean") return f[key];
+    }
+    return true;
+  }
+  // The server's own upgrade sentence for a gated feature (it names the plan that has it).
+  function planUpgradeMessage(key) {
+    const m = teamUi.meta && teamUi.meta.plan_upgrade_messages;
+    return (m && m[key]) || "";
+  }
+  // The "AI paused" banner text (trial ended / plan lapsed / company already had a trial), or
+  // "" while AI works. The subscription state is preferred because every plan change refreshes
+  // it; the wallet and /ai/meta carry the same gate for screens that load before it.
+  function aiPausedMessage() {
+    const s = state.subscription;
+    if (s && typeof s.ai_paused === "boolean") return s.ai_paused ? (s.ai_paused_message || "AI features are paused.") : "";
+    for (const src of [state.credits, state.aiMeta]) {
+      if (src && src.ai_paused) return src.ai_paused_message || "AI features are paused.";
+    }
+    return "";
+  }
+  // A 402 from the shared AI gate rather than from an empty wallet. The detail is a plain
+  // string (billing.enforce_ai_access_or_402), and every staff-facing variant — trial ended,
+  // plan lapsed, company already trialled — says "AI features are paused"; matching the
+  // live banner text as well covers a server that rewords it.
+  function isAiPausedError(ex) {
+    if (!ex || ex.status !== 402) return false;
+    const msg = String(ex.message || "");
+    const live = aiPausedMessage();
+    return /AI features are paused/i.test(msg) || (!!live && msg === live);
+  }
+  // Where a 402 should send the member. A paused org can't fix it with a top-up (the top-up
+  // itself is refused while paused), so it goes to Plans & Billing; an empty wallet goes to
+  // Credits. Members who can reach neither just keep the toast the caller already showed.
+  function routeAfter402(ex) {
+    if (isAiPausedError(ex)) {
+      if (can("billing.manage")) navigate("billing");
+      return;
+    }
+    if (can("credits.view")) navigate("credits");
+  }
+  // One AI action's price-list row (wallet `actions`), or null.
+  function creditAction(key) {
+    const list = (state.credits && state.credits.actions) || ((creditsUi.wallet || {}).wallet || {}).actions || [];
+    return list.find((a) => a && a.key === key) || null;
+  }
+  // "4 credits per 15 pages", "40 credits per scan", "30 credits per client link" — the
+  // server's own label. `pricing` is a feature payload's pricing block (it carries the same
+  // label and wins, being the fresher of the two); "" when neither has one.
+  function priceLabelFor(key, pricing) {
+    if (pricing && pricing.price_label) return pricing.price_label;
+    const a = creditAction(key);
+    return (a && a.price_label) || "";
+  }
+  // The per-unit credit price, or null when no payload has said — never a typed-in default.
+  function creditCostFor(key, pricing) {
+    if (pricing && Number.isFinite(Number(pricing.cost_credits)) && pricing.cost_credits != null) return Number(pricing.cost_credits);
+    const a = creditAction(key);
+    return a && a.credits != null && Number.isFinite(Number(a.credits)) ? Number(a.credits) : null;
+  }
+  // The stage labels that don't count toward the open-file limit ("Approved, Rejected,
+  // Closed and On Hold"), from the catalog's own is_open flags — so the sentence can never
+  // name a stage that counts, or miss a new one.
+  function notOpenStageLabels() {
+    const labels = ((state.catalog && state.catalog.stages) || [])
+      .filter((s) => s && s.is_open === false).map((s) => s.label);
+    if (labels.length <= 1) return labels.join("");
+    return labels.slice(0, -1).join(", ") + " and " + labels[labels.length - 1];
+  }
+
+  /* The tier cards, loaded once per session for surfaces that quote them outside Plans &
+     Billing (the trial banner's "Plans start at…", the Credits allowance note, the Help
+     answer about credits). /billing/plans rather than the public list: it is priced in the
+     currency THIS org is charged in, region rule applied. ONE attempt per session — a
+     failure leaves those notes without numbers rather than inventing them, and can never
+     turn into a redraw → refetch loop. Renders that wait on it check `billingCatalogLoad`
+     before asking, and repaint only when their own call started the load. */
+  let billingCatalogLoad = null;
+  function applyBillingCatalog(d) {
+    state.billingPlans = (d && d.plans) || [];
+    state.billingTax = (d && d.tax) || null;
+    // Region-filtered: what this org may actually be charged in (planOptions reads it).
+    state.billingChargeCurrencies = d && Array.isArray(d.charge_currencies) && d.charge_currencies.length
+      ? d.charge_currencies : null;
+    state.billingYearlyEnabled = !!(d && d.yearly_enabled);
+    // The live INR GST rate for the cross-currency preview. Absent stays null and 0 stays
+    // 0: the old `|| 18` turned ENTERPRISE_GST_PERCENT=0 back into an 18% preview line.
+    state.billingGstPercent = d && d.gst_percent != null && Number.isFinite(Number(d.gst_percent))
+      ? Number(d.gst_percent) : null;
+  }
+  function ensureBillingCatalog() {
+    if (!billingCatalogLoad) {
+      billingCatalogLoad = (state.billingPlans && state.billingPlans.length
+        ? Promise.resolve()
+        : api("/billing/plans").then(applyBillingCatalog).catch(() => {}))
+        .then(() => { refreshTrialBanners(); });
+    }
+    return billingCatalogLoad;
+  }
+  // "Starter, Team and Multi-branch include 150 / 450 / 1,200 AI credits every month." —
+  // from the loaded cards, or null until they are.
+  function planAllowanceSummary() {
+    const paid = (state.billingPlans || []).filter((p) => !p.is_free && p.credits_recur && Number(p.included_credits) > 0);
+    if (!paid.length) return null;
+    const labels = paid.map((p) => p.label);
+    const names = labels.length === 1 ? labels[0] : labels.slice(0, -1).join(", ") + " and " + labels[labels.length - 1];
+    return `${names} include ${paid.map((p) => Number(p.included_credits).toLocaleString()).join(" / ")} AI credits every month.`;
+  }
   // Shared discount-code bar used on the credits top-up and billing pages.
   // `coupon` is null (show input) or { code, percent, percent_display } (show applied state).
   function couponRow(coupon, applyFn, removeFn, inputId, label) {
@@ -919,11 +1043,12 @@
         '<div class="modal-head"><h3>' + esc(title) + '</h3><button class="x" id="cfmClose" aria-label="Close">×</button></div>' +
         '<div class="modal-body"><p style="margin:0;color:var(--text-2);font-size:14px;line-height:1.65">' + esc(message).replace(/\n/g, "<br>") + '</p>' +
         confirmWarnHtml(opts.warning) + '</div>' +
-        '<div class="modal-foot"><button type="button" class="btn btn-ghost" id="cfmCancel">' + esc(cancelText) + '</button>' +
+        // `hideCancel`: a notice with one way out (OK) rather than a question.
+        '<div class="modal-foot">' + (opts.hideCancel ? "" : '<button type="button" class="btn btn-ghost" id="cfmCancel">' + esc(cancelText) + '</button>') +
         '<button type="button" class="btn ' + (danger ? "btn-danger" : "btn-primary") + '" id="cfmOk">' + esc(okText) + '</button></div>'
       );
       $("#cfmClose").onclick = function () { finish(false); };
-      $("#cfmCancel").onclick = function () { finish(false); };
+      var cancelBtn = $("#cfmCancel"); if (cancelBtn) cancelBtn.onclick = function () { finish(false); };
       $("#cfmOk").onclick = function () { finish(true); };
       document.addEventListener("keydown", onKey, true);
       $("#overlay").addEventListener("click", onOverlay);
@@ -1249,8 +1374,13 @@
         btn.disabled = true; btn.innerHTML = '<span class="spinner"></span> Creating…';
         const data = await api("/signup", { method: "POST", body });
         pendingSignup = null;
+        // One free trial per company email domain: a repeat domain gets its workspace but no
+        // trial. The portal's banner says so on every load (the subscription carries
+        // trial_domain_blocked + the AI-paused message), so a redirect loses nothing; when we
+        // stay on this origin, the server's sentence is also shown once right away.
         if (redirectToPortalIfNeeded(data)) return;
         await boot({ fromAuthAction: true });
+        if (data && data.trial_domain_blocked && data.message) toast(data.message, "error");
       } catch (ex) {
         err.textContent = ex.message; err.classList.remove("hidden");
       } finally { btn.disabled = false; btn.textContent = "Verify & create workspace"; }
@@ -1554,6 +1684,19 @@
     if (s && s.clients_used != null) $("#clientsBadge").textContent = s.clients_used;
     const cb = $("#creditsBadge");
     if (cb && cr && cr.balance_credits != null) cb.textContent = cr.balance_credits;
+    // Every subscription refresh (a plan bought, a trial that just ran out) also re-states
+    // the AI gate for the assistant, whose /ai/meta is fetched once per session — without
+    // this a paid-up org kept a "paused" composer until a hard reload, and vice versa.
+    if (s && typeof s.ai_paused === "boolean" && state.aiMeta && !!state.aiMeta.ai_paused !== s.ai_paused) {
+      state.aiMeta.ai_paused = s.ai_paused;
+      state.aiMeta.ai_paused_message = s.ai_paused_message || null;
+      applyAiMeta();
+    }
+    // A plan change re-decides the Team screen's office/role editors (/team/meta carries
+    // plan_features), so its cached meta must not outlive the plan it was fetched under.
+    const featSig = s && s.features ? JSON.stringify(s.features) : "";
+    if (featSig && state.featuresSig && state.featuresSig !== featSig) { teamUi.meta = null; teamUi.metaError = null; }
+    if (featSig) state.featuresSig = featSig;
   }
 
   // Sidebar "Calendar" badge = count of overdue + upcoming reminders. Set here so it's correct
@@ -1922,24 +2065,59 @@
   };
   globalSearchClear.onclick = clearClientSearch;
 
-  // Painted at the top of Dashboard, Clients and Course Finder — the three views an org
-  // actually lives in. Without it the only warning that the sandbox is running out lives on
-  // Plans & Billing, a page a busy team never opens, so the first signal would be a 402 on
-  // the day it lapses. Stays silent for a healthy paid plan.
-  function trialBanner() {
+  // Painted at the top of Dashboard, Clients, Team and Course Finder — the views an org
+  // actually lives in. Without it the only warning that the trial is running out (or that AI
+  // is paused, or that the open-file grace is ticking) lives on Plans & Billing, a page a busy
+  // team never opens, so the first signal would be a 402. Stays silent for a healthy plan.
+  //
+  // It renders into a slot so data that arrives AFTER the view was drawn (the plan cards the
+  // countdown quotes) can repaint just the banner — see refreshTrialBanners().
+  // `opts.noCta` drops the "See plans" button — for Plans & Billing itself, where the
+  // plans are already on screen.
+  function trialBanner(opts) {
+    const noCta = !!(opts && opts.noCta);
+    return `<div class="trial-banner-slot" data-trial-slot="${noCta ? "nocta" : ""}">${trialBannerInner({ noCta })}</div>`;
+  }
+  function refreshTrialBanners() {
+    $$("[data-trial-slot]").forEach((el) => {
+      el.innerHTML = trialBannerInner({ noCta: el.getAttribute("data-trial-slot") === "nocta" });
+    });
+  }
+  function trialBannerInner(opts) {
     const s = state.subscription;
     if (!s || s.is_free_platform) return "";
+    // Plans & Billing is billing.manage-only; everyone else gets the fact plus who can act on
+    // it, never a button into a "you don't have permission" page.
+    const canPlan = can("billing.manage") && !(opts && opts.noCta);
+    const cta = (label) => (canPlan
+      ? `<button type="button" class="btn btn-sm btn-primary" onclick="__ent.go('billing')">${esc(label)}</button>` : "");
+    const ask = can("billing.manage") ? "" : " Ask a workspace admin to choose a plan.";
+    const n = (v) => Number(v || 0).toLocaleString();
+    const files = (v) => `${n(v)} open file${Number(v) === 1 ? "" : "s"}`;
+    const limit = s.max_open_files != null ? s.max_open_files : s.max_clients;
+    const used = s.open_files_used != null ? s.open_files_used : s.clients_used;
 
-    // A LAPSED PAID PLAN outranks everything else here. The backend has already dropped this
-    // org to sandbox caps, so without this branch a consultancy that paid last month sees a
-    // "sandbox trial ending today" banner and is never told their plan expired or that
-    // renewing restores their seats, clients and monthly credits.
+    // AI PAUSED outranks everything: trial over, paid plan lapsed, or a company that already
+    // had its trial. The server's sentence says which, and that nothing was deleted.
+    if (s.ai_paused) {
+      const limits = s.plan_lapsed
+        ? ` Until you renew, your limits are ${n(s.max_seats)} seats and ${files(limit)}.`
+        : ((!s.can_add_client || !s.can_add_seat) ? " Adding new files and teammates is paused too." : "");
+      return `<div class="trial-banner trial-banner-danger" role="status">
+        <span><b>${esc(s.ai_paused_message || "AI features are paused.")}</b>${limits}${ask}</span>
+        ${cta(s.plan_lapsed ? "Renew plan" : "Choose a plan")}
+      </div>`;
+    }
+
+    // A LAPSED PAID PLAN still inside a trial window (an admin extension) keeps AI, but the
+    // org is on trial limits — say so, or a consultancy that paid last month is never told
+    // why its seats and open files shrank.
     if (s.plan_lapsed) {
       return `<div class="trial-banner trial-banner-warn">
         <span><b>Your ${esc(s.lapsed_plan_label || "paid")} plan expired${s.lapsed_at ? " on " + esc(fmtDate(s.lapsed_at)) : ""}.</b>
-        You're on sandbox limits (${Number(s.max_seats)} seats, ${Number(s.max_clients)} clients) and monthly AI credits have stopped.
-        Everything already in your workspace is safe — renew to restore your plan.</span>
-        <button type="button" class="btn btn-sm btn-primary" onclick="__ent.go('billing')">Renew plan</button>
+        You're on trial limits (${n(s.max_seats)} seats, ${files(limit)}) and monthly AI credits have stopped.
+        Everything already in your workspace is safe — renew to restore your plan.${ask}</span>
+        ${cta("Renew plan")}
       </div>`;
     }
 
@@ -1948,40 +2126,68 @@
     if (s.grandfathered) {
       return `<div class="trial-banner trial-banner-warn">
         <span><b>Choose a plan by ${s.grace_ends_at ? esc(fmtDate(s.grace_ends_at)) : "the deadline"}.</b>
-        Your workspace predates Rilono plans, so nothing is limited yet${s.over_cap ? " — including what you already have above the new caps, which you keep" : ""}.</span>
-        <button type="button" class="btn btn-sm btn-primary" onclick="__ent.go('billing')">See plans</button>
+        Your workspace predates Rilono plans, so nothing is limited yet${s.over_cap ? " — including what you already have above the new caps, which you keep" : ""}.${ask}</span>
+        ${cta("See plans")}
+      </div>`;
+    }
+
+    // Over the open-file limit. Adding past it is allowed for files_grace_days from the first
+    // add that went over; then adds (new files, converted leads, REOPENED files) pause until
+    // the org is back within the limit. Every date and number here is the server's.
+    const notOpen = notOpenStageLabels();
+    const dontCount = notOpen ? ` ${esc(notOpen)} files don't count.` : "";
+    if (s.files_over_limit) {
+      if (s.files_in_grace && s.files_grace_ends_at) {
+        return `<div class="trial-banner trial-banner-warn" role="status">
+          <span><b>You're over your plan's ${files(limit)}</b> (you have ${n(used)}). You can keep adding until
+          ${esc(fmtDate(s.files_grace_ends_at))} — after that, adding files pauses until you're back within the limit.${dontCount}${ask}</span>
+          ${cta("See plans")}
+        </div>`;
+      }
+      if (!s.files_over_limit_since && Number(s.files_grace_days) > 0 && s.can_add_client) {
+        return `<div class="trial-banner trial-banner-warn" role="status">
+          <span><b>You have ${n(used)} open files — your plan covers ${n(limit)}.</b> Adding another starts a
+          ${n(s.files_grace_days)}-day grace period; after it, adding pauses until you're back within the limit.${dontCount}${ask}</span>
+          ${cta("See plans")}
+        </div>`;
+      }
+      return `<div class="trial-banner trial-banner-danger" role="status">
+        <span><b>Adding files is paused.</b> Your plan covers ${files(limit)} and you have ${n(used)}. Close files
+        you've finished, or upgrade to add more.${dontCount}${ask}</span>
+        ${cta("See plans")}
       </div>`;
     }
     if (!s.is_sandbox) {
       // Paid plan: only speak up when a cap is actually reached, since that is the moment
-      // adding a client or a teammate is about to fail.
+      // adding a file or a teammate is about to fail.
       if (s.can_add_client && s.can_add_seat) return "";
-      const what = !s.can_add_client ? "active clients" : "team seats";
+      const what = !s.can_add_client ? `${files(limit)}` : `${n(s.max_seats)} team seats`;
       return `<div class="trial-banner trial-banner-warn">
-        <span>You've reached your ${esc(s.plan_label)} plan's limit for <b>${what}</b>.</span>
-        <button type="button" class="btn btn-sm btn-primary" onclick="__ent.go('billing')">Upgrade</button>
+        <span>You've reached your ${esc(s.plan_label)} plan's limit of <b>${what}</b>.${!s.can_add_client ? dontCount : ""}${ask}</span>
+        ${cta("Upgrade")}
       </div>`;
     }
     if (s.trial_expired) {
+      // Only reachable with ENTERPRISE_AI_PAUSE_ON_EXPIRY off (otherwise AI-paused above).
       return `<div class="trial-banner trial-banner-danger">
-        <span><b>Your 14-day sandbox has ended.</b> Everything here is intact and readable — choose a plan to start adding clients and teammates again.</span>
-        <button type="button" class="btn btn-sm btn-primary" onclick="__ent.go('billing')">Choose a plan</button>
+        <span><b>${s.trial_domain_blocked ? "Your company already used its free trial." : "Your free trial has ended."}</b>
+        Everything here is intact and readable — choose a plan to start adding files and teammates again.${ask}</span>
+        ${cta("Choose a plan")}
       </div>`;
     }
     const left = Number(s.trial_days_left);
     // Only the last stretch, so the banner still reads as information rather than nagging.
-    if (!Number.isFinite(left) || left > 7) return "";
-    // Quote the entry price from real plan data in the shown billing currency once the
-    // billing payload has been loaded; the hardcoded INR figure is only the fallback for
-    // a session that never opened Plans & Billing. "+ GST" exists only in INR — every
-    // other charge currency is a zero-rated export, so the listed price is the charge.
+    if (s.trial_days_left == null || !Number.isFinite(left) || left > 7) return "";
+    // Quote the entry price from the real plan cards, in this org's billing currency, with
+    // the server's own tax note ("+ GST", or nothing at a 0% rate / outside India). Until the
+    // cards have loaded the sentence is simply left out — and loading them repaints this.
     const start = billingStartPrice();
+    if (!start && !billingCatalogLoad) ensureBillingCatalog();
     return `<div class="trial-banner trial-banner-warn">
-      <span><b>${left === 0 ? "Your sandbox ends today." : `${left} day${left === 1 ? "" : "s"} left in your sandbox.`}</b>
-      ${start
-        ? `Plans start at ${esc(start.display)}/month${start.currency === "INR" ? " + GST" : ""} and include ${start.credits ? start.credits.toLocaleString() : "1,000"} AI credits${start.recur ? " a month" : ""}.`
-        : "Plans start at ₹2,999/month + GST and include 1,000 AI credits a month."}</span>
-      <button type="button" class="btn btn-sm btn-primary" onclick="__ent.go('billing')">See plans</button>
+      <span><b>${left === 0 ? "Your free trial ends today." : `${left} day${left === 1 ? "" : "s"} left in your free trial.`}</b>
+      ${start ? `Plans start at ${esc(start.display)}/month${start.note ? " " + esc(start.note) : ""}${
+        start.credits ? ` and include ${n(start.credits)} AI credits${start.recur ? " a month" : ""}` : ""}.` : ""}${ask}</span>
+      ${cta("See plans")}
     </div>`;
   }
 
@@ -2040,8 +2246,14 @@
     const c = $("#content");
     c.innerHTML = '<div class="center-load"><div class="spinner dark"></div></div>';
     let d;
+    dropUnavailableBranchFilter();
     const dashQs = state.filters.branch_id ? "?branch_id=" + encodeURIComponent(state.filters.branch_id) : "";
-    try { d = await api("/dashboard" + dashQs); } catch (ex) { c.innerHTML = errBox(ex); return; }
+    try { d = await api("/dashboard" + dashQs); } catch (ex) {
+      // 402 on an office filter = the plan has no per-branch reporting (the subscription we
+      // hold was stale). Explain once and fall back to the whole workspace.
+      if (ex.status === 402 && dashQs) { state.filters.branch_id = ""; toast(ex.message, "error"); renderDashboard(); return; }
+      c.innerHTML = errBox(ex); return;
+    }
     applyAccessPayload(d);
     state.subscription = d.subscription || state.subscription;
     updatePlanChip();
@@ -2260,7 +2472,8 @@
     if (!clients.length) { toast("Add a client with an email address first, then you can send them a mock interview.", "error"); return; }
 
     const cr = state.credits || {};
-    const mockCost = ((cr.actions || []).find((a) => a.key === "mock_interview") || {}).credits || 20;
+    // The server's per-interview price; null (no wallet payload yet) leaves it unquoted.
+    const mockCost = creditCostFor("mock_interview");
     const perInr = cr.credit_value_inr || 10;
     const isInr = (cr.currency || "INR") === "INR";
     const balance = (typeof cr.balance_credits === "number") ? cr.balance_credits : null;
@@ -2339,15 +2552,17 @@
     function updateCost() {
       const el = $("#sendIvCost"); if (!el) return;
       const n = Math.max(1, Math.min(20, parseInt($("#sendIvCount").value, 10) || 1));
-      const total = n * mockCost;
-      const blocked = !!cr.enforced && balance !== null && balance < total;
+      const total = mockCost != null ? n * mockCost : null;
+      const blocked = !!cr.enforced && balance !== null && total !== null && balance < total;
       let balanceLine = "";
       if (balance !== null) {
         balanceLine = blocked
           ? `<div style="margin-top:6px;color:var(--warning,#f59e0b);font-weight:600">⚠ Wallet balance: ${balance} credits — not enough for ${n} interview${n === 1 ? "" : "s"}. <button type="button" class="btn btn-soft btn-sm" style="margin-left:6px" onclick="__ent.closeModal();__ent.go('credits')">Top up</button></div>`
           : `<div style="margin-top:5px;color:var(--muted)">Wallet balance: ${balance} credits</div>`;
       }
-      el.innerHTML = `<div>Costs up to <b>${total} credits</b>${money(total)} for ${n} interview${n === 1 ? "" : "s"} — <b>${mockCost}</b> credits each, charged only when an interview is actually taken.</div>` + balanceLine;
+      el.innerHTML = (total !== null
+        ? `<div>Costs up to <b>${total} credits</b>${money(total)} for ${n} interview${n === 1 ? "" : "s"} — <b>${mockCost}</b> credits each, charged only when an interview is actually taken.</div>`
+        : `<div>Charged per interview, only when one is actually taken.</div>`) + balanceLine;
       // This runs on every keystroke in #sendIvCount — including while the invite is in
       // flight, where it would happily un-disable the button mid-request and let a second
       // invite (and a second credit hold) go out. withBusy owns the button while busy.
@@ -2425,11 +2640,20 @@
     const ab = $("#addClientBtn"); if (ab) ab.onclick = () => openClientForm(null);
   }
 
+  // A branch filter picked before a downgrade (or carried in from the Offices tab) would turn
+  // every dashboard and client-list load into a 402 on a plan without per-branch reporting.
+  function dropUnavailableBranchFilter() {
+    if (state.filters.branch_id && !planFeature("branch_reporting")) state.filters.branch_id = "";
+  }
+
   /* An office filter, but only once there is a choice to make: a workspace with one office
      (or none) would just get a select with a single option. `state.branches` is whatever
      /me said this member may file a client under, so a branch-scoped counsellor sees only
      their own offices here. */
   function branchFilterHtml(id) {
+    // Per-office filtering is per-branch reporting — a Team / Multi-branch feature. On a plan
+    // without it the server answers ?branch_id= with a 402, so the control is omitted.
+    if (!planFeature("branch_reporting")) return "";
     const list = (state.branches || []).filter((b) => b.is_active !== false);
     if (list.length < 2) return "";
     const sel = String(state.filters.branch_id || "");
@@ -2445,6 +2669,7 @@
     // Capture the query THIS request is for, so the empty-state text always matches the
     // results shown — never a newer/older global state.filters.q.
     const q = state.filters.q ? String(state.filters.q).trim() : "";
+    dropUnavailableBranchFilter();
     const p = new URLSearchParams();
     if (state.filters.status) p.set("status_filter", state.filters.status);
     if (state.filters.category) p.set("category", state.filters.category);
@@ -2456,7 +2681,12 @@
     const seq = ++clientLoadSeq;
     let data;
     try { data = await api("/clients?" + p.toString()); }
-    catch (ex) { if (seq === clientLoadSeq) wrap.innerHTML = errBox(ex); return; }
+    catch (ex) {
+      if (seq !== clientLoadSeq) return;
+      // Same fallback as the dashboard: a 402 on ?branch_id= means no per-branch reporting.
+      if (ex.status === 402 && p.has("branch_id")) { state.filters.branch_id = ""; toast(ex.message, "error"); loadAndRenderClientList(); return; }
+      wrap.innerHTML = errBox(ex); return;
+    }
     if (seq !== clientLoadSeq) return; // superseded by a newer request — drop this response
     let clients = data.clients;
     const scope = state.dashScope;
@@ -3052,7 +3282,9 @@
         else if (state.view === "clients") loadAndRenderClientList();
         else navigate("clients");
       } catch (ex) {
-        if (ex.status === 402) { closeModal(); toast(ex.message, "error"); navigate("credits"); return; }
+        // 402 here is the PLAN (open-file limit past its grace, or the trial ended) — never
+        // credits. Keep the form and what was typed; say why, and where the plans are.
+        if (ex.status === 402) { planLimitInline(err, ex.message); return; }
         const detail = ex.status === 409 && ex.data ? ex.data.detail : null;
         if (detail && detail.code === "duplicate_client") {
           dupAcknowledged = true;
@@ -3088,6 +3320,15 @@
     if (["doc", "docx"].includes(ext)) return "📘";
     if (["xls", "xlsx", "csv"].includes(ext)) return "📊";
     return "📄";
+  }
+  // The reading badge for a document's `read_status` ("read" | "not_read" | "pending" |
+  // "failed" | null for rows from before reading was tracked). Only the states that need
+  // attention get one — a read document is the normal case and stays quiet.
+  function docReadBadge(status) {
+    if (status === "not_read") return { cls: "muted", txt: "Not read yet" };
+    if (status === "pending") return { cls: "pending", txt: "Reading…" };
+    if (status === "failed") return { cls: "warn", txt: "Read failed" };
+    return null;
   }
 
   /* ---------------- rich text (email composer) ----------------
@@ -3271,8 +3512,22 @@
     // Price + affordability of ONE document scan, refreshed from every documents payload
     // so the button never quotes a stale price after a top-up or a wallet drain.
     let scanPricing = data.scan_pricing || null;
+    // The monthly AI reading allowance ("reads": free upload reading, 1 read per 15 pages),
+    // from the documents list. The client payload carries neither it nor scan_pricing, so
+    // the Documents tab fetches that list once on first open (docsMetaState).
+    let docReads = data.reads || null;
+    let docsMetaState = data.scan_pricing ? "done" : "idle";   // idle | loading | done
+    // Per-document notes from "Read now" (e.g. the 402 explaining the allowance is used up),
+    // shown on that document's card until the next successful read.
+    const docReadNotes = {};
     const canSpendCredits = can("credits.spend");
-    const iv = { started: false, history: [], finished: false, feedback: null, busy: false, voiceOn: false, sessions: null, spoken: 0 };
+    // Staff mock interview. The transcript lives on the SERVER (session_id); `history` here
+    // is only what this tab displays — it is never sent back. `ended` = the server won't take
+    // more answers or a report for this session (finished/expired) — only "New interview".
+    const iv = {
+      started: false, history: [], finished: false, feedback: null, busy: false, voiceOn: false, sessions: null, spoken: 0,
+      sessionId: null, questionsAsked: 0, maxQuestions: null, ended: false,
+    };
     // Client-facing copilot invite state. invite: undefined = not fetched yet,
     // null = none exists. cp.link holds the raw link from the latest POST response
     // only — it is never returned by a GET, so "Copy link" shows just in that window.
@@ -3509,12 +3764,22 @@
       // picked out by KEY and every comparison is a position within this resolved list, so
       // inserting a stage into the catalog can never re-point a check at the wrong one.
       const ordered = stages.slice().sort((a, b) => (a.order || 0) - (b.order || 0));
-      const rejected = ordered.find((s) => s.key === "rejected");
+      // Off the track: every TERMINAL stage except the win (Rejected, Closed — and any
+      // terminal stage the catalog adds later), plus On Hold. Read from the catalog's own
+      // is_terminal flag so a new end state can never land on the track after Approved and
+      // inherit its green tick; a payload without the flags falls back to the known keys.
+      const offTrack = (s) => (typeof s.is_terminal === "boolean"
+        ? (s.is_terminal && s.key !== "approved")
+        : (s.key === "rejected" || s.key === "closed"));
+      const ended = ordered.filter(offTrack);
       const onHold = ordered.find((s) => s.key === "on_hold");
-      const linear = ordered.filter((s) => s.key !== "rejected" && s.key !== "on_hold");
+      const linear = ordered.filter((s) => !offTrack(s) && s.key !== "on_hold");
       const idxOf = (k) => linear.findIndex((s) => s.key === k);
       const curIdx = idxOf(current);
-      const isRejected = rejected && current === rejected.key;
+      // Closed out without the win (Rejected or Closed): the tracker reads it the same way
+      // the server's skipped-stage record does — the case walked the path, then ended.
+      const endedStage = ended.find((s) => s.key === current) || null;
+      const isRejected = !!endedStage;
       const isOnHold = onHold && current === onHold.key;
       // On Hold keeps the client's real position (held_from_status, remembered by the
       // backend) so the tracker shows WHERE the case is paused — and Resume restores it.
@@ -3576,7 +3841,7 @@
       const altPill = (s, active) => {
         if (!s) return "";
         const jk = interactive ? ` data-jkey="${s.key}"` : "";
-        const tone = s.key === "rejected" ? "jtrack-alt-rej" : "jtrack-alt-hold";
+        const tone = s.key === "rejected" ? "jtrack-alt-rej" : s.key === "on_hold" ? "jtrack-alt-hold" : "jtrack-alt-closed";
         return `<button type="button" class="jtrack-alt-pill ${tone}${active ? " active" : ""}"${jk}${interactive ? "" : " disabled"}>${esc(s.label)}</button>`;
       };
       // One-click way OUT of On Hold: resume to the remembered stage (or restart at the
@@ -3593,7 +3858,7 @@
         if (isOnHold) hint = heldStage
           ? `${first} is on hold at “${esc(heldStage.label)}”. Click Resume to continue, or click any stage.`
           : `${first} is on hold. Click a stage to resume the case.`;
-        else if (isRejected) hint = `This case is closed as rejected. Click any stage to reopen it.`;
+        else if (isRejected) hint = `This case is closed as “${esc(endedStage.label)}”. Click any stage to reopen it — reopening counts toward your plan's open files.`;
         else hint = `Click a stage to open its case record — the details to capture are tailored to ${esc(cl.destination_country_name || "this destination")}. Moving ${first} is a separate button inside.`;
       }
 
@@ -3614,7 +3879,7 @@
         : "";
 
       return `<div class="jtrack${isOnHold ? " jtrack-held" : ""}">${nodes}</div>
-        <div class="jtrack-alt">${altPill(rejected, isRejected)}${altPill(onHold, isOnHold)}${resumeBtn}</div>
+        <div class="jtrack-alt">${ended.map((s) => altPill(s, current === s.key)).join("")}${altPill(onHold, isOnHold)}${resumeBtn}</div>
         ${skipNote}
         ${hint ? `<div class="cpe-hint jtrack-hint">${hint}</div>` : ""}
         ${docHtml}`;
@@ -3889,9 +4154,16 @@
         const orderOf = (k) => (stageOf(k).order != null ? stageOf(k).order : 0);
         const first = (cl.full_name || "the client").split(" ")[0];
         const toLabel = labelOf(key), fromLabel = labelOf(cl.status);
-        // Exact keys, never a substring match: this decides whether the move CLOSES the
-        // case, and a future key such as "offer_rejected" must not trip it.
-        const isReject = key === "rejected", isHold = key === "on_hold";
+        // Exact keys / catalog flags, never a substring match: this decides whether the move
+        // CLOSES the case, and a future key such as "offer_rejected" must not trip it. Any
+        // terminal stage but the win closes it (Rejected, Closed).
+        const toStage = stageOf(key), fromStage = stageOf(cl.status);
+        const isReject = typeof toStage.is_terminal === "boolean"
+          ? (toStage.is_terminal && key !== "approved") : (key === "rejected" || key === "closed");
+        const isHold = key === "on_hold";
+        // Moving a file from a stage that doesn't count (Approved, Rejected, Closed, On Hold)
+        // back into one that does takes an open-file slot — the server checks it like an add.
+        const reopens = fromStage.is_open === false && toStage.is_open === true;
 
         // Warn — but never block — when advancing while the stage being LEFT is still
         // missing required record fields. It rides in as a callout rather than another
@@ -3901,15 +4173,15 @@
           const missing = stageMissingRequired(cl.status);
           if (missing.length) warning = missingFieldsWarning(fromLabel, missing);
         }
-        const title = isReject ? "Mark case as rejected?" : isHold ? "Put case on hold?" : `Move to “${toLabel}”?`;
+        const title = isReject ? `Mark case as ${toLabel.toLowerCase()}?` : isHold ? "Put case on hold?" : `Move to “${toLabel}”?`;
         const message = isReject
-          ? `${first}'s case will be closed as “${toLabel}”. You can reopen it later by clicking any stage.`
+          ? `${first}'s case will be closed as “${toLabel}”. ${toStage.description ? toStage.description + " " : ""}You can reopen it later by clicking any stage.`
           : isHold
             ? `${first}'s case will be paused at “${fromLabel}”. You can resume it anytime.`
-            : `${first} will move from “${fromLabel}” to “${toLabel}”.`;
+            : `${first} will move from “${fromLabel}” to “${toLabel}”.${reopens ? " Reopening counts toward your plan's open files." : ""}`;
         const ok = await confirmModal(message, {
           title,
-          okText: isReject ? "Mark rejected" : isHold ? "Put on hold" : "Move stage",
+          okText: isReject ? `Mark ${toLabel.toLowerCase()}` : isHold ? "Put on hold" : "Move stage",
           danger: isReject,
           warning,
         });
@@ -3991,7 +4263,9 @@
           overviewEditing = false;
           openClient(cl.id);  // in-pane refresh — updates hero + details, exits edit mode
         } catch (ex) {
-          if (ex.status === 402) { toast(ex.message, "error"); navigate("credits"); return; }
+          // A stage change that REOPENS a file past the open-file limit (or after the trial)
+          // is refused before anything is saved — show why, keep the edits on screen.
+          if (ex.status === 402) { planLimitInline(err, ex.message); btn.disabled = false; btn.innerHTML = "Save changes"; return; }
           const detail = ex.status === 409 && ex.data ? ex.data.detail : null;
           if (detail && detail.code === "stale_write") {
             staleAcknowledged = true;
@@ -4066,6 +4340,7 @@
         const arr = fresh.documents || [];
         docs.splice(0, docs.length, ...arr);
         if (fresh.scan_pricing) scanPricing = fresh.scan_pricing;
+        if (fresh.reads) docReads = fresh.reads;
         // The scan's debit happens in the background worker, so this poll is the first
         // moment the new balance exists — push it to the sidebar badge as it lands.
         if (fresh.wallet) { state.credits = fresh.wallet; updatePlanChip(); }
@@ -4096,13 +4371,61 @@
       if (state.activeClient === cl.id && body.isConnected && onDocsTab()) renderDocs();
     }
 
+    // The free AI reading runs in the background after an upload (or "Read now"); poll until
+    // the document leaves "pending" so its badge settles on Read / Not read yet / Read failed.
+    async function pollDocRead(docId) {
+      const onDocsTab = () => { const t = $(".cp-tab.active"); return !!(t && t.dataset.tab === "documents"); };
+      for (let i = 0; i < 8; i++) {
+        await new Promise((r) => setTimeout(r, i === 0 ? 2500 : 4000));
+        if (state.activeClient !== cl.id || !body.isConnected) return;
+        let fresh;
+        try { fresh = await api("/clients/" + cl.id + "/documents"); } catch (e) { return; }
+        docs.splice(0, docs.length, ...(fresh.documents || []));
+        if (fresh.scan_pricing) scanPricing = fresh.scan_pricing;
+        if (fresh.reads) docReads = fresh.reads;
+        const found = docs.find((x) => x.id === docId);
+        if (!found || found.read_status !== "pending") {
+          if (onDocsTab()) renderDocs();
+          return;
+        }
+      }
+    }
+    // One fetch of the documents list for what the client payload doesn't carry: the scan
+    // price (per 15-page block) and the reads allowance. Repaints the tab when it lands.
+    async function loadDocsMeta() {
+      if (docsMetaState !== "idle") return;
+      docsMetaState = "loading";
+      try {
+        const fresh = await api("/clients/" + cl.id + "/documents");
+        if (fresh.scan_pricing) scanPricing = fresh.scan_pricing;
+        if (fresh.reads) docReads = fresh.reads;
+        if (fresh.wallet) { state.credits = fresh.wallet; updatePlanChip(); }
+        if (Array.isArray(fresh.documents)) docs.splice(0, docs.length, ...fresh.documents);
+      } catch (e) { /* the tab still works; prices just stay unquoted */ }
+      docsMetaState = "done";
+      const t = $(".cp-tab.active");
+      if (state.activeClient === cl.id && body.isConnected && t && t.dataset.tab === "documents") renderDocs();
+    }
+    // The reading badge for one document. Only the states that need attention get one: a
+    // read document is the normal case and stays quiet.
+    function docReadInfo(d) {
+      return docReadBadge(d.read_status);
+    }
+
     function renderDocs() {
+      if (docsMetaState === "idle") loadDocsMeta();
       // Scanning is the billed half of an upload, so the choice is made here, with the
-      // price visible, before a credit is spent. Storing the file is always free.
+      // price visible, before a credit is spent. Storing the file is always free; reading it
+      // (so Rilono AI can use it) comes out of the plan's monthly AI document reads.
       const scanCost = scanPricing ? scanPricing.cost_credits : null;
+      // "4 credits per 15 pages" — a check is priced per 15-page block, so a flat number
+      // would understate a long PDF. The exact total is named when the file is scanned.
+      const scanPrice = priceLabelFor("document_scan", scanPricing);
       const scanUnaffordable = !!(scanPricing && !scanPricing.can_afford);
       const scanUnavailable = !!(scanPricing && !scanPricing.ai_available);
-      const scanOfferable = canUploadDocs && canSpendCredits && !scanUnavailable;
+      // While AI is paused the upload still works — the file is stored, not read or scanned.
+      const aiPaused = aiPausedMessage();
+      const scanOfferable = canUploadDocs && canSpendCredits && !scanUnavailable && !aiPaused;
       const scanToggle = scanOfferable ? `
         <label class="doc-scan-opt${scanUnaffordable ? " disabled" : ""}" for="docScanChk">
           <input type="checkbox" id="docScanChk" ${scanUnaffordable ? "disabled" : "checked"} />
@@ -4112,8 +4435,16 @@
               ? "Not enough credits — the document will still be stored. Top up in Credits to scan it."
               : `Checks the document is genuine, current and the right type, then cross-checks it against ${esc(cl.full_name)}’s profile and their already-validated documents.`}</span>
           </span>
-          ${scanCost != null ? `<span class="doc-scan-price">${scanCost} credit${scanCost === 1 ? "" : "s"}</span>` : ""}
+          ${scanPrice ? `<span class="doc-scan-price">${esc(scanPrice)}</span>`
+            : (scanCost != null ? `<span class="doc-scan-price">${scanCost} credit${scanCost === 1 ? "" : "s"}</span>` : "")}
         </label>` : "";
+      // The reading allowance, where uploads are made: how many reads are left this period.
+      const rd = docReads;
+      const readsHint = rd && !rd.unlimited && rd.remaining != null
+        ? ` · ${Number(rd.remaining).toLocaleString()} AI document read${Number(rd.remaining) === 1 ? "" : "s"} left${
+          rd.pages_per_read ? ` (1 per ${Number(rd.pages_per_read)} pages)` : ""}` : "";
+      const pausedNote = aiPaused && canUploadDocs
+        ? `<div class="doc-paused-note">${esc(aiPaused)} Uploads are still stored — Rilono AI just won't read or scan them until AI is back on.</div>` : "";
       const uploader = canUploadDocs ? `
         <div class="cp-card doc-upload">
           <div class="cp-sub-label">Upload a document</div>
@@ -4131,8 +4462,9 @@
             </div>
           </div>
           ${scanToggle}
+          ${pausedNote}
           <div class="doc-hint">🔒 Encrypted at rest · PDF, images, Word/Excel, CSV or text · up to 25 MB${
-            scanOfferable ? " · uploading is free" : ""}</div>
+            scanOfferable ? " · uploading is free" : ""}${readsHint}</div>
         </div>` : "";
       const docValInfo = (d) => {
         const s = d.validation_status;
@@ -4162,6 +4494,16 @@
         const filled = af.filled || [];
         const conflicts = af.conflicts || [];
         const valRow = v ? `<div class="doc-val ${v.cls}"><span class="doc-val-badge">${v.txt}</span>${v.msg ? `<span class="doc-val-msg">${esc(v.msg)}</span>` : ""}</div>` : "";
+        // Reading (free, from the monthly allowance) is separate from the paid check: a file
+        // stored while the allowance was used up — or AI was paused — is "Not read yet", and
+        // "Read now" reads it once reads are available again. The server decides when that
+        // is allowed (can_read_now); its refusal is shown word for word on the card.
+        const rdi = docReadInfo(d);
+        const readNote = docReadNotes[d.id];
+        const readRow = (rdi || (canUploadDocs && d.can_read_now) || readNote) ? `<div class="doc-val ${rdi ? rdi.cls : "muted"} doc-read-row">${
+          rdi ? `<span class="doc-val-badge">${esc(rdi.txt)}</span>` : ""}${
+          canUploadDocs && d.can_read_now ? `<button type="button" class="btn btn-soft btn-sm doc-read-now" data-id="${d.id}">Read now</button>` : ""}${
+          readNote ? `<span class="doc-val-msg doc-read-msg">${esc(readNote)}</span>` : ""}</div>` : "";
         const afRow = filled.length ? `<div class="doc-af">✓ Auto-filled profile: <b>${filled.map((f) => esc(f.field)).join(", ")}</b></div>` : "";
         const cfRow = conflicts.length ? `<div class="doc-cf"><b>⚠ Review — document differs from the saved profile:</b>${conflicts.map((c) => `<div class="doc-cf-item">${esc(c.field)}: profile “${esc(c.existing)}” vs document “${esc(c.document)}”</div>`).join("")}</div>` : "";
         // The AI's own structured red flags. Known shape is
@@ -4207,7 +4549,7 @@
               <button class="btn ${scanned ? "btn-soft" : "btn-primary"} btn-sm doc-scan" data-id="${d.id}"
                 ${scanUnaffordable ? "disabled" : ""}>
                 ${scanned ? "↻ Re-scan with Rilono AI" : "✦ Scan &amp; validate with Rilono AI"}${
-                  scanCost != null ? ` · ${scanCost} credit${scanCost === 1 ? "" : "s"}` : ""}
+                  scanPrice ? ` · ${esc(scanPrice)}` : (scanCost != null ? ` · ${scanCost} credit${scanCost === 1 ? "" : "s"}` : "")}
               </button>
               ${scanUnaffordable ? `<span class="doc-scan-note">Not enough credits</span>` : ""}
             </div>` : "";
@@ -4222,7 +4564,7 @@
           <div class="doc-meta">
             ${nameCell}
             <div class="doc-sub">${esc(d.document_type)} · ${fmtSize(d.file_size)} · ${esc(d.uploaded_by_name || "")} · ${fmtDate(d.created_at)}</div>
-            ${valRow}${afRow}${cfRow}${cvfRow}${acceptRow}${scanRow}
+            ${valRow}${readRow}${afRow}${cfRow}${cvfRow}${acceptRow}${scanRow}
           </div>
           ${canDownloadDocs ? `<a class="doc-act" href="${d.download_url}" target="_blank" rel="noopener" title="View / download">⬇</a>` : ""}
           ${canDeleteDocs ? `<button class="doc-act doc-del" data-id="${d.id}" title="Delete">✕</button>` : ""}
@@ -4319,11 +4661,20 @@
               if (out.scan_requested && out.document && out.document.id) pendingDocIds.add(out.document.id);
               if (out.scan_pricing) scanPricing = out.scan_pricing;
               tabCount("documents", docs.length);
-              toast(out.scan_requested
-                ? "Document uploaded — Rilono AI is scanning…"
-                : "Document uploaded. You can scan it any time from its card.", "success");
+              // What the check will be debited once it returns a verdict (blocks × block
+              // price) — the server's own figure, so a 40-page PDF never reads as one block.
+              const scanCostNow = Number(out.scan_cost_credits) > 0 ? ` (${Number(out.scan_cost_credits)} credits)` : "";
+              if (out.scan_skipped_reason === "ai_paused") {
+                // Stored, but neither scanned nor read: the server's sentence says why.
+                toast(out.message || "Document uploaded. AI features are paused, so Rilono AI didn't scan or read it.", "error");
+              } else {
+                toast(out.scan_requested
+                  ? `Document uploaded — Rilono AI is scanning it${scanCostNow}…`
+                  : "Document uploaded. You can scan it any time from its card.", "success");
+              }
               renderDocs();
               if (out.scan_requested && out.document && out.document.id) pollDocValidation(out.document.id);
+              else if (out.document && out.document.read_status === "pending") pollDocRead(out.document.id);
             } catch (ex) { toast(ex.message, "error"); }
           });
         };
@@ -4335,7 +4686,7 @@
         const id = parseInt(b.dataset.id, 10);
         const d = docs.find((x) => x.id === id);
         const already = d && !!d.validated_at && d.validation_status !== "not_scanned";
-        const price = scanCost != null ? `${scanCost} credit${scanCost === 1 ? "" : "s"}` : "credits";
+        const price = scanPrice || (scanCost != null ? `${scanCost} credit${scanCost === 1 ? "" : "s"}` : "credits");
         const ok = await confirmModal(
           (already
             ? "Rilono AI will scan this document again and replace the current verdict."
@@ -4347,6 +4698,7 @@
         try {
           const r = await api("/clients/" + cl.id + "/documents/" + id + "/scan", { method: "POST" });
           if (r.scan_pricing) scanPricing = r.scan_pricing;
+          if (Number(r.scan_cost_credits) > 0) toast(`Rilono AI is scanning it (${Number(r.scan_cost_credits)} credits).`, "success");
           if (r.document) { const i = docs.findIndex((x) => x.id === id); if (i >= 0) docs.splice(i, 1, r.document); }
           pendingDocIds.add(id);
           renderDocs();
@@ -4354,6 +4706,28 @@
         } catch (ex) {
           toast(ex.message, "error");
           renderDocs();   // restore the button (and any refreshed price) after a 402/409
+          if (isAiPausedError(ex)) routeAfter402(ex);
+        }
+      });
+
+      // "Read now": read a stored document from the monthly allowance. The reads are taken
+      // in this request, so a 402 (allowance used up, or AI paused) is synchronous and its
+      // detail — which names the refresh date and the paid alternative — is shown verbatim.
+      $$(".doc-read-now", body).forEach((b) => b.onclick = async () => {
+        if (b.disabled) return;
+        const id = parseInt(b.dataset.id, 10);
+        b.disabled = true; b.innerHTML = '<span class="spinner"></span> Starting…';
+        try {
+          const r = await api("/clients/" + cl.id + "/documents/" + id + "/read", { method: "POST" });
+          delete docReadNotes[id];
+          if (r.reads) docReads = r.reads;
+          if (r.document) { const i = docs.findIndex((x) => x.id === id); if (i >= 0) docs.splice(i, 1, r.document); }
+          toast(r.message || "Rilono AI is reading this document.", "success");
+          renderDocs();
+          pollDocRead(id);
+        } catch (ex) {
+          docReadNotes[id] = ex.message;
+          renderDocs();
         }
       });
 
@@ -5266,7 +5640,10 @@
     function openSendModal() {
       const first = (cl.full_name || "the student").split(" ")[0];
       const cr = state.credits || {};
-      const mockCost = ((cr.actions || []).find((a) => a.key === "mock_interview") || {}).credits || 20;
+      // The server's price, never a typed default: null (an older wallet payload) just
+      // leaves the per-interview cost out of the note below.
+      const mockCost = creditCostFor("mock_interview");
+      const mockAction = creditAction("mock_interview") || {};
       const perInr = cr.credit_value_inr || 10;
       const isInr = (cr.currency || "INR") === "INR";
       const balance = (typeof cr.balance_credits === "number") ? cr.balance_credits : null;
@@ -5284,9 +5661,9 @@
       function updateIvCost() {
         const el = $("#ivCostNote"); if (!el) return;
         const n = Math.max(1, Math.min(20, parseInt($("#ivCount").value, 10) || 1));
-        const total = n * mockCost;
+        const total = mockCost != null ? n * mockCost : null;
         const enforced = !!cr.enforced;
-        const short = balance !== null && balance < total;
+        const short = balance !== null && total !== null && balance < total;
         // Block sending when credits are enforced and the wallet can't fund every
         // interview — so the client never receives a link they can't use.
         const blocked = enforced && short;
@@ -5296,11 +5673,13 @@
             balanceLine = `<div style="margin-top:6px;color:var(--warning,#f59e0b);font-weight:600">⚠ Wallet balance: ${balance} credits — not enough to send ${n} interview${n === 1 ? "" : "s"}.
               <button type="button" class="btn btn-soft btn-sm" style="margin-left:6px" onclick="__ent.closeModal();__ent.go('credits')">Top up wallet</button></div>`;
           } else {
-            balanceLine = `<div style="margin-top:5px;color:var(--muted)">Wallet balance: ${balance} credits${short ? ` — only ${Math.floor(balance / mockCost)} funded right now` : ""}</div>`;
+            balanceLine = `<div style="margin-top:5px;color:var(--muted)">Wallet balance: ${balance} credits${short && mockCost ? ` — only ${Math.floor(balance / mockCost)} funded right now` : ""}</div>`;
           }
         }
-        el.innerHTML =
-          `<div>Costs up to <b>${total} credits</b>${money(total)} for ${n} interview${n === 1 ? "" : "s"} — <b>${mockCost}</b> credits each, charged only when an interview is actually taken.</div>` +
+        const questions = Number(mockAction.max_questions) > 0 ? ` Each interview is up to ${Number(mockAction.max_questions)} officer questions plus a feedback report.` : "";
+        el.innerHTML = (total !== null
+          ? `<div>Costs up to <b>${total} credits</b>${money(total)} for ${n} interview${n === 1 ? "" : "s"} — <b>${mockCost}</b> credits each, charged only when an interview is actually taken.${questions}</div>`
+          : `<div>Charged per interview, only when one is actually taken.${questions}</div>`) +
           balanceLine;
         // Runs on every keystroke in #ivCount, so it must stand down while the invite is in
         // flight — otherwise typing in the count field un-disables the button mid-request.
@@ -5408,10 +5787,10 @@
     function staffPreviewCard() {
       const prevInfo = (state.credits && state.credits.staff_interview_previews) || {};
       const prevLeft = typeof prevInfo.remaining === "number" ? prevInfo.remaining : null;
-      const mockCost = ((state.credits && state.credits.actions || []).find((a) => a.key === "mock_interview") || {}).credits || 20;
+      const mockPrice = priceLabelFor("mock_interview");
       const costNote = prevLeft && prevLeft > 0
         ? `<span class="iv-prev-free">${prevLeft} free preview${prevLeft === 1 ? "" : "s"} left</span>`
-        : `<span class="muted">${mockCost} credits each</span>`;
+        : (mockPrice ? `<span class="muted">${esc(mockPrice)}</span>` : "");
       return `<div class="cp-card iv-preview">
         <div class="iv-preview-row">
           <div><div class="cp-sub-label" style="margin:0">Try it yourself</div>
@@ -5446,14 +5825,17 @@
       w.innerHTML = `
         <div class="cp-card iv-chat">
           <div class="iv-chead">
-            <div class="iv-ctitle">🧑‍✈️ ${esc(cl.destination_country_name)} visa officer · <span class="muted">mock interview</span></div>
+            <div class="iv-ctitle">🧑‍✈️ ${esc(cl.destination_country_name)} visa officer · <span class="muted">mock interview${
+              iv.maxQuestions ? ` · ${Math.min(iv.questionsAsked, iv.maxQuestions)} of ${iv.maxQuestions} questions` : ""}</span></div>
             <div class="iv-cactions">
               <button class="btn btn-soft btn-sm" id="ivVoiceBtn">${iv.voiceOn ? "🔊 Voice on" : "🔈 Voice off"}</button>
-              ${iv.finished ? `<button class="btn btn-soft btn-sm" id="ivRestart">↻ New interview</button>` : `<button class="btn btn-ghost btn-sm" id="ivEnd" ${iv.busy || !iv.history.some((m) => m.role === "user") ? "disabled" : ""} title="Answer at least one question first">End &amp; get feedback</button>`}
+              ${iv.finished || iv.ended ? `<button class="btn btn-soft btn-sm" id="ivRestart">↻ New interview</button>` : `<button class="btn btn-ghost btn-sm" id="ivEnd" ${iv.busy || !iv.history.some((m) => m.role === "user") ? "disabled" : ""} title="Answer at least one question first">End &amp; get feedback</button>`}
             </div>
           </div>
           <div class="iv-thread" id="ivThread">${iv.history.map(ivBubble).join("")}${typing}</div>
-          ${iv.finished ? `<div class="iv-done">Interview ended. ${iv.feedback ? "See feedback below." : ""}</div>` : `
+          ${iv.finished || iv.ended ? `<div class="iv-done">${iv.ended && !iv.feedback
+            ? "This interview session has ended. Start a new interview to practise again."
+            : `Interview ended. ${iv.feedback ? "See feedback below." : ""}`}</div>` : `
           <div class="iv-inrow">
             <textarea id="ivInput" placeholder="Type ${esc((cl.full_name || "the student").split(" ")[0])}'s answer…" rows="1" ${iv.busy ? "disabled" : ""}></textarea>
             ${micSupported ? `<button class="iv-mic" id="ivMic" title="Speak the answer" ${iv.busy ? "disabled" : ""}>🎙</button>` : ""}
@@ -5471,37 +5853,70 @@
       const sendBtn = $("#ivSend"); if (sendBtn) sendBtn.onclick = sendIv;
       ivSyncSend();
       const endBtn = $("#ivEnd"); if (endBtn) endBtn.onclick = endIv;
-      const rb = $("#ivRestart"); if (rb) rb.onclick = () => { ivStopSpeak(); iv.started = false; iv.history = []; iv.finished = false; iv.feedback = null; iv.spoken = 0; drawIv(); };
+      const rb = $("#ivRestart"); if (rb) rb.onclick = () => { ivStopSpeak(); ivReset(); drawIv(); };
       const vb = $("#ivVoiceBtn"); if (vb) vb.onclick = () => { iv.voiceOn = !iv.voiceOn; if (!iv.voiceOn) ivStopSpeak(); else { const l = iv.history[iv.history.length - 1]; if (l && l.role === "officer") ivSpeak(l.content); } drawIvChat(w); };
       const mic = $("#ivMic"); if (mic) mic.onclick = () => ivMic(mic);
     }
+    // Back to the start screen with no session: every new interview is a new server session.
+    function ivReset() {
+      iv.started = false; iv.history = []; iv.finished = false; iv.feedback = null; iv.spoken = 0;
+      iv.sessionId = null; iv.questionsAsked = 0; iv.maxQuestions = null; iv.ended = false; iv.busy = false;
+    }
+    // The officer's question count, from every response (start and turns). The officer
+    // closes on its own at max_questions; the counter just makes that visible.
+    function ivTrack(r) {
+      if (r && r.session_id) iv.sessionId = r.session_id;
+      if (r && Number.isFinite(Number(r.questions_asked))) iv.questionsAsked = Number(r.questions_asked);
+      if (r && Number(r.max_questions) > 0) iv.maxQuestions = Number(r.max_questions);
+    }
     async function startIv(voice) {
-      iv.started = true; iv.voiceOn = !!voice; iv.history = []; iv.finished = false; iv.feedback = null; iv.busy = true; iv.spoken = 0;
+      ivReset();
+      iv.started = true; iv.voiceOn = !!voice; iv.busy = true;
       renderInterview();
       try {
-        const r = await api(`/clients/${cl.id}/interview/chat`, { method: "POST", body: { start: true }, timeout: AI_API_TIMEOUT_MS });
+        // The opening turn runs first and only a successful one is charged (a free staff
+        // preview while any remain) — so a failed start costs nothing and has no session.
+        const r = await api(`/clients/${cl.id}/interview/chat`, { method: "POST", body: { start: true, mode: voice ? "voice" : "chat" }, timeout: AI_API_TIMEOUT_MS });
+        ivTrack(r);
         iv.history.push({ role: "officer", content: r.reply });
+        if (r.finished) iv.finished = true;
         if (r.wallet) { state.credits = r.wallet; updatePlanChip(); }
         if (r.was_preview) toast(`Preview started · free${typeof r.previews_remaining === "number" ? ` · ${r.previews_remaining} preview${r.previews_remaining === 1 ? "" : "s"} left` : ""}`, "success");
         else if (r.credits_charged) toast(`Interview started · ${r.credits_charged} credits used`, "success");
       } catch (ex) {
         iv.started = false;
-        if (ex.status === 402) { toast(ex.message, "error"); iv.busy = false; if (state.activeClient === cl.id) drawIv(); navigate("credits"); return; }
         toast(ex.message, "error");
+        if (ex.status === 402) { iv.busy = false; if (state.activeClient === cl.id) drawIv(); routeAfter402(ex); return; }
       }
       iv.busy = false; if (state.activeClient === cl.id) drawIv();
     }
     async function sendIv() {
       const ta = $("#ivInput"); if (!ta) return;
       const v = (ta.value || "").trim(); if (!v || iv.busy) return;
-      const prior = iv.history.slice();
+      if (!iv.sessionId) { iv.ended = true; drawIv(); return; }
       iv.history.push({ role: "user", content: v }); iv.busy = true; drawIv();
       let ended = false;
       try {
-        const r = await api(`/clients/${cl.id}/interview/chat`, { method: "POST", body: { message: v, history: prior }, timeout: AI_API_TIMEOUT_MS });
+        // {message, session_id} only: the officer reads the SERVER's transcript, so nothing
+        // this tab holds (or a tampered copy of it) can steer the interview.
+        const r = await api(`/clients/${cl.id}/interview/chat`, { method: "POST", body: { message: v, session_id: iv.sessionId, mode: iv.voiceOn ? "voice" : "chat" }, timeout: AI_API_TIMEOUT_MS });
+        ivTrack(r);
         iv.history.push({ role: "officer", content: r.reply });
-        ended = !!r.finished;  // backend signals when the AI officer has wrapped up
-      } catch (ex) { toast(ex.message, "error"); }
+        ended = !!r.finished;  // the officer wrapped up (or hit the question cap)
+      } catch (ex) {
+        if (ex.status === 409) {
+          // The session takes no more answers: either the officer already closed it (its one
+          // report is still due) or it finished/expired. Try the report — if that is refused
+          // too, the session is over and only a new interview remains.
+          iv.history.pop();
+          toast(ex.message, "error");
+          await generateIvFeedback();
+          return;
+        }
+        if (ex.status === 400) { iv.history.pop(); iv.ended = true; toast(ex.message, "error"); iv.busy = false; drawIv(); return; }
+        toast(ex.message, "error");
+        if (ex.status === 402) { iv.busy = false; drawIv(); routeAfter402(ex); return; }
+      }
       // If the officer ended the interview, generate feedback automatically so staff
       // don't have to notice and click "End & get feedback" themselves.
       if (ended && iv.history.some((m) => m.role === "user")) {
@@ -5512,13 +5927,22 @@
       iv.busy = false; drawIv();
     }
     async function generateIvFeedback() {
+      if (!iv.sessionId) { iv.ended = true; iv.busy = false; drawIv(); return; }
       iv.busy = true; ivStopSpeak(); drawIv();
       try {
-        const r = await api(`/clients/${cl.id}/interview/feedback`, { method: "POST", body: { history: iv.history, mode: iv.voiceOn ? "voice" : "chat" } });
+        // One report per session, built from the server's transcript; it completes the session.
+        const r = await api(`/clients/${cl.id}/interview/feedback`, { method: "POST", body: { session_id: iv.sessionId, mode: iv.voiceOn ? "voice" : "chat" } });
         iv.finished = true; iv.feedback = r.feedback;
-        if (iv.sessions) iv.sessions.unshift(r.session);
+        if (iv.sessions && r.session) iv.sessions.unshift(r.session);
         toast("Feedback ready", "success");
-      } catch (ex) { toast(ex.message, "error"); }
+      } catch (ex) {
+        toast(ex.message, "error");
+        // 409: the report was already generated, or the session expired — nothing more can
+        // happen on it. 400 without a session is the same. Offer a new interview instead of
+        // a button that can only fail again.
+        if (ex.status === 409 || (ex.status === 400 && !iv.history.some((m) => m.role === "user"))) iv.ended = true;
+        if (ex.status === 402) { iv.busy = false; drawIv(); routeAfter402(ex); return; }
+      }
       iv.busy = false; drawIv();
     }
     async function endIv() {
@@ -5576,19 +6000,26 @@
         }
       }
     }
-    // The flat activation cost: the org's credit price list wins, then the server's
-    // copilot config from the GET, then a safe default.
+    // The flat activation cost: the invite's own config (what a NEW link costs — the GET's
+    // `config`) wins, then the org's credit price list. null when neither has loaded: the
+    // modal then says "charged when activated" without a number, and never blocks a send on
+    // a guessed price (the server prices and refuses on its own). Explicit null checks, not
+    // `||`: the price is env-tunable and 0 is a real setting (a free unlock).
     function copilotCost() {
-      const cr = state.credits || {};
-      // Explicit null checks, not `||`: the price is env-tunable and 0 is a real
-      // setting (free unlock). A falsy chain skipped straight past it to the 20
-      // default, which then priced the modal wrong and could block a send the
-      // backend would have allowed.
-      const listed = ((cr.actions || []).find((a) => a.key === "copilot_client") || {}).credits;
-      if (Number.isFinite(listed)) return listed;
       const configured = cp.config && cp.config.cost_credits;
-      if (Number.isFinite(configured)) return configured;
-      return 20;
+      if (configured != null && Number.isFinite(Number(configured))) return Number(configured);
+      return creditCostFor("copilot_client");
+    }
+    // What a new link allows: the invite config first, then the price list's action fields.
+    function copilotTerms() {
+      const cfg = cp.config || {};
+      const a = creditAction("copilot_client") || {};
+      const msgs = cfg.allowed_messages != null ? cfg.allowed_messages : a.messages_included;
+      const days = cfg.expires_days != null ? cfg.expires_days : a.valid_days;
+      const parts = [];
+      if (days != null) parts.push(`valid ${Number(days)} days`);
+      if (msgs != null) parts.push(`up to ${Number(msgs)} message${Number(msgs) === 1 ? "" : "s"}`);
+      return { msgs, days, text: parts.join(" · ") };
     }
     function drawCopilot() {
       const w = $("#cpilWrap"); if (!w) return;
@@ -5610,9 +6041,7 @@
     function copilotHeroCard() {
       const first = (cl.full_name || "the student").split(" ")[0];
       const inv = cp.invite;
-      const cfg = cp.config || {};
-      const msgs = cfg.allowed_messages != null ? cfg.allowed_messages : 100;
-      const expDays = cfg.expires_days != null ? cfg.expires_days : 30;
+      const terms = copilotTerms();
       const cost = copilotCost();
       let inner;
       if (!cl.email) {
@@ -5628,7 +6057,8 @@
             <div class="row">${cp.link ? `<button class="btn btn-ghost btn-sm" id="cpCopyLink">Copy link</button>` : ""}<button class="btn btn-soft btn-sm" id="cpResend">Resend / new link</button><button class="btn btn-danger btn-sm" id="cpRevoke">Revoke</button></div>
           </div>`;
       } else {
-        inner = `<p class="iv-hero-sub muted">Give ${esc(first)} their own secure copilot chat about their application — a flat <b>${esc(cost)} credits</b> once they activate, valid ${esc(expDays)} days, up to ${esc(msgs)} messages.</p>
+        inner = `<p class="iv-hero-sub muted">Give ${esc(first)} their own secure copilot chat about their application${
+          cost != null ? ` — a flat <b>${esc(cost)} credits</b> once they activate` : " — charged once they activate"}${terms.text ? `, ${esc(terms.text)}` : ""}.</p>
           <button class="btn btn-primary btn-block" id="cpSendBtn">✨ Send copilot access to ${esc(first)}</button>`;
       }
       return `<div class="cp-card iv-hero">
@@ -5640,16 +6070,14 @@
     function openCopilotSendModal() {
       const first = (cl.full_name || "the student").split(" ")[0];
       const cr = state.credits || {};
-      const cfg = cp.config || {};
       const cost = copilotCost();
-      const msgs = cfg.allowed_messages != null ? cfg.allowed_messages : 100;
-      const expDays = cfg.expires_days != null ? cfg.expires_days : 30;
+      const terms = copilotTerms();
       const perInr = cr.credit_value_inr || 10;
       const isInr = (cr.currency || "INR") === "INR";
       const balance = (typeof cr.balance_credits === "number") ? cr.balance_credits : null;
       const money = (credits) => isInr ? ` (≈ ${fmtInr(Math.round(credits * perInr))})` : "";
       const enforced = !!cr.enforced;
-      const short = balance !== null && balance < cost;
+      const short = balance !== null && cost != null && balance < cost;
       const live = !!(cp.invite && cp.invite.live);
       // A live, already-activated invite carries its paid unlock over to the new
       // link (server-side) — resending is free, so nothing to block or price.
@@ -5680,7 +6108,8 @@
         el.innerHTML =
           (carriesOver
             ? `<div>Already activated — resending a new link is <b>free</b>: ${esc(first)} keeps their remaining messages and expiry date.</div>`
-            : `<div>Flat <b>${esc(cost)} credits</b>${money(cost)} — charged only when ${esc(first)} first activates the link. Valid ${esc(expDays)} days · up to ${esc(msgs)} messages.</div>`) +
+            : `<div>${cost != null ? `Flat <b>${esc(cost)} credits</b>${money(cost)}` : "Charged"} — only when ${esc(first)} first activates the link.${
+              terms.text ? " " + esc(terms.text.charAt(0).toUpperCase() + terms.text.slice(1)) + "." : ""}</div>`) +
           balanceLine;
       }
       const sv = $("#cpSendSave");
@@ -5703,7 +6132,7 @@
           drawCopilot();
         } catch (ex) {
           cp.busy = false;
-          if (ex.status === 402) { closeModal(); toast(ex.message, "error"); navigate("credits"); return; }
+          if (ex.status === 402) { closeModal(); toast(ex.message, "error"); routeAfter402(ex); return; }
           const er = $("#cpSendErr"); if (er) { er.textContent = ex.message; er.classList.remove("hidden"); }
           btn.disabled = false; btn.innerHTML = "✨ Send copilot link";
         }
@@ -6429,7 +6858,7 @@
             <div class="field"><label>Notes for Rilono AI</label><input id="uniCfNotes" placeholder="e.g. prefers co-op programs, needs scholarships" maxlength="300" value="${esc(f.notes)}"></div>
           </div>
           <div class="uni-ai-foot">
-            <button class="btn btn-primary" id="uniCfRun" ${uni.aiBusy ? "disabled" : ""}>${uni.aiBusy ? '<span class="spinner"></span> Matching saved courses…' : `✨ Generate shortlist · ${esc(String(cost))} cr`}</button>
+            <button class="btn btn-primary" id="uniCfRun" ${uni.aiBusy ? "disabled" : ""}>${uni.aiBusy ? '<span class="spinner"></span> Matching saved courses…' : `✨ ${cfRunLabel()}`}</button>
             <span class="muted" id="uniCfMsg"></span>
           </div>`;
       }
@@ -6440,7 +6869,7 @@
               <div class="cp-card-head" style="margin:0"><h3>✨ AI course shortlist · ${esc(dest)}</h3></div>
               <p class="muted" style="margin:4px 0 0;font-size:13px">The Course Finder engine, pinned to ${esc(first)}'s case: Rilono AI picks real ${esc(dest)} programs from the saved catalog — fees, intakes, deadlines, entry requirements — matched to their dossier, taking their existing shortlist into account.</p>
             </div>
-            <span class="uni-cost">${esc(String(cost))} credits</span>
+            ${cost != null ? `<span class="uni-cost">${esc(String(cost))} credits</span>` : ""}
           </div>
           ${cardBody}
         </div>`;
@@ -6524,7 +6953,8 @@
     }
 
     /* Billed run — the same request the side panel sends, with client + destination
-       pinned. Mirrors cfRunRecommend's failure choreography: 402 → credits page; any
+       pinned. Mirrors cfRunRecommend's failure choreography: 402 → credits page (or Plans
+       & Billing when AI is paused — routeAfter402); any
        other failure still re-pulls history, because a client-side timeout doesn't
        guarantee the server didn't complete AND bill. */
     async function uniRunCourseFinder() {
@@ -6563,7 +6993,7 @@
         uni.scrollToRec = true;
         toast(r.no_matches ? (r.message || "No matching courses are saved in the catalog. No credits were used.") : (r.credits_charged ? `Shortlist ready — ${r.credits_charged} credits used` : "Shortlist ready"), r.no_matches ? "info" : "success");
       } catch (ex) {
-        if (ex && ex.status === 402) { uni.aiBusy = false; toast(ex.message, "error"); navigate("credits"); return; }
+        if (ex && ex.status === 402) { uni.aiBusy = false; toast(ex.message, "error"); routeAfter402(ex); return; }
         toast(ex.message || "Couldn't generate the shortlist.", "error");
       } finally {
         uni.aiBusy = false;
@@ -6837,7 +7267,7 @@
         visualizer.fail();
         visualizer.destroy(900);
         if (!body.isConnected) { deepScanDirty.add(cl.id); }
-        if (ex.status === 402) { toast(ex.message, "error"); ds.scans = null; ds.active = null; navigate("credits"); return; }
+        if (ex.status === 402) { toast(ex.message, "error"); ds.scans = null; ds.active = null; routeAfter402(ex); return; }
         toast(ex.message, "error");
         // A client-side timeout can hide a scan the server still completed (and billed) —
         // never redraw from stale state; refetch history + pricing from the server.
@@ -6875,9 +7305,17 @@
       if (ds.busy) return;
       const first = (cl.full_name || "the student").split(" ")[0];
       const pricing = ds.pricing || {};
-      const cost = pricing.cost_credits != null ? pricing.cost_credits
-        : (((state.credits && (state.credits.actions || []).find((a) => a.key === "deep_scan")) || {}).credits || 20);
+      // The scan's price and limits are the server's (pricing block, else the price list);
+      // with neither loaded the button simply doesn't quote one — never a typed-in default.
+      const cost = creditCostFor("deep_scan", ds.pricing);
+      const priceLabel = priceLabelFor("deep_scan", ds.pricing);
       const isFree = !!pricing.next_scan_free;
+      // "First scan free" is only ever said while the server is giving free scans.
+      const freePerClient = Number(pricing.free_scans_per_client) || 0;
+      const maxDocs = Number(pricing.max_documents) > 0 ? Number(pricing.max_documents)
+        : Number((creditAction("deep_scan") || {}).max_documents) || null;
+      const paused = aiPausedMessage();
+      const unaffordable = !isFree && pricing.can_afford === false && !paused;
       // A scan may be running in an older render of this same client — keep the button
       // locked so it can't be double-run (and double-charged) from this one.
       const scanning = deepScanInflight.has(cl.id);
@@ -6885,9 +7323,11 @@
       // something to re-read on every visit — it lives behind the ⓘ so the card stays a
       // one-line header + action. An unconfigured server still shows inline: that's a
       // blocking state, not an explanation.
-      const scanTip = `Rilono AI strictly audits ${esc(first)}'s <b>entire dossier</b> — profile details, stage case records, the contents of every uploaded document, notes, emails, universities, interview results and payments — and flags anything irregular or inconsistent.<br><br>${
-        isFree ? `The first scan for each client is <b>free</b>; after that it's <b>${cost} credits</b> per scan.`
-          : `Each scan costs <b>${cost} credits</b>.`}`;
+      const scanTip = `Rilono AI strictly audits ${esc(first)}'s <b>entire dossier</b> — profile details, stage case records, the contents of ${
+        maxDocs ? `up to ${maxDocs} of the most recent uploaded documents` : "the uploaded documents"}, notes, emails, universities, interview results and payments — and flags anything irregular or inconsistent.${
+        priceLabel || cost != null ? `<br><br>${freePerClient > 0
+          ? `The first ${freePerClient > 1 ? freePerClient + " scans" : "scan"} for each client ${freePerClient > 1 ? "are" : "is"} <b>free</b>; after that it's <b>${esc(priceLabel || cost + " credits")}</b>.`
+          : `Price: <b>${esc(priceLabel || cost + " credits per scan")}</b>.`}` : ""}`;
       const heroCard = `
         <div class="cp-card deep-scan-card" id="deepScanCard">
           <div class="deep-scan-head">
@@ -6895,9 +7335,11 @@
               <div class="deep-scan-title"><span class="deep-scan-title-icon" aria-hidden="true">🛡️</span> Deep Scan — full client audit${
                 infoTip(scanTip, "What Deep Scan checks")}</div>
               ${!ds.aiAvailable ? `<div class="deep-scan-description"><b>Rilono AI isn't configured on this server yet.</b></div>` : ""}
+              ${paused ? `<div class="deep-scan-description"><b>${esc(paused)}</b></div>`
+                : unaffordable ? `<div class="deep-scan-description">Not enough credits for a Deep Scan${priceLabel ? ` (${esc(priceLabel)})` : ""} — top up in Credits.</div>` : ""}
             </div>
-            ${canDeepScan ? `<button class="btn btn-primary btn-sm deep-scan-btn" id="deepScanBtn" ${(!ds.aiAvailable || scanning) ? "disabled" : ""}>${
-              scanning ? '<span class="spinner"></span> Scanning…' : isFree ? "Run Deep Scan · Free" : `Run Deep Scan · ${cost} cr`}</button>` : ""}
+            ${canDeepScan ? `<button class="btn btn-primary btn-sm deep-scan-btn" id="deepScanBtn" ${(!ds.aiAvailable || scanning || paused || unaffordable) ? "disabled" : ""}>${
+              scanning ? '<span class="spinner"></span> Scanning…' : isFree ? "Run Deep Scan · Free" : `Run Deep Scan${cost != null ? ` · ${cost} cr` : ""}`}</button>` : ""}
           </div>
           <div class="deep-scan-visualizer hidden" id="deepScanVisualizer" aria-live="polite"></div>
         </div>`;
@@ -6906,7 +7348,7 @@
         : ds.active
           ? `<div class="cp-card" id="dsResult">${deepScanResultHtml(ds.active)}</div>`
           : `<div class="cp-card"><div class="empty" style="padding:30px"><div class="emoji">🛡️</div><h3>${ds.error ? "Couldn't load Deep Scans" : "No Deep Scan yet"}</h3>
-              <p>${ds.error ? esc(ds.error) : canDeepScan ? `Run ${esc(first)}'s first full-dossier audit — it's free.` : "No audits have been run for this client yet."}</p>
+              <p>${ds.error ? esc(ds.error) : canDeepScan ? `Run ${esc(first)}'s first full-dossier audit${isFree ? " — it's free" : ""}.` : "No audits have been run for this client yet."}</p>
               ${ds.error ? `<button class="btn btn-soft btn-sm" id="dsRetryBtn" style="margin-top:10px">Retry</button>` : ""}</div></div>`;
       const historyCard = (ds.scans || []).length ? `
         <div class="cp-card">
@@ -7123,16 +7565,19 @@
     function wsComposerHtml() {
       const isLor = ws.docType === "lor";
       const first = (cl.full_name || "the student").split(" ")[0];
-      const cost = (ws.pricing && ws.pricing.cost_credits != null) ? ws.pricing.cost_credits
-        : (((state.credits && (state.credits.actions || []).find((a) => a.key === "writing_studio")) || {}).credits || 1);
+      // One draft or one revision at the server's writing_studio price ("5 credits per draft
+      // or refinement"); unquoted when no payload has said — never a typed-in default.
+      const cost = creditCostFor("writing_studio", ws.pricing);
+      const priceLabel = priceLabelFor("writing_studio", ws.pricing);
+      const priceSentence = priceLabel ? `Costs <b>${esc(priceLabel)}</b>. ` : "";
       const rTypes = (ws.catalog && ws.catalog.recommender_types) || [];
       const shortlist = (ws.defaults && ws.defaults.universities) || [];
       const docName = wsDocName(ws.docType);
       const running = ws.busy || writingInflight.has(cl.id);
 
       const tip = isLor
-        ? `Rilono AI drafts the letter in the <b>recommender's</b> voice, grounded in ${esc(first)}'s dossier — case records, uploaded documents, shortlist and notes — and never invents a fact.<br><br>The export is a <b>draft for the recommender to review, edit and sign</b>, with that stated on its own final page. It is never a finished letter.<br><br>Costs <b>${cost} credit</b> per draft or revision. Re-downloading the Word file is free.`
-        : `Rilono AI writes a ${esc(docName)} in ${esc(first)}'s own voice from their real dossier — case records, the contents of every uploaded document, university shortlist and counselor notes. Anything it can't evidence becomes a <b>[PLACEHOLDER]</b> for you to fill, never a guess.<br><br>Conventions follow the destination: a UK personal statement, a Canadian study plan and a German Motivationsschreiben are written differently.<br><br>Costs <b>${cost} credit</b> per draft or revision. Re-downloading the Word file is free.`;
+        ? `Rilono AI drafts the letter in the <b>recommender's</b> voice, grounded in ${esc(first)}'s dossier — case records, uploaded documents, shortlist and notes — and never invents a fact.<br><br>The export is a <b>draft for the recommender to review, edit and sign</b>, with that stated on its own final page. It is never a finished letter.<br><br>${priceSentence}Re-downloading the Word file is free.`
+        : `Rilono AI writes a ${esc(docName)} in ${esc(first)}'s own voice from their real dossier — case records, the contents of every uploaded document, university shortlist and counselor notes. Anything it can't evidence becomes a <b>[PLACEHOLDER]</b> for you to fill, never a guess.<br><br>Conventions follow the destination: a UK personal statement, a Canadian study plan and a German Motivationsschreiben are written differently.<br><br>${priceSentence}Re-downloading the Word file is free.`;
 
       const shortlistPicker = shortlist.length ? `
         <label class="ws-lbl">Pick from ${esc(first)}'s shortlist
@@ -7184,6 +7629,8 @@
           <textarea class="ws-in ws-ta" id="wsRelationship" rows="3" maxlength="2000" placeholder="e.g. Taught her Thermodynamics (PHY-302) in 2025-26 and supervised her final-year project on solar absorber coatings.">${esc(ws.form.relationship_context)}</textarea>
         </label>`;
 
+      // can_afford is false while AI is paused too — say THAT, not "your wallet is empty".
+      const paused = aiPausedMessage();
       const canAfford = !ws.pricing || ws.pricing.can_afford !== false;
       return `
         <div class="cp-card ws-card">
@@ -7208,9 +7655,10 @@
             </label>
           </div>
           <div class="ws-actions">
-            <button class="btn btn-primary" id="wsGenerateBtn" ${(!ws.aiAvailable || running || !canAfford) ? "disabled" : ""}>${
-              running ? '<span class="spinner"></span> Drafting…' : `Draft with Rilono AI · ${cost} cr`}</button>
-            ${!canAfford ? `<span class="ws-hint ws-hint-warn">Your wallet is empty — top up in Credits.</span>`
+            <button class="btn btn-primary" id="wsGenerateBtn" ${(!ws.aiAvailable || running || !canAfford || paused) ? "disabled" : ""}>${
+              running ? '<span class="spinner"></span> Drafting…' : `Draft with Rilono AI${cost != null ? ` · ${cost} cr` : ""}`}</button>
+            ${paused ? `<span class="ws-hint ws-hint-warn">${esc(paused)}</span>`
+              : !canAfford ? `<span class="ws-hint ws-hint-warn">Not enough credits — top up in Credits.</span>`
               : `<span class="ws-hint">Takes up to a minute. You're charged only if a draft comes back.</span>`}
           </div>
         </div>`;
@@ -7271,8 +7719,8 @@
             placeholder="What should change? e.g. “Cut the second paragraph and expand the internship instead.”">${esc(ws.refineText)}</textarea>
           <div class="ws-actions">
             <button class="btn btn-primary btn-sm" id="wsRefineBtn" ${running ? "disabled" : ""}>${
-              running ? '<span class="spinner"></span> Revising…' : `Revise · ${
-                (ws.pricing && ws.pricing.cost_credits) || 1} cr`}</button>
+              running ? '<span class="spinner"></span> Revising…' : `Revise${
+                creditCostFor("writing_studio", ws.pricing) != null ? ` · ${creditCostFor("writing_studio", ws.pricing)} cr` : ""}`}</button>
             <button class="btn btn-ghost btn-sm" id="wsRefineCancel">Cancel</button>
           </div>
         </div>` : "";
@@ -7659,8 +8107,33 @@
         } else if (state.view === "clients") loadAndRenderClientList();
         return;
       }
+      // 402 = the move reopens a file past the plan's open-file limit (grace over) or the
+      // trial has ended. The server's sentence says which and what to do; it is too long and
+      // too important for a toast, so it gets a dialog with the way to the plans.
+      if (ex.status === 402) { showPlanLimitDialog(ex.message, "Can't reopen this file"); return; }
       toast(ex.message, "error");
     }
+  }
+  // The same refusal inside a form: the message verbatim in the form's error line, plus the
+  // way to the plans for whoever can choose one. The form (and what was typed) stays.
+  function planLimitInline(errEl, message) {
+    if (!errEl) { toast(message, "error"); return; }
+    errEl.innerHTML = esc(message || "Your plan doesn't allow this right now.") + (can("billing.manage")
+      ? ` <a href="#" onclick="__ent.closeModal();__ent.go('billing');return false">See plans</a>` : "");
+    errEl.classList.remove("hidden");
+  }
+  // A plan-limit refusal (402) worth reading in full: the server's message verbatim, and for
+  // whoever can act on it, a button to Plans & Billing.
+  async function showPlanLimitDialog(message, title) {
+    const canPlan = can("billing.manage");
+    const go = await confirmModal(message || "Your plan doesn't allow this right now.", {
+      title: title || "Plan limit reached",
+      okText: canPlan ? "See plans" : "OK",
+      cancelText: canPlan ? "Not now" : undefined,
+      danger: false,
+      hideCancel: !canPlan,
+    });
+    if (go && canPlan) navigate("billing");
   }
   async function editClient(id) {
     // Always refetch: state.clients is only refreshed by the list view, so prefilling from a
@@ -7820,6 +8293,18 @@
       <b>You're not assigned to an office yet.</b>
       <span>Your access is limited to your own office, but you haven't been added to one — so no client records are in scope. Ask a workspace admin to add you to an office.</span>
     </div></div>`;
+  }
+
+  // The plan-gate notice on a Team tab: the server's own upgrade sentence (it names the plan
+  // that includes the feature, and promises existing offices/roles keep working) plus, for
+  // whoever can act on it, the way to Plans & Billing. Reads are never gated, so the tab
+  // still lists everything — only the create/edit controls step aside.
+  function tmPlanBanner(key) {
+    const msg = planUpgradeMessage(key) || "This isn't included in your current plan.";
+    return `<div class="tm-banner warn" role="status"><div class="tm-banner-ic">⬆️</div><div class="tm-banner-txt">
+      <span>${esc(msg)}</span></div>
+      ${can("billing.manage") ? `<button type="button" class="btn btn-primary btn-sm" onclick="__ent.go('billing')">See plans</button>` : ""}
+    </div>`;
   }
 
   function teamDrawShell() {
@@ -8650,7 +9135,8 @@
         closeModal();
         await teamRefresh();
       } catch (ex) {
-        if (ex.status === 402) { closeModal(); toast(errMessage(ex), "error"); navigate("credits"); return; }
+        // 402 = the plan's seat limit (or an ended trial) — a PLAN matter, not credits.
+        if (ex.status === 402) { planLimitInline(err, errMessage(ex)); btn.disabled = false; btn.textContent = "Send invite"; return; }
         err.textContent = errMessage(ex); err.classList.remove("hidden");
         btn.disabled = false; btn.textContent = "Send invite";
       }
@@ -8704,6 +9190,7 @@
         <details class="cap-fold"${(grants.length || denies.length) ? " open" : ""}>
           <summary>Fine-tune individual permissions</summary>
           <p class="tm-hint">Everything here is layered on top of the role. <b>Inherit</b> follows the role, <b>Allow</b> adds a permission just for ${esc(name)}, and <b>Block</b> takes one away even if the role grants it.</p>
+          ${planFeature("custom_roles") ? "" : `<p class="tm-hint tm-plan-hint">${esc(planUpgradeMessage("custom_roles") || "Per-person permissions aren't included in your plan.")} You can still remove the ones already set.</p>`}
           ${capMatrixHtml({ grants: grants, denies: denies, base: base }, tmActorCaps(), { mode: "override", idPrefix: "acc", isOwner: tmIsOwner() })}
         </details>
         <div id="tmAccessError" class="auth-error hidden"></div>
@@ -8890,7 +9377,8 @@
       toast("Member reactivated", "success");
       await teamRefresh();
     } catch (ex) {
-      if (ex.status === 402) { toast(errMessage(ex), "error"); navigate("credits"); return; }
+      // Seat limit / ended trial: the plan, not credits.
+      if (ex.status === 402) { showPlanLimitDialog(errMessage(ex), "Can't reactivate this member"); return; }
       toast(errMessage(ex), "error");
     }
   }
@@ -9076,6 +9564,9 @@
 
     const capCount = (r) => (r.capabilities || []).length;
     const scopeText = (s) => esc((scopeMeta(s) || {}).label || SCOPE_FALLBACK_LABEL[s] || "—");
+    // Creating, editing, duplicating and archiving custom roles is a Team-plan feature. On a
+    // plan without it existing roles keep working (and stay assignable) — only the editors go.
+    const rolesOk = planFeature("custom_roles");
     const presetCard = (r) => `<div class="rl-card${r.key === "owner" ? " is-primary" : ""}">
       <div class="rl-card-top"><h4>${esc(r.label)}</h4>${roleBadgeHtml(r.key, "Built-in")}</div>
       <p>${esc(r.description || "")}</p>
@@ -9085,7 +9576,7 @@
       </div>
       <div class="rl-card-acts">
         <button class="btn btn-ghost btn-sm" data-rlview="${esc(r.key)}">View permissions</button>
-        ${r.key === "owner" ? "" : `<button class="btn btn-soft btn-sm" data-rlduppreset="${esc(r.key)}">Duplicate to customise</button>`}
+        ${r.key === "owner" || !rolesOk ? "" : `<button class="btn btn-soft btn-sm" data-rlduppreset="${esc(r.key)}">Duplicate to customise</button>`}
       </div>
     </div>`;
     const customCard = (r) => `<div class="rl-card">
@@ -9096,23 +9587,25 @@
         <span>${scopeText(r.data_scope)}</span>
         <span><b>${r.member_count || 0}</b> ${r.member_count === 1 ? "member" : "members"}</span>
       </div>
-      <div class="rl-card-acts">
+      ${rolesOk ? `<div class="rl-card-acts">
         <button class="btn btn-soft btn-sm" data-rledit="${r.id}">Edit</button>
         <button class="btn btn-ghost btn-sm" data-rldup="${r.id}">Duplicate</button>
         <button class="btn btn-ghost btn-sm" data-rlarchive="${r.id}">Archive</button>
-      </div>
+      </div>` : ""}
     </div>`;
 
     mount.innerHTML = `
+      ${rolesOk ? "" : tmPlanBanner("custom_roles")}
       <div class="tm-toolbar">
         <div><b>Your workspace's own roles</b>
-          <div class="tm-hint">${customs.length} of ${limit} used. Start from a built-in role and change what it can do.</div></div>
+          <div class="tm-hint">${customs.length} of ${limit} used.${rolesOk ? " Start from a built-in role and change what it can do." : ""}</div></div>
         <div class="spacer" style="flex:1"></div>
-        <button class="btn btn-primary btn-sm" id="rlCreate" ${customs.length >= limit ? "disabled" : ""}>+ Create role</button>
+        ${rolesOk ? `<button class="btn btn-primary btn-sm" id="rlCreate" ${customs.length >= limit ? "disabled" : ""}>+ Create role</button>` : ""}
       </div>
       ${customs.length
         ? `<div class="rl-grid">${customs.map(customCard).join("")}</div>`
-        : `<div class="card"><div class="card-body tm-hint">No custom roles yet. The built-in roles below cover most teams — duplicate one when you need to change what it can do.</div></div>`}
+        : `<div class="card"><div class="card-body tm-hint">No custom roles yet. The built-in roles below cover most teams${
+          rolesOk ? " — duplicate one when you need to change what it can do" : ""}.</div></div>`}
       <div class="cp-sub-label" style="margin-top:22px">Built-in roles</div>
       <div class="rl-grid">${presets.map(presetCard).join("")}</div>`;
 
@@ -9306,6 +9799,14 @@
     const canManage = can("branches.manage");
     const limit = (meta.limits && meta.limits.max_branches) || 50;
     const activeCount = list.filter((b) => b.is_active !== false).length;
+    // Offices beyond the head office are a Team-plan feature. Without it: the first office can
+    // still be created, the DEFAULT office stays editable (its time zone drives dates and
+    // reminders), and "Assign team" is a use of an office, not an edit — everything else waits
+    // for an upgrade. Existing offices and their clients keep working either way.
+    const branchesOk = planFeature("branches");
+    const canAddOffice = canManage && (branchesOk || activeCount === 0);
+    // Drilling into an office's clients is a per-branch report (the list's ?branch_id=).
+    const canDrillClients = planFeature("branch_reporting");
 
     const card = (b) => {
       const archived = b.is_active === false;
@@ -9322,34 +9823,36 @@
           <button type="button" class="br-card-stat" data-drill="members" data-bid="${b.id}"
             aria-label="Show the ${num(b.member_count)} team members in ${esc(b.name)}">
             <b>${num(b.member_count)}</b><span>${b.member_count === 1 ? "member" : "members"}</span></button>
-          <button type="button" class="br-card-stat" data-drill="clients" data-bid="${b.id}"
+          ${canDrillClients ? `<button type="button" class="br-card-stat" data-drill="clients" data-bid="${b.id}"
             aria-label="Show the ${num(b.client_count)} clients filed under ${esc(b.name)}">
-            <b>${num(b.client_count)}</b><span>${b.client_count === 1 ? "client" : "clients"}</span></button>
+            <b>${num(b.client_count)}</b><span>${b.client_count === 1 ? "client" : "clients"}</span></button>`
+            : `<div class="br-card-stat"><b>${num(b.client_count)}</b><span>${b.client_count === 1 ? "client" : "clients"}</span></div>`}
         </div>
         ${canManage ? `<div class="br-card-acts">
           ${archived
-            ? `<button class="btn btn-soft btn-sm" data-bract="reactivate" data-bid="${b.id}">Reactivate</button>`
-            : `<button class="btn btn-soft btn-sm" data-bract="edit" data-bid="${b.id}">Edit</button>
-               ${b.is_default ? "" : `<button class="btn btn-ghost btn-sm" data-bract="default" data-bid="${b.id}">Make default</button>`}
+            ? (branchesOk ? `<button class="btn btn-soft btn-sm" data-bract="reactivate" data-bid="${b.id}">Reactivate</button>` : "")
+            : `${branchesOk || b.is_default ? `<button class="btn btn-soft btn-sm" data-bract="edit" data-bid="${b.id}">Edit</button>` : ""}
+               ${b.is_default || !branchesOk ? "" : `<button class="btn btn-ghost btn-sm" data-bract="default" data-bid="${b.id}">Make default</button>`}
                <button class="btn btn-ghost btn-sm" data-bract="assign" data-bid="${b.id}">Assign team</button>
-               ${b.is_default ? "" : `<button class="btn btn-ghost btn-sm" data-bract="archive" data-bid="${b.id}">Archive</button>`}`}
+               ${b.is_default || !branchesOk ? "" : `<button class="btn btn-ghost btn-sm" data-bract="archive" data-bid="${b.id}">Archive</button>`}`}
         </div>` : ""}
       </div>`;
     };
 
     mount.innerHTML = `
       ${teamUi.branchError ? errBox(teamUi.branchError) : ""}
+      ${branchesOk ? "" : tmPlanBanner("branches")}
       <div class="tm-toolbar">
         <div><b>Offices</b><div class="tm-hint">${activeCount} of ${limit} used. Every client belongs to one office, which is what "their office only" access means.</div></div>
         <div class="spacer" style="flex:1"></div>
         <label class="tm-hint" for="brShowArchived" style="display:flex;align-items:center;gap:6px">
           <input type="checkbox" id="brShowArchived" aria-label="Show archived offices" ${
             teamUi.showArchivedBranches ? "checked" : ""}/> Show archived</label>
-        ${canManage ? `<button class="btn btn-primary btn-sm" id="brCreate" ${activeCount >= limit ? "disabled" : ""}>+ Add office</button>` : ""}
+        ${canAddOffice ? `<button class="btn btn-primary btn-sm" id="brCreate" ${activeCount >= limit ? "disabled" : ""}>+ Add office</button>` : ""}
       </div>
       ${list.length
         ? `<div class="br-grid">${list.map(card).join("")}</div>`
-        : `<div class="card"><div class="card-body tm-hint">No offices yet.${canManage ? " Add your first one — every existing client will keep working, they just won't be filed under an office until you set one." : ""}</div></div>`}`;
+        : `<div class="card"><div class="card-body tm-hint">No offices yet.${canAddOffice ? " Add your first one — every existing client will keep working, they just won't be filed under an office until you set one." : ""}</div></div>`}`;
 
     const showArch = $("#brShowArchived", mount);
     if (showArch) showArch.onchange = () => {
@@ -9904,11 +10407,15 @@
      ============================================================ */
   // The price ladder the server published for a plan: `price_options` carries one
   // owner-set EX-TAX price per launch currency, each with the server's own rendering of
-  // it — never an FX conversion. pkgOptions()-style fallback: a payload without a ladder
-  // (older server) still yields one option in the currency the plan was quoted in, so
-  // everything downstream keeps working unchanged.
+  // it — never an FX conversion. It is filtered to `charge_currencies`, the currencies THIS
+  // org can be charged in (an INR-region org pays INR only; everyone else never INR), so the
+  // selector can't offer a currency checkout would then refuse or quietly replace.
+  // pkgOptions()-style fallback: a payload without a ladder (older server) still yields one
+  // option in the currency the plan was quoted in, so everything downstream keeps working.
   function planOptions(p) {
-    const opts = ((p || {}).price_options || []).filter((o) => o && o.currency);
+    const allowed = state.billingChargeCurrencies;
+    let opts = ((p || {}).price_options || []).filter((o) => o && o.currency);
+    if (allowed && allowed.length) opts = opts.filter((o) => allowed.indexOf(o.currency) !== -1);
     if (opts.length) return opts;
     return [{
       currency: (p || {}).currency || "INR",
@@ -9921,7 +10428,58 @@
   // payload) or the plan has no price in that currency.
   function planOption(p) {
     const opts = planOptions(p);
-    return opts.find((o) => o.currency === state.billingCurrency) || opts[0];
+    // No pick yet (the trial banner, before Plans & Billing was opened): the currency the
+    // server quoted the card in — this org's own billing currency — not the ladder's first.
+    const want = state.billingCurrency || (p || {}).currency;
+    return opts.find((o) => o.currency === want) || opts[0];
+  }
+  // The billing cycle checkout may be asked for. Yearly only while the server sells it
+  // (`yearly_enabled`); asking for yearly while it's off is a 400, so a stale toggle state
+  // must never leak into a request.
+  function billingCycleNow() {
+    return state.billingYearlyEnabled && state.billingCycle === "yearly" ? "yearly" : "monthly";
+  }
+  // How many months of price a year costs on this card (10 = "2 months free"), from the
+  // card's own monthly and yearly figures — the server prices yearly as exactly that
+  // multiple in every currency, so other ladder currencies can be previewed with it.
+  function planYearMonths(p) {
+    const m = Number(p.monthly_minor != null ? p.monthly_minor : p.monthly_paise);
+    const y = Number(p.yearly_minor);
+    return m > 0 && y > 0 ? y / m : null;
+  }
+  // The ex-tax list price a card shows for the chosen cycle and currency option.
+  function planCycleAmount(p, opt, cycle) {
+    if (cycle !== "yearly") {
+      return { minor: Number(opt.amount_minor || 0), display: opt.display || fmtMoney(opt.amount_minor, opt.currency) };
+    }
+    if (opt.currency === p.currency && Number(p.yearly_minor) > 0) {
+      return { minor: Number(p.yearly_minor), display: p.yearly_display || fmtMoney(p.yearly_minor, p.currency) };
+    }
+    const months = planYearMonths(p);
+    const minor = months ? Math.round(Number(opt.amount_minor || 0) * months) : 0;
+    return { minor, display: fmtMoney(minor, opt.currency) };
+  }
+  // Tax on a card shown in `cur`. Quoted in that currency: the card's own tax_percent (0 at
+  // ENTERPRISE_GST_PERCENT=0 and outside India). INR picked over a card quoted in another
+  // currency: the live INR rate from gst_percent — null/0 means no tax line, never 18.
+  function planTaxPercent(p, cur) {
+    if (cur === p.currency) return Number(p.tax_percent) || 0;
+    return cur === "INR" ? (Number(state.billingGstPercent) || 0) : 0;
+  }
+  // The tax's name for that card — the server's own label; for the cross-currency INR case
+  // the payload's INR label, else the name of the rate the server reported (gst_percent).
+  function planTaxLabel(p, cur) {
+    if (!(planTaxPercent(p, cur) > 0)) return "";
+    if (cur === p.currency) return p.tax_label || "";
+    return (state.billingTax && state.billingTax.label) || "GST";
+  }
+  // "+ GST" (or "") after a card's price: the server's price_note whenever the card was
+  // quoted in the shown currency.
+  function planTaxNote(p, cur) {
+    if (!p || p.is_free) return "";
+    if (cur === p.currency) return p.price_note || "";
+    const label = planTaxLabel(p, cur);
+    return label ? "+ " + label : "";
   }
   // The `currency` hint for /billing/checkout and /coupons/validate. Same rule as the
   // credit top-up flow (see creditCheckoutProceed): send the currency of the price the
@@ -9933,8 +10491,8 @@
     const p = (state.billingPlans || []).find((x) => x.key === planKey);
     return p ? planOption(p).currency : state.billingCurrency;
   }
-  // Cheapest paid plan in the shown billing currency — feeds the sandbox banner's
-  // "Plans start at …" line once billing data has been loaded. Null until then.
+  // Cheapest paid plan in the shown billing currency — feeds the trial banner's
+  // "Plans start at …" line once the cards have loaded. Null until then.
   function billingStartPrice() {
     let best = null, bestPlan = null;
     (state.billingPlans || []).forEach((p) => {
@@ -9946,6 +10504,7 @@
     return {
       display: best.display || fmtMoney(best.amount_minor, best.currency),
       currency: best.currency,
+      note: planTaxNote(bestPlan, best.currency),
       credits: Number(bestPlan.included_credits || 0),
       recur: !!bestPlan.credits_recur,
     };
@@ -9963,107 +10522,141 @@
     const pct = (used, max) => (max === -1 ? 0 : Math.min(100, Math.round((used / Math.max(1, max)) * 100)));
     const cap = (v) => (v === -1 || v == null ? "∞" : Number(v).toLocaleString());
     state.billingCoupon = state.billingCoupon || null;
-    state.billingPlans = d.plans || [];
-    // The live INR GST rate from the server; 18 only as the old-payload fallback.
-    state.billingGstPercent = Number(d.gst_percent) || 18;
+    applyBillingCatalog(d);
+    if (!state.billingYearlyEnabled) state.billingCycle = "monthly";
+    const cycle = billingCycleNow();
+    const yearly = cycle === "yearly";
+    const per = yearly ? "/yr" : "/mo";
     const bCoupon = state.billingCoupon;
+    const paidPlans = (d.plans || []).filter((p) => !p.is_free);
 
     // ---- Billing currency (plan-grid analogue of the credit top-up selector) ----
     // A currency is offered only when EVERY plan that carries a ladder prices it, so the
     // whole grid re-quotes together; `charge_currencies` covers a payload with no
     // ladders. An old server sends neither: the selector never renders, billingCurrency
-    // resets to null, and every plan falls back to its own quoted currency (INR, today's
-    // behaviour).
+    // resets to null, and every plan falls back to its own quoted currency.
     const ladders = (d.plans || [])
-      .map((p) => (p.price_options || []).map((o) => o.currency))
-      .filter((l) => l.length);
+      .filter((p) => (p.price_options || []).length)
+      .map((p) => planOptions(p).map((o) => o.currency));
     const currencies = ladders.length
       ? ladders.reduce((acc, l) => acc.filter((cc) => l.indexOf(cc) !== -1))
-      : (d.charge_currencies || []);
+      : (state.billingChargeCurrencies || []);
     if (!currencies.length) state.billingCurrency = null;
     else if (!state.billingCurrency || currencies.indexOf(state.billingCurrency) === -1) {
       // Default = the org's server-resolved billing currency; a pick made earlier in the
       // session survives re-renders for as long as it is still on offer.
       state.billingCurrency = currencies.indexOf(d.currency) !== -1 ? d.currency : currencies[0];
     }
-    // What the grid is actually quoting in — drives the GST footnote below. GST exists
-    // only in INR; every other launch currency is a zero-rated export, so the listed
-    // price IS the charged price and no "+ GST" may appear.
-    const shownCur = state.billingCurrency || ((d.plans || [])[0] || {}).currency || "INR";
 
-    // Prices are quoted EX-tax ("₹2,999/month + GST"), so the card shows the subtotal and
-    // names the tax rather than folding it in. The charged total is spelled out underneath
-    // so nobody meets it for the first time inside the Razorpay modal. Everything renders
-    // from the option planOption() resolved for the selected billing currency.
+    // Prices are quoted EX-tax, so the card shows the subtotal and names the tax rather than
+    // folding it in — with the server's own note ("+ GST", or nothing at all at a 0% rate or
+    // outside India). The charged total is spelled out underneath so nobody meets it for the
+    // first time inside the Razorpay modal.
     const planPriceBlock = (p) => {
       if (p.is_free) return `<div class="price">${esc(p.monthly_display)}<small>/mo</small></div>
         <div class="price-off" style="color:var(--text-2)">${esc(p.price_note)}</div>`;
       const opt = planOption(p);
       const cur = opt.currency;
-      const base = Number(opt.amount_minor || 0);
-      // Tax is INR-only. `p.tax_percent` is the rate for the currency the SERVER quoted
-      // the plan in — 0 whenever that wasn't INR — so an INR selection over a
-      // foreign-quoted payload uses the payload's own gst_percent. Preview only: the
-      // server re-derives the real figure from its own book at checkout.
-      const taxPct = cur === "INR" ? (Number(p.tax_percent) || state.billingGstPercent || 18) : 0;
-      // Prefer the server's own display strings whenever the shown currency is the one it
+      const amount = planCycleAmount(p, opt, cycle);
+      const base = amount.minor;
+      const taxPct = planTaxPercent(p, cur);
+      const note = planTaxNote(p, cur);
+      // Prefer the server's own total strings whenever the shown currency is the one it
       // quoted in, so client and server never render the same amount two different ways.
-      const listDisplay = cur === p.currency && p.monthly_display
-        ? p.monthly_display : (opt.display || fmtMoney(base, cur));
-      const chargedDisplay = (sub) => (cur === p.currency && !bCoupon && p.total_display
-        ? p.total_display : fmtMoney(sub + Math.round(sub * taxPct / 100), cur));
-      const taxLine = (sub) => (taxPct
-        ? `<div class="price-tax">+ ${esc(p.tax_label || "GST")} · ${esc(chargedDisplay(sub))}/mo charged</div>` : "");
-      // `taxLine` already names the tax AND the charged total, so a separate "+ GST" note
-      // above it would say the same thing twice.
-      if (!bCoupon) return `<div class="price">${esc(listDisplay)}<small>/mo</small></div>${taxLine(base)}`;
+      const serverTotal = cur === p.currency ? (yearly ? p.yearly_total_display : p.total_display) : null;
+      const chargedDisplay = (subtotal) => (serverTotal && !bCoupon
+        ? serverTotal : fmtMoney(subtotal + Math.round(subtotal * taxPct / 100), cur));
+      const taxLine = (subtotal) => (taxPct > 0 && note
+        ? `<div class="price-tax">${esc(note)} · ${esc(chargedDisplay(subtotal))}${per} charged</div>` : "");
+      // Non-Indian members of the INR region are charged rupees but think in dollars: a
+      // whole-dollar ESTIMATE of the charged total, only when the server attached one.
+      const est = cur === "INR" && p.usd_estimate
+        ? (yearly ? p.usd_estimate.yearly_display : p.usd_estimate.monthly_display) : null;
+      const usdLine = est ? `<div class="price-usd">${esc(est)}${per} · charged in INR</div>` : "";
+      const freeMonths = yearly && Number(p.yearly_months_free) > 0
+        ? `<div class="price-off">${Number(p.yearly_months_free)} months free</div>` : "";
+      if (!bCoupon) return `<div class="price">${esc(amount.display)}<small>${per}</small></div>${freeMonths}${taxLine(base)}${usdLine}`;
       // Discount applies to the ex-tax subtotal — same order as the server's
       // checkout_quote(), so the preview here and the order there always agree.
       const sub2 = Math.max(0, Math.round(base * (100 - bCoupon.percent) / 100));
-      return `<div class="price">${fmtMoney(sub2, cur)}<small>/mo</small><span class="price-was">${esc(listDisplay)}</span></div>
+      return `<div class="price">${fmtMoney(sub2, cur)}<small>${per}</small><span class="price-was">${esc(amount.display)}</span></div>
         <div class="price-off">${esc(bCoupon.percent_display)} off applied</div>
-        ${taxLine(sub2)}`;
+        ${taxLine(sub2)}${usdLine}`;
     };
 
     // "USD · from $39/mo" option labels for the selector — the cheapest paid plan's
     // server-rendered price in that currency, mirroring the credit checkout's
     // "USD · $49" style. Ex-tax by design, like every listed price on this page.
     const fromIn = (cc) => {
-      let best = null;
-      (d.plans || []).forEach((p) => {
-        if (p.is_free) return;
+      let best = null, bestPlan = null;
+      paidPlans.forEach((p) => {
         const o = planOptions(p).find((x) => x.currency === cc);
-        if (o && (!best || Number(o.amount_minor) < Number(best.amount_minor))) best = o;
+        if (o && (!best || Number(o.amount_minor) < Number(best.amount_minor))) { best = o; bestPlan = p; }
       });
-      return best ? (best.display || fmtMoney(best.amount_minor, cc)) : null;
+      return best ? planCycleAmount(bestPlan, best, cycle).display : null;
     };
 
     const planCard = (p) => {
       const isCurrent = sub.plan === p.key;
       const isSandbox = p.is_free;
+      const reads = p.monthly_reads != null ? p.monthly_reads : p.max_reads;
+      const openFiles = p.max_open_files != null ? p.max_open_files : p.max_clients;
       return `<div class="plan-card ${p.is_popular ? "popular" : ""} ${isCurrent ? "current-plan" : ""}">
         ${p.is_popular ? `<div class="pop-tag">Most popular</div>` : ""}
         <h3>${esc(p.label)}</h3><div class="tagline">${esc(p.tagline)}</div>
         ${planPriceBlock(p)}
         <div class="plan-caps">
-          <div><b>${cap(p.max_seats)}</b><span>users</span></div>
-          <div><b>${cap(p.max_clients)}</b><span>active clients</span></div>
-          <div><b>${Number(p.included_credits).toLocaleString()}</b><span>AI credits${p.credits_recur ? "/mo" : " once"}</span></div>
+          <div><b>${cap(p.max_seats)}</b><span>staff seats</span></div>
+          <div><b>${cap(openFiles)}</b><span>open files</span></div>
+          <div><b>${Number(p.included_credits || 0).toLocaleString()}</b><span>AI credits${p.credits_recur ? "/mo" : " once"}</span></div>
+          ${reads != null ? `<div><b>${cap(reads)}</b><span>AI document reads${p.credits_recur ? "/mo" : ""}</span></div>` : ""}
         </div>
-        <ul>${p.features.map((f) => `<li>${esc(f)}</li>`).join("")}</ul>
+        ${p.files_note ? `<div class="plan-files-note">${esc(p.files_note)}</div>` : ""}
+        <ul>${(p.features || []).map((f) => `<li>${esc(f)}</li>`).join("")}</ul>
         ${isCurrent ? `<div class="plan-current-tag">✓ Current plan</div>`
           : (isSandbox ? `<div class="plan-current-tag" style="color:var(--muted)">Where every workspace starts</div>`
-          : (canManage ? `<button class="btn ${p.is_popular ? "btn-primary" : "btn-ghost"} btn-block" onclick="__ent.checkout('${p.key}',this)">${sub.is_sandbox ? "Choose " + esc(p.label) : "Switch to " + esc(p.label)}</button>`
+          : (canManage ? `<button class="btn ${p.is_popular ? "btn-primary" : "btn-ghost"} btn-block" onclick="__ent.checkout('${p.key}',this)">${sub.is_sandbox ? "Choose " + esc(p.label) : "Switch to " + esc(p.label)}${yearly ? " · yearly" : ""}</button>`
             : `<div class="plan-current-tag" style="color:var(--muted)">Ask an admin to upgrade</div>`))}
       </div>`;
     };
 
+    // ---- What this org is using against its plan (the server's numbers, overrides and
+    // Branch Packs already applied). Open files count only open stages.
+    const filesUsed = sub.open_files_used != null ? sub.open_files_used : sub.clients_used;
+    const filesMax = sub.max_open_files != null ? sub.max_open_files : sub.max_clients;
+    const notOpen = notOpenStageLabels();
+    let filesNote = "";
+    if (sub.files_over_limit && sub.files_in_grace && sub.files_grace_ends_at) {
+      filesNote = `<div class="usage-note warn">Over the limit — you can keep adding until ${esc(fmtDate(sub.files_grace_ends_at))}.</div>`;
+    } else if (sub.files_over_limit && sub.files_over_limit_since) {
+      filesNote = `<div class="usage-note bad">Adding files is paused until you're back within the limit.</div>`;
+    } else if (sub.clients_total != null && Number(sub.clients_total) > Number(filesUsed) && notOpen) {
+      filesNote = `<div class="usage-note">${Number(sub.clients_total).toLocaleString()} files in total — ${esc(notOpen)} don't count.</div>`;
+    }
+    const r = sub.reads || null;
+    const readsRow = r ? (() => {
+      const granted = Number(r.granted || 0);
+      const usedReads = Number(r.used || 0);
+      const left = r.unlimited ? null : (r.remaining != null ? Number(r.remaining) : Math.max(0, granted - usedReads));
+      return `<div style="display:flex;justify-content:space-between;font-size:13px;margin-top:10px"><span style="color:var(--text-2)">AI document reads</span><b>${r.unlimited ? "∞" : `${usedReads.toLocaleString()} / ${granted.toLocaleString()}`}</b></div>
+        ${r.unlimited ? "" : `<div class="usage-bar"><div class="usage-fill" style="width:${pct(usedReads, granted)}%"></div></div>
+        <div class="usage-note">${left.toLocaleString()} left${r.period_ends_at && sub.credits_recur ? ` · refreshes ${esc(fmtDate(r.period_ends_at))}` : ""}</div>`}`;
+    })() : "";
+
+    const cyclePrice = sub.billing_cycle === "yearly" && sub.yearly_display
+      ? `${sub.yearly_display}/yr` : (sub.monthly_display ? `${sub.monthly_display}/mo` : "");
+    const usdNow = sub.show_usd_estimate && sub.usd_estimate && sub.usd_estimate.monthly_display && sub.billing_cycle !== "yearly"
+      ? ` (${sub.usd_estimate.monthly_display})` : "";
+    const monthsFree = (paidPlans.find((p) => Number(p.yearly_months_free) > 0) || {}).yearly_months_free;
+    const showCycle = state.billingYearlyEnabled && paidPlans.some((p) => Number(p.yearly_minor) > 0);
+    const shownCur = state.billingCurrency || ((d.plans || [])[0] || {}).currency || "INR";
+    const footTax = paidPlans.map((p) => planTaxLabel(p, planOption(p).currency)).find(Boolean) || "";
     const allowance = Number(sub.included_credits || 0);
     c.innerHTML = `
       <div class="card" style="margin-bottom:24px"><div class="card-body" style="display:flex;align-items:center;gap:24px;flex-wrap:wrap">
         <div style="flex:1;min-width:220px">
           <div style="font-size:12px;font-weight:700;text-transform:uppercase;letter-spacing:.05em;color:var(--muted)">Current plan</div>
-          <div style="font-size:24px;font-weight:760;margin:4px 0">${esc(sub.plan_label)} ${sub.is_sandbox ? `<span style="font-size:13px;color:var(--warning);font-weight:600">· ${sub.trial_expired ? "evaluation ended" : sub.trial_days_left + " days left"}</span>` : ""}</div>
+          <div style="font-size:24px;font-weight:760;margin:4px 0">${esc(sub.plan_label)} ${sub.is_sandbox ? `<span style="font-size:13px;color:var(--warning);font-weight:600">· ${sub.trial_expired ? "trial ended" : (sub.trial_days_left != null ? sub.trial_days_left + " days left" : "")}</span>` : ""}</div>
           <div style="font-size:13px;color:var(--text-2)">${
             sub.current_period_end && !sub.is_sandbox
               // Say which of the two it is. "Renews" on a plan with no mandate is a promise
@@ -10072,16 +10665,18 @@
               ? (sub.auto_renews ? "Renews automatically on " + fmtDate(sub.current_period_end)
                  : sub.cancel_at_period_end ? "Auto-renewal off — ends " + fmtDate(sub.current_period_end)
                  : "Ends " + fmtDate(sub.current_period_end) + " — renew manually")
-            : sub.trial_ends_at ? "Sandbox ends " + fmtDate(sub.trial_ends_at) : ""
-          }${sub.monthly_display && !sub.is_sandbox ? ` · ${esc(sub.monthly_display)}/mo${sub.tax_label ? " + " + esc(sub.tax_label) : ""}` : ""}</div>
+            : sub.trial_ends_at ? "Trial ends " + fmtDate(sub.trial_ends_at) : ""
+          }${cyclePrice && !sub.is_sandbox ? ` · ${esc(cyclePrice)}${sub.price_note ? " " + esc(sub.price_note) : ""}${esc(usdNow)}` : ""}</div>
           ${sub.mandate_status === "halted" ? `<div style="font-size:13px;color:var(--warning);margin-top:6px"><b>Your card was declined.</b> Update it and renew to keep your plan.</div>` : ""}
           ${canManage && sub.auto_renews ? `<button type="button" class="btn btn-ghost btn-sm" style="margin-top:8px;padding-left:0" onclick="__ent.cancelPlanRenewal(this)">Turn off auto-renewal</button>` : ""}
         </div>
         <div style="flex:1;min-width:240px">
-          <div style="display:flex;justify-content:space-between;font-size:13px"><span style="color:var(--text-2)">Active clients</span><b>${sub.clients_used} / ${cap(sub.max_clients)}</b></div>
-          <div class="usage-bar"><div class="usage-fill" style="width:${pct(sub.clients_used, sub.max_clients)}%"></div></div>
+          <div style="display:flex;justify-content:space-between;font-size:13px"><span style="color:var(--text-2)">Open files</span><b>${Number(filesUsed || 0).toLocaleString()} / ${cap(filesMax)}</b></div>
+          <div class="usage-bar"><div class="usage-fill" style="width:${pct(filesUsed, filesMax)}%"></div></div>
+          ${filesNote}
           <div style="display:flex;justify-content:space-between;font-size:13px;margin-top:10px"><span style="color:var(--text-2)">Team seats</span><b>${sub.seats_used} / ${cap(sub.max_seats)}</b></div>
           <div class="usage-bar"><div class="usage-fill" style="width:${pct(sub.seats_used, sub.max_seats)}%"></div></div>
+          ${readsRow}
         </div>
         ${allowance ? `<div style="flex:0 0 auto;min-width:170px;text-align:right">
           <div style="font-size:12px;font-weight:700;text-transform:uppercase;letter-spacing:.05em;color:var(--muted)">AI credits included</div>
@@ -10089,31 +10684,34 @@
           <div style="font-size:13px;color:var(--text-2)">${sub.credits_recur ? "every month" : "one-time"} · <a href="#" onclick="__ent.go('credits');return false">see balance</a></div>
         </div>` : ""}
       </div></div>
-      ${sub.grandfathered ? `<div class="card" style="margin-bottom:18px;border-left:4px solid var(--warning,#f59e0b)"><div class="card-body">
-        <b>Choose a plan by ${sub.grace_ends_at ? esc(fmtDate(sub.grace_ends_at)) : "the deadline"}</b>
-        <div style="font-size:13px;color:var(--text-2);margin-top:4px">
-          Your workspace was created before Rilono plans launched, so nothing is limited for now${sub.over_cap ? " — including the clients and seats already above these caps, which you keep either way" : ""}.
-          Pick a plan below before then and nothing changes for your team.
-        </div>
-      </div></div>` : (sub.trial_expired ? `<div class="card" style="margin-bottom:18px;border-left:4px solid var(--warning,#f59e0b)"><div class="card-body">
-        <b>Your 14-day sandbox evaluation has ended.</b>
-        <div style="font-size:13px;color:var(--text-2);margin-top:4px">Everything in your workspace is intact and readable. Choose a plan below to start adding clients and team members again.</div>
-      </div></div>` : "")}
-      ${canManage && d.plans.length ? couponRow(bCoupon, "applyBillingCoupon", "removeBillingCoupon", "billingCouponInput", "plans") : ""}
-      ${currencies.length > 1 && d.plans.some((p) => !p.is_free) ? `<div class="field" style="max-width:280px;margin:0 auto 16px">
+      ${trialBanner({ noCta: true })}
+      ${canManage && paidPlans.length ? couponRow(bCoupon, "applyBillingCoupon", "removeBillingCoupon", "billingCouponInput", "plans") : ""}
+      ${showCycle ? `<div class="cycle-toggle" role="group" aria-label="Billing period">
+        <button type="button" class="cycle-opt${yearly ? "" : " active"}" data-cycle="monthly" aria-pressed="${!yearly}">Monthly</button>
+        <button type="button" class="cycle-opt${yearly ? " active" : ""}" data-cycle="yearly" aria-pressed="${yearly}">Yearly${monthsFree ? ` <span class="cycle-save">${Number(monthsFree)} months free</span>` : ""}</button>
+      </div>` : ""}
+      ${currencies.length > 1 && paidPlans.length ? `<div class="field" style="max-width:280px;margin:0 auto 16px">
         <label for="billingCurrencySel">Billing currency</label>
         <select id="billingCurrencySel">${currencies.map((cc) => {
           const from = fromIn(cc);
-          return `<option value="${esc(cc)}"${cc === state.billingCurrency ? " selected" : ""}>${esc(cc)}${from ? ` · from ${esc(from)}/mo` : ""}</option>`;
+          return `<option value="${esc(cc)}"${cc === state.billingCurrency ? " selected" : ""}>${esc(cc)}${from ? ` · from ${esc(from)}${per}` : ""}</option>`;
         }).join("")}</select>
       </div>` : ""}
-      <div class="plan-grid">${d.plans.map(planCard).join("")}</div>
-      ${!d.plans.length ? "" : `<p style="text-align:center;color:var(--muted);font-size:13px;margin-top:18px">
-        Prices are per month${shownCur === "INR" ? " and exclusive of GST" : ""}. Secure payments via Razorpay. Cancel anytime.<br>
-        Your plan's AI credits refresh each billing period; unused credits from the allowance don't carry over. Need more? Top up any time in <a href="#" onclick="__ent.go('credits');return false">Credits</a>.
+      <div class="plan-grid">${(d.plans || []).map(planCard).join("")}</div>
+      ${!(d.plans || []).length ? "" : `<p style="text-align:center;color:var(--muted);font-size:13px;margin-top:18px">
+        Prices are in ${esc(shownCur)}, per ${yearly ? "year" : "month"}${footTax ? `, exclusive of ${esc(footTax)}` : ""}. Secure payments via Razorpay.${
+          yearly ? " Yearly is paid once for 12 months and doesn't renew automatically." : " Cancel anytime."}<br>
+        Your plan's AI credits and document reads refresh every month${yearly ? " — on yearly plans too" : ""}; unused allowance doesn't carry over. Need more credits? Top up any time in <a href="#" onclick="__ent.go('credits');return false">Credits</a>.
       </p>`}`;
     const curSel = $("#billingCurrencySel");
     if (curSel) curSel.onchange = () => { state.billingCurrency = curSel.value; renderBilling(); };
+    $$(".cycle-opt", c).forEach((b) => b.onclick = () => {
+      if (state.billingCycle === b.dataset.cycle) return;
+      state.billingCycle = b.dataset.cycle === "yearly" ? "yearly" : "monthly";
+      // A code validated for one cycle's price is a preview of THAT price; re-apply it.
+      state.billingCoupon = null;
+      renderBilling();
+    });
   }
 
   async function cancelPlanRenewal(el) {
@@ -10150,7 +10748,7 @@
         // Same `currency` hint as checkout() sends, so the validated preview and the
         // eventual charge are quotes of the same price. undefined (old payload) is
         // dropped by JSON.stringify, keeping the body old-server compatible.
-        res = await api("/coupons/validate", { method: "POST", body: { code, context: "billing", plan: paid[0].key, billing_cycle: state.billingCycle, currency: billingCurrencyHint(paid[0].key) } });
+        res = await api("/coupons/validate", { method: "POST", body: { code, context: "billing", plan: paid[0].key, billing_cycle: billingCycleNow(), currency: billingCurrencyHint(paid[0].key) } });
       } catch (ex) { toast(ex.message || "Invalid discount code.", "error"); return; }
       state.billingCoupon = { code: res.code, percent: res.percent_off, percent_display: res.percent_display };
       toast(res.percent_display + " discount applied.", "success");
@@ -10182,7 +10780,7 @@
     // `currency` is only a HINT — the server re-reads its price book and is the sole
     // authority on the amount. Per billingCurrencyHint() it is the currency the buyer
     // was actually SHOWN on the card, and it is absent entirely on an old payload.
-    try { res = await api("/billing/checkout", { method: "POST", body: { plan, billing_cycle: state.billingCycle, coupon_code: couponCode, currency: billingCurrencyHint(plan) } }); }
+    try { res = await api("/billing/checkout", { method: "POST", body: { plan, billing_cycle: billingCycleNow(), coupon_code: couponCode, currency: billingCurrencyHint(plan) } }); }
     catch (ex) { toast(ex.message, "error"); release(); return; }
     if (res.action === "contact_sales") { toast(res.message || "Please contact sales.", "error"); release(); return; }
     // A 100%-off coupon covers the whole charge, so there is no Razorpay step — the server
@@ -10204,8 +10802,9 @@
     // subtotal shown on the plan card is deliberately smaller, so the description spells
     // out the breakdown — meeting an unexplained larger number at the payment sheet is
     // exactly how a correct charge gets reported as a billing bug.
-    const parts = [res.plan_label + " plan · monthly"];
-    if (res.tax_paise) {
+    // The cycle is the one the SERVER priced (a yearly order covers `period_days`).
+    const parts = [res.plan_label + " plan · " + (res.billing_cycle === "yearly" ? "yearly" : "monthly")];
+    if (Number(res.tax_paise) > 0 && res.tax_label) {
       parts.push(`${res.subtotal_display} + ${res.tax_label} ${res.tax_display} = ${res.total_display}`);
     }
     // Recurring checkout authorises a MANDATE, not a single charge, so Razorpay is opened on
@@ -10395,6 +10994,21 @@
     const included = Number(pc.included_credits || 0);
     const left = Number(pc.remaining_this_period || 0);
     const usedPct = included > 0 ? Math.min(100, Math.round(((included - left) / included) * 100)) : 0;
+    // The monthly AI reading allowance (free upload reading, counted in 15-page reads) sits
+    // with the credits it complements: both are what the plan includes this period.
+    const rd = w.reads || null;
+    const readsLine = rd && !rd.unlimited && Number(rd.granted) > 0 ? `
+      <div style="font-size:13px;color:var(--text-2);margin-top:8px">
+        <b>${Number(rd.remaining != null ? rd.remaining : 0).toLocaleString()}</b> of ${Number(rd.granted).toLocaleString()} AI document reads left${
+          rd.pages_per_read ? ` (1 read = up to ${Number(rd.pages_per_read)} pages)` : ""}.${
+          rd.recurring && rd.period_ends_at ? ` Refreshes ${esc(fmtDate(rd.period_ends_at))}.` : ""}
+      </div>` : "";
+    // No allowance on the plan: say what the plans include from the plans themselves. The
+    // cards load once (ensureBillingCatalog); this panel repaints when its own call fetched them.
+    const summary = included > 0 ? null : planAllowanceSummary();
+    if (included <= 0 && canManagePlan && !summary && !billingCatalogLoad) {
+      ensureBillingCatalog().then(() => { if (state.view === "credits") creditsDraw(); });
+    }
     const planPanel = included > 0
       ? `<div class="card" style="margin-bottom:18px;border-left:4px solid var(--success,#10b981)">
           <div class="card-body" style="display:flex;align-items:center;gap:20px;flex-wrap:wrap">
@@ -10406,6 +11020,7 @@
                 ${pc.recurring && !pc.rollover ? " Unused plan credits don't carry over." : ""}
               </div>
               <div class="usage-bar" style="margin-top:8px"><div class="usage-fill" style="width:${usedPct}%"></div></div>
+              ${readsLine}
             </div>
             ${canManagePlan ? `<button class="btn btn-ghost" onclick="__ent.go('billing')">Manage plan</button>` : ""}
           </div>
@@ -10415,30 +11030,42 @@
             <div class="card-body" style="display:flex;align-items:center;gap:16px;flex-wrap:wrap">
               <div style="flex:1;min-width:240px">
                 <div style="font-weight:700;margin-bottom:4px">Your plan doesn't include monthly AI credits</div>
-                <div style="font-size:13px;color:var(--text-2)">Starter, Growth and Scale include 1,000 / 3,500 / 10,000 credits every month. Right now you're paying per top-up.</div>
+                <div style="font-size:13px;color:var(--text-2)">${esc(summary || "Paid plans include a monthly AI credit allowance.")} Right now you're paying per top-up.</div>
+                ${readsLine}
               </div>
               <button class="btn btn-primary" onclick="__ent.go('billing')">See plans</button>
             </div>
           </div>`
-        : "");
+        : readsLine ? `<div class="card" style="margin-bottom:18px"><div class="card-body">${readsLine}</div></div>` : "");
+
+    // AI paused (trial ended / plan lapsed): every AI action and every top-up answers 402
+    // until a plan is chosen, so the wallet says so before anyone tries.
+    const paused = w.ai_paused ? (w.ai_paused_message || aiPausedMessage() || "AI features are paused.") : "";
+    const pausedPanel = paused ? `<div class="trial-banner trial-banner-danger" role="status">
+        <span><b>${esc(paused)}</b> Credit top-ups open again once a plan is active.</span>
+        ${canManagePlan ? `<button type="button" class="btn btn-sm btn-primary" onclick="__ent.go('billing')">${w.ai_paused_reason === "plan_lapsed" ? "Renew plan" : "Choose a plan"}</button>` : ""}
+      </div>` : "";
+    const topupBlocked = d.topup_allowed === false;
 
     const usage = (creditsUi.wallet || {}).usage || {};
     const spentAll = usage.total_spent_credits || 0;
 
     c.innerHTML = `
+      ${pausedPanel}
       ${planPanel}
       <div class="card cr-wallet"><div class="card-body cr-wallet-body">
         <div class="cr-wallet-main">
           <div class="cr-eyebrow">Rilono Credits balance</div>
           <div class="cr-balance">${w.balance_credits} <span>credits</span></div>
           <div class="cr-worth">Worth ${esc(fmtInr(w.balance_value_inr != null ? w.balance_value_inr : (w.balance_credits || 0) * (w.credit_value_inr || 10)))} · 1 credit = ${esc(fmtInr(w.credit_value_inr || 10))}</div>
-          ${w.low_balance ? `<div class="cr-lowbal">⚠ Low balance — top up to keep using premium AI.</div>` : ""}
+          ${w.low_balance && !paused ? `<div class="cr-lowbal">⚠ Low balance${
+            w.low_balance_threshold != null ? ` — under ${Number(w.low_balance_threshold).toLocaleString()} credits` : ""}. Top up to keep using premium AI.</div>` : ""}
         </div>
         <div class="cr-wallet-stats">
           <div><span>Purchased</span><b>${w.lifetime_purchased_credits || 0}</b><em>all time</em></div>
           <div><span>Spent</span><b>${w.lifetime_spent_credits || 0}</b><em>${esc(fmtInr(spentAll * (w.credit_value_inr || 10)))} of AI</em></div>
         </div>
-        ${canBuy ? `<button class="btn btn-primary" id="crTopUpBtn">Top up credits</button>` : ""}
+        ${canBuy ? `<button class="btn btn-primary" id="crTopUpBtn"${topupBlocked ? ` disabled title="${esc(paused || "Top-ups need an active plan")}"` : ""}>Top up credits</button>` : ""}
       </div></div>
 
       <div class="cr-tabs">
@@ -10475,6 +11102,9 @@
     const actions = w.actions || [];
     const freeTier = w.free_tier || {};
     const coupon = state.creditCoupon;
+    // Top-ups are refused (402) while AI is paused — an add-on needs an active plan or trial.
+    const topupBlocked = d.topup_allowed === false;
+    const pausedNote = w.ai_paused_message || aiPausedMessage() || "Top-ups need an active plan.";
     // How many of an action a credit total buys, priced from the SERVER's action list.
     // These used to be hard-coded divisors (5 and 20) and had silently drifted: a Deep
     // Scan is 20 credits, so a 100-credit pack was advertised as 20 audits when it buys 5.
@@ -10508,42 +11138,64 @@
           <li>≈ ${actionUnits(actions, "deep_scan", p.total_credits)} Deep Scans or ${actionUnits(actions, "mock_interview", p.total_credits)} interviews</li>
         </ul>
         ${canManage
-          ? `<button class="btn ${p.is_popular ? "btn-primary" : "btn-ghost"} btn-block" onclick="__ent.topup('${p.key}')">Buy ${esc(p.label)}</button>`
+          ? (topupBlocked
+            ? `<button class="btn btn-ghost btn-block" disabled title="${esc(pausedNote)}">Buy ${esc(p.label)}</button>`
+            : `<button class="btn ${p.is_popular ? "btn-primary" : "btn-ghost"} btn-block" onclick="__ent.topup('${p.key}')">Buy ${esc(p.label)}</button>`)
           : `<div class="plan-current-tag" style="color:var(--muted)">Ask an admin to top up</div>`}
       </div>`;
 
+    // `credits` is the price of ONE unit and `price_label` says what a unit is — "4 credits
+    // per 15 pages", "1 credit per 2 messages", "30 credits per client link" — so a per-block
+    // or per-bundle price never reads as a flat one. The ₹ line is that same unit's worth.
     const actionRows = actions.map((a) =>
       `<div class="cr-price-row">
         <div><b>${esc(a.label)}</b><div class="cr-price-desc">${esc(a.description || "")}</div></div>
-        <div class="cr-price-amt"><b>${a.credits} cr</b><div>${esc(fmtInr(a.price_inr != null ? a.price_inr : (a.credits || 0) * 10))}</div></div>
+        <div class="cr-price-amt"><b>${esc(a.price_label || `${a.credits} credits`)}</b><div>${
+          esc(fmtInr(a.price_inr != null ? a.price_inr : (a.credits || 0) * (w.credit_value_inr || 10)))}${a.unit_label ? " " + esc(a.unit_label) : ""}</div></div>
       </div>`).join("");
 
     // What the agency gets without spending a credit — stated next to the prices
-    // rather than buried in each action's description.
+    // rather than buried in each action's description. Every line is conditional on the
+    // server saying the allowance exists (a free Deep Scan only while the knob is above 0).
+    const copilot = actions.find((a) => a && a.key === "ai_copilot");
     const freeItems = [
-      // The active-client cap is the PLAN's, not a free-tier allowance — it belongs on
+      // The open-file cap is the PLAN's, not a free-tier allowance — it belongs on
       // Plans & Billing, not in the "what costs no credits" grid.
-      freeTier.deep_scans_per_client
-        ? `<b>First Deep Scan free</b> on every client<span class="cr-free-sub">up to ${freeTier.deep_scans_monthly_cap}/month</span>` : "",
+      Number(freeTier.reads_allowance) > 0
+        ? `<b>${Number(freeTier.reads_allowance).toLocaleString()} AI document reads</b><span class="cr-free-sub">${
+          freeTier.reads_left != null ? Number(freeTier.reads_left).toLocaleString() + " left" : "unlimited"}${
+          freeTier.pages_per_read ? ` · 1 read per ${Number(freeTier.pages_per_read)} pages` : ""}</span>` : "",
+      Number(freeTier.deep_scans_per_client) > 0
+        ? `<b>First Deep Scan${Number(freeTier.deep_scans_per_client) > 1 ? "s" : ""} free</b> on every client<span class="cr-free-sub">up to ${freeTier.deep_scans_monthly_cap}/month</span>` : "",
       freeTier.interview_previews
         ? `<b>${freeTier.interview_previews} staff interview previews</b><span class="cr-free-sub">${freeTier.interview_previews_left} left</span>` : "",
       freeTier.copilot_msgs_daily
-        ? `<b>${freeTier.copilot_msgs_daily} AI assistant messages/day</b><span class="cr-free-sub">${freeTier.copilot_msgs_left_today} left today</span>` : "",
+        ? `<b>${freeTier.copilot_msgs_daily} AI assistant messages/day</b><span class="cr-free-sub">${freeTier.copilot_msgs_left_today} left today${
+          copilot && copilot.price_label ? ` · then ${esc(copilot.price_label)}` : ""}</span>` : "",
       `<b>Unlimited catalog browsing</b><span class="cr-free-sub">Course Finder</span>`,
+    ].filter(Boolean);
+    const freeTip = [
+      "The core CRM",
+      Number(freeTier.reads_allowance) > 0 ? "reading each uploaded document (from your monthly AI document reads)" : "",
+      Number(freeTier.deep_scans_per_client) > 0 ? "the first Deep Scan on each client" : "",
+      freeTier.interview_previews ? "a few staff interview previews" : "",
+      freeTier.copilot_msgs_daily ? "a daily AI-assistant allowance" : "",
     ].filter(Boolean);
 
     // Anyone opening this tab is here to buy — the packs lead, and the
     // "what's free" / per-action pricing that justifies the spend sits below.
     panel.innerHTML = `
       <h3 style="margin:0 0 12px">Top up your wallet</h3>
-      ${canManage ? couponRow(coupon, "applyCreditCoupon", "removeCreditCoupon", "creditCouponInput", "top-ups") : ""}
+      ${topupBlocked ? `<p class="cr-topup-blocked">${esc(pausedNote)} Top-ups are add-ons to an active plan or trial.</p>` : ""}
+      ${canManage && !topupBlocked ? couponRow(coupon, "applyCreditCoupon", "removeCreditCoupon", "creditCouponInput", "top-ups") : ""}
       <div class="plan-grid">${packages.map(pkgCard).join("")}</div>
       <p style="text-align:center;color:var(--muted);font-size:13px;margin:14px 0 28px">Secure top-ups via Razorpay (UPI, cards, NetBanking).${
         pkgCurrencies(packages).length > 1 ? " Pick your billing currency at checkout." : ""} Purchased top-up credits never expire; your plan's monthly allowance refreshes each period.</p>
 
       <div class="card cr-free-card"><div class="card-body">
         <div class="cr-free-head">Included free ${infoTip(
-          "The core CRM, the first Deep Scan on each client, a few staff interview previews and a daily AI-assistant allowance cost nothing. Credits are only spent once you go past these.",
+          esc((freeTip.length > 1 ? freeTip.slice(0, -1).join(", ") + " and " + freeTip[freeTip.length - 1] : freeTip[0]) +
+            " cost nothing. Credits are only spent once you go past these."),
           "What's free")}</div>
         <div class="cr-free-grid">${freeItems.map((f) => `<div class="cr-free-item">${f}</div>`).join("")}</div>
       </div></div>
@@ -11394,7 +12046,11 @@
   // screen converts anything — picking a currency picks which quoted price to send back
   // as a hint, and the server still decides the amount it charges.
   function pkgOptions(pkg) {
-    const opts = ((pkg || {}).price_options || []).filter((o) => o && o.currency);
+    // Only the currencies this org can be charged in (`charge_currencies`, region rule
+    // applied) — the same filter as the plan grid's planOptions().
+    const allowed = (creditsUi.wallet || {}).charge_currencies;
+    let opts = ((pkg || {}).price_options || []).filter((o) => o && o.currency);
+    if (Array.isArray(allowed) && allowed.length) opts = opts.filter((o) => allowed.indexOf(o.currency) !== -1);
     if (opts.length) return opts;
     // Payload without a ladder (older build): the one currency the package was quoted in.
     return [{
@@ -11418,6 +12074,11 @@
   function openCreditCheckout(pkgKey) {
     const pkg = (state.creditPackages || []).find((p) => p.key === pkgKey);
     if (!pkg) { toast("Package unavailable.", "error"); return; }
+    // The server refuses a top-up while AI is paused (402); say so before the modal.
+    if ((creditsUi.wallet || {}).topup_allowed === false) {
+      toast(aiPausedMessage() || "Top-ups need an active plan.", "error");
+      return;
+    }
     // Default to the currency the package was quoted in; the server applies the same
     // precedence (last billed → org country → INR) when we send no hint at all.
     checkoutCtx = {
@@ -13018,7 +13679,18 @@
     // would show ₹999 while the order was created in USD.
     const currency = checkoutBreakdown().currency;
     try { res = await api("/credits/topup/checkout", { method: "POST", body: { package: pkg.key, coupon_code: couponCode, currency } }); }
-    catch (ex) { toast(ex.message, "error"); renderCheckout(); return; }
+    catch (ex) {
+      toast(ex.message, "error");
+      // 402 = AI paused (trial ended / plan lapsed): no top-up until a plan is active, so
+      // close the modal and repaint the wallet, which now explains it and offers the plans.
+      if (ex.status === 402) {
+        closeModal();
+        if (creditsUi.wallet) creditsUi.wallet.topup_allowed = false;
+        if (state.view === "credits") renderCredits();
+        return;
+      }
+      renderCheckout(); return;
+    }
 
     if (res.action === "contact_sales") { toast(res.message || "Please contact us.", "error"); renderCheckout(); return; }
     if (res.action === "granted") {
@@ -13181,7 +13853,9 @@
     const subx = state.subscription || {};
     const planLabel = subx.plan_label || null;
     const planPrice = subx.is_sandbox ? null : (subx.monthly_display || null);
-    const planTax = subx.tax_label || null;
+    // The server's own suffix ("+ GST", or "" at a 0% rate / outside India) — never a label
+    // glued on here, which is how "+ GST" survived ENTERPRISE_GST_PERCENT=0.
+    const planTax = subx.price_note || null;
     const planIncl = Number(subx.included_credits || 0) || null;
     const planRecur = !!subx.credits_recur;
     c.innerHTML = `
@@ -13259,7 +13933,7 @@
           <div class="card"><div class="card-body">
             <div class="set-rows">
               <div class="set-row"><span class="set-row-k">Portal URL</span><span class="set-row-v">${esc(portalHost)}</span></div>
-              <div class="set-row"><span class="set-row-k">Plan</span><span class="set-row-v">${esc(planLabel || "—")}${planPrice ? ` · ${esc(planPrice)}/mo${planTax ? " + " + esc(planTax) : ""}` : ""} &nbsp;<button type="button" class="link" id="setGoBilling">Manage plan</button></span></div>
+              <div class="set-row"><span class="set-row-k">Plan</span><span class="set-row-v">${esc(planLabel || "—")}${planPrice ? ` · ${esc(planPrice)}/mo${planTax ? " " + esc(planTax) : ""}` : ""} &nbsp;<button type="button" class="link" id="setGoBilling">Manage plan</button></span></div>
               <div class="set-row"><span class="set-row-k">AI credits</span><span class="set-row-v">${bal != null ? `${bal} left` : "—"}${planIncl ? ` · ${planIncl.toLocaleString()} included${planRecur ? "/mo" : ""}` : ""} &nbsp;<button type="button" class="link" id="setGoCredits">Manage credits</button></span></div>
               <div class="set-row"><span class="set-row-k">Display currency</span><span class="set-row-v">${esc(curDesc)}</span></div>
               ${org.created_at ? `<div class="set-row"><span class="set-row-k">Workspace created</span><span class="set-row-v">${esc(fmtDate(org.created_at))}</span></div>` : ""}
@@ -13506,6 +14180,13 @@
       return `<div class="ai-empty"><div class="ai-orb lg">🔌</div><h3>AI assistant unavailable</h3>
         <p>An administrator needs to enable Rilono AI on the server to use the Rilono AI Assistant.</p></div>`;
     }
+    // Trial ended / plan lapsed: every message would 402, so the panel says why up front —
+    // the server's own sentence, which also promises the workspace data is untouched.
+    if (aiIsPaused()) {
+      return `<div class="ai-empty ai-paused"><div class="ai-orb lg">⏸</div><h3>AI is paused</h3>
+        <p>${esc(aiPausedMessage() || state.aiMeta.ai_paused_message || "AI features are paused.")}</p>
+        ${!compact && can("billing.manage") ? `<button type="button" class="btn btn-primary btn-sm" onclick="__ent.go('billing')">See plans</button>` : ""}</div>`;
+    }
     if (compact) {
       return `<div class="ai-empty"><div class="ai-orb lg">✨</div><h3>How can I help?</h3>
         <p>Ask about a client's progress, who needs attention today, or what changed this week.</p></div>`;
@@ -13526,6 +14207,7 @@
       if (m.role === "typing") {
         return `<div class="ai-msg bot"><div class="ai-av">✨</div><div class="ai-bubble"><span class="ai-typing"><i></i><i></i><i></i></span></div></div>`;
       }
+      if (m.role === "note") return `<div class="ai-note">${esc(m.content)}</div>`;
       return `<div class="ai-msg bot"><div class="ai-av">✨</div><div class="ai-bubble">${aiFormat(m.content)}</div></div>`;
     }).join("");
     hosts.forEach((h) => {
@@ -13538,7 +14220,7 @@
     const boxes = $$("[data-ai-suggest]");
     if (!boxes.length) return;
     const meta = state.aiMeta;
-    const list = (meta && meta.enabled && !ensureAiHistory().length) ? (meta.suggestions || []) : [];
+    const list = (meta && meta.enabled && !meta.ai_paused && !ensureAiHistory().length) ? (meta.suggestions || []) : [];
     boxes.forEach((box) => {
       // The dock only has room for a couple of chips above the composer.
       const use = box.hasAttribute("data-ai-compact") ? list.slice(0, 3) : list;
@@ -13553,14 +14235,25 @@
     applyAiMeta();
     return state.aiMeta;
   }
+  // AI paused for this org (the shared gate /ai/meta reports, kept in step with the
+  // subscription by updatePlanChip). While paused the composer is locked: a message could
+  // only come back as a 402.
+  function aiIsPaused() {
+    return !!(state.aiMeta && state.aiMeta.ai_paused);
+  }
   function applyAiMeta() {
     const off = !!(state.aiMeta && !state.aiMeta.enabled);
+    const paused = !off && aiIsPaused();
     $$("[data-ai-input]").forEach((ta) => {
-      ta.disabled = off;
-      ta.placeholder = off ? AI_DISABLED_PLACEHOLDER : (ta.dataset.aiPlaceholder || ta.placeholder);
+      ta.disabled = off || paused;
+      ta.placeholder = off ? AI_DISABLED_PLACEHOLDER
+        : paused ? "AI features are paused for this workspace."
+        : (ta.dataset.aiPlaceholder || ta.placeholder);
     });
     setAiBusy(!!state.aiBusy);
-    if (off) renderAiThread();   // paints the "unavailable" card on every surface
+    // Paints the "unavailable" / "paused" / normal empty card on every surface — but never
+    // over a thread already on screen (an answer from before the pause stays readable).
+    if (off || !ensureAiHistory().length) renderAiThread();
     renderAiSuggestions();
   }
 
@@ -13576,7 +14269,7 @@
      click with no feedback at all. A draft in EITHER composer counts, because sendAi()
      called from a form submit takes whichever one has text. */
   function syncAiSend() {
-    const off = !!(state.aiMeta && !state.aiMeta.enabled);
+    const off = !!(state.aiMeta && !state.aiMeta.enabled) || aiIsPaused();
     const hasDraft = $$("[data-ai-input]").some((ta) => (ta.value || "").trim() !== "");
     $$("[data-ai-send]").forEach((b) => { b.disabled = state.aiBusy || off || !hasDraft; });
   }
@@ -13584,6 +14277,7 @@
   async function sendAi(text) {
     if (state.aiBusy) return;
     if (state.aiMeta && !state.aiMeta.enabled) return;
+    if (aiIsPaused()) return;
     const inputs = $$("[data-ai-input]");
     let msg = String(text == null ? "" : text).trim();
     // Called with no text (a form submit): take whichever composer has a draft.
@@ -13617,6 +14311,11 @@
       // Keep the credits chip in sync when a message debited the wallet.
       if (data.wallet) { state.credits = data.wallet; updatePlanChip(); }
       if (data.credits_meter) setAiMeter(data.credits_meter);
+      // The wallet covered only part of this turn, so the assistant answered from what it
+      // had already looked up instead of searching further — say so under the answer.
+      if (data.budget_limited) {
+        state.aiHistory.push({ role: "note", content: "Your credits covered only part of this answer, so it's based on fewer lookups. Top up to give the assistant room for deeper questions." });
+      }
       markAiAnswerArrived();
     } catch (ex) {
       state.aiHistory = state.aiHistory.filter((m) => m.role !== "typing");
@@ -13624,9 +14323,12 @@
       if (ex.status === 402) {
         state.aiHistory.push({ role: "model", content: ex.message || "You're out of Rilono Credits for the AI assistant. Top up to keep chatting." });
         toast(ex.message, "error");
+        // AI paused mid-session (the trial just ran out): lock the composer like a fresh load.
+        if (isAiPausedError(ex) && state.aiMeta) { state.aiMeta.ai_paused = true; state.aiMeta.ai_paused_message = ex.message; applyAiMeta(); }
         setAiBusy(false); renderAiThread(); markAiAnswerArrived();
-        // Spend-only roles can't open the credits view — don't navigate them into a wall.
-        if (can("credits.view")) navigate("credits");
+        // Spend-only roles can't open the credits view — don't navigate them into a wall;
+        // a paused org goes to the plans, since a top-up is refused while paused.
+        routeAfter402(ex);
         return;
       }
       // The thread this tab was continuing no longer exists (deleted in another tab, or
@@ -13905,6 +14607,8 @@
   async function initAiDock() {
     if (!state.me || !can("ai.assistant") || aiDock.mounted) return;
     const meta = await loadAiMeta();
+    // Mounted while AI is paused too: the dock then explains the pause (and stays useful the
+    // moment a plan is chosen) rather than vanishing without a word.
     if (meta && meta.enabled) mountAiDock();
   }
 
@@ -14897,7 +15601,15 @@
     {
       id: "credits",
       q: "How do Rilono Credits work?",
-      a: "Every AI action — Deep Scan, Writing Studio drafts, mock-interview links, Course Finder shortlists — spends credits from your organization's shared wallet. Your plan puts credits in that wallet every month (1,000 on Starter, 3,500 on Growth, 10,000 on Scale), and any admin can top up for more. <b>Credits</b> shows the balance, what's left of this month's allowance, what each action costs and where the credits went. Unused plan credits don't carry into the next month; purchased top-ups never expire.",
+      // Built from the loaded plan cards (renderSupport loads them first), so the numbers
+      // here are always the ones Plans & Billing sells — never a copy that can drift.
+      a: () => {
+        const paid = (state.billingPlans || []).filter((p) => !p.is_free && p.credits_recur && Number(p.included_credits) > 0);
+        const perPlan = paid.map((p) => `${Number(p.included_credits).toLocaleString()} on ${esc(p.label)}`).join(", ");
+        return "Every AI action — document checks, Deep Scan, Writing Studio drafts, mock interviews, Course Finder shortlists — spends credits from your organization's shared wallet. Your plan puts credits in that wallet every month" +
+          (perPlan ? ` (${perPlan})` : "") +
+          ", and any admin can top up for more. Reading each upload so Rilono AI can use it doesn't cost credits — it comes from your plan's monthly AI document reads. <b>Credits</b> shows the balance, what's left of this month's allowance, what each action costs and where the credits went. Unused plan credits don't carry into the next month; purchased top-ups never expire.";
+      },
       view: "credits", cta: "Open Credits",
       keys: ["credit", "credits", "wallet", "balance", "top up", "topup", "recharge", "pricing", "cost", "ran out", "insufficient", "included", "allowance", "monthly"],
     },
@@ -14938,7 +15650,7 @@
     {
       id: "docscan",
       q: "Scanning and validating a document",
-      a: "<b>Uploading a document is always free.</b> Ticking <b>Scan &amp; validate with Rilono AI</b> on the upload card is the paid part: Rilono AI reads that one document, checks it is the right type, genuine and still in date, then cross-checks it against the client's profile and their <i>already-validated</i> documents — so a document that was flagged can never quietly become the yardstick for the next one. A passed identity document also auto-fills empty profile fields; anything that differs is flagged for you, never overwritten. You can also scan any stored document later from its card, or re-scan one once more of the dossier has been validated. A scan that fails to return a verdict isn't charged. Documents a student sends through a secure request link are stored unscanned — scan them yourself when you're ready.",
+      a: "<b>Uploading a document is always free</b>, and Rilono AI reads it from your plan's monthly AI document reads — when they run out the file is stored as <i>Not read yet</i> and <b>Read now</b> reads it once reads are available again. Ticking <b>Scan &amp; validate with Rilono AI</b> on the upload card is the paid part, priced by the document's length: Rilono AI reads that one document, checks it is the right type, genuine and still in date, then cross-checks it against the client's profile and their <i>already-validated</i> documents — so a document that was flagged can never quietly become the yardstick for the next one. A passed identity document also auto-fills empty profile fields; anything that differs is flagged for you, never overwritten. You can also scan any stored document later from its card, or re-scan one once more of the dossier has been validated. A scan that fails to return a verdict isn't charged. Documents a student sends through a secure request link are stored unscanned — scan them yourself when you're ready.",
       view: "credits", cta: "See what it costs",
       keys: ["scan", "validate", "validation", "document", "credit", "cost", "charge", "verify", "check", "passport", "fake", "expired", "auto-fill", "autofill", "re-scan"],
     },
@@ -15035,7 +15747,9 @@
     supFreeUrls();
     c.innerHTML = '<div class="center-load"><div class="spinner dark"></div></div>';
     let d;
-    try { d = await api("/support"); } catch (ex) { c.innerHTML = errBox(ex); return; }
+    // The plan cards feed the "How do Rilono Credits work?" answer; loaded alongside, and
+    // never allowed to block or fail the page (ensureBillingCatalog swallows its own errors).
+    try { [d] = await Promise.all([api("/support"), ensureBillingCatalog()]); } catch (ex) { c.innerHTML = errBox(ex); return; }
     // Guard the async gap: never paint over a view the user has already moved on to.
     if (state.view !== "support") return;
 
@@ -15060,7 +15774,7 @@
     const kbHtml = () => SUP_KB.map((k) => `
       <div class="sup-kb-item" data-kb="${k.id}">
         <button type="button" class="sup-kb-q" aria-expanded="false">${esc(k.q)}${SUP_IC.chev}</button>
-        <div class="sup-kb-a hidden">${k.a}${k.view ? `<button type="button" class="btn btn-soft btn-sm sup-kb-cta" data-goto="${k.view}">${esc(k.cta)} →</button>` : ""}</div>
+        <div class="sup-kb-a hidden">${typeof k.a === "function" ? k.a() : k.a}${k.view ? `<button type="button" class="btn btn-soft btn-sm sup-kb-cta" data-goto="${k.view}">${esc(k.cta)} →</button>` : ""}</div>
       </div>`).join("");
 
     const histRow = (r) => {
@@ -15582,9 +16296,15 @@
     if (days === 1) return "yesterday";
     return `${days}d ago`;
   }
+  // The shortlist's price: the Course Finder meta, else the price list — null (unquoted)
+  // when neither has loaded, never a typed-in default.
   function cfCost() {
-    if (cf.meta && cf.meta.cost_credits != null) return cf.meta.cost_credits;
-    return ((state.credits && state.credits.actions || []).find((a) => a.key === "course_finder") || {}).credits || 5;
+    return creditCostFor("course_finder", cf.meta);
+  }
+
+  function cfRunLabel() {
+    const cost = cfCost();
+    return `Generate shortlist${cost != null ? ` · ${esc(String(cost))} cr` : ""}`;
   }
 
   /* ---------------- Advanced browse filters ----------------
@@ -15703,11 +16423,14 @@
     // verified rather than implying every listed university has verified course data.
     const totalEnriched = (m.countries || []).reduce((s, x) => s + (x.universities_enriched || 0), 0);
     const latest = (m.countries || []).map((x) => x.last_verified_at).filter(Boolean).sort().pop();
+    const shortlistPrice = priceLabelFor("course_finder") || (cfCost() != null ? `${cfCost()} credits` : "");
     c.innerHTML = `
+      ${trialBanner()}
       <div class="cf-hero">
         <div class="cf-hero-main">
           <h2>🎓 Course Finder</h2>
-          <p>Universities, courses, fees, intakes &amp; entry requirements across your destinations — from the saved catalog, maintained by Rilono. Browsing is free; personalized AI shortlists cost <b>${esc(String(cfCost()))} credits</b>.</p>
+          <p>Universities, courses, fees, intakes &amp; entry requirements across your destinations — from the saved catalog, maintained by Rilono. Browsing is free; personalized AI shortlists ${
+            shortlistPrice ? `cost <b>${esc(shortlistPrice)}</b>` : "use credits"}.</p>
           <div class="cf-hero-chips">
             ${(m.countries || []).map((x) => `<span class="cf-chip" title="${esc(x.name)}: ${x.universities} universities · ${x.courses} courses">${esc(x.flag_emoji || "")} ${esc(x.code)} · ${x.universities}</span>`).join("")}
           </div>
@@ -16181,9 +16904,10 @@
     const canEdit = can("ai.coursefinder");
     const cost = cfCost();
     panel.innerHTML = `
-      <div class="card"><div class="card-head"><h3>✨ New AI shortlist <span class="uni-cost">${esc(String(cost))} credits</span></h3></div>
+      <div class="card"><div class="card-head"><h3>✨ New AI shortlist ${cost != null ? `<span class="uni-cost">${esc(String(cost))} credits</span>` : ""}</h3></div>
       <div class="card-body">
         ${!m.ai_available ? '<div class="hint" style="margin-bottom:10px">AI is not configured on this server right now.</div>' : ""}
+        ${aiPausedMessage() ? `<div class="hint" style="margin-bottom:10px"><b>${esc(aiPausedMessage())}</b></div>` : ""}
         <div class="cf-ai-grid">
           <label class="cf-f"><span>Client</span>
             <div class="docsel">
@@ -16214,7 +16938,7 @@
           </label>
         </div>
         <div class="cf-ai-actions">
-          <button class="btn btn-primary" id="cfAiRun" ${(!canEdit || !m.ai_available || cf.aiBusy || cfAiBlocker()) ? "disabled" : ""} title="${esc(cfAiBlocker())}">${cf.aiBusy ? '<span class="spinner"></span> Matching saved courses…' : `Generate shortlist · ${esc(String(cost))} cr`}</button>
+          <button class="btn btn-primary" id="cfAiRun" ${(!canEdit || !m.ai_available || cf.aiBusy || cfAiBlocker()) ? "disabled" : ""} title="${esc(cfAiBlocker())}">${cf.aiBusy ? '<span class="spinner"></span> Matching saved courses…' : cfRunLabel()}</button>
           ${!canEdit ? '<span class="hint">Viewers can browse, but only editors can run AI actions.</span>' : ""}
         </div>
       </div></div>
@@ -16356,7 +17080,7 @@
     } catch (ex) {
       if (ex && ex.status === 402) {
         toast(ex.message, "error");
-        navigate("credits");
+        routeAfter402(ex);
         return;
       }
       toast(ex.message || "Couldn't generate the shortlist.", "error");
@@ -16370,7 +17094,7 @@
       // busy state) by a tab switch mid-run, so a captured snapshot can't be trusted.
       const runBtn = $("#cfAiRun");
       if (runBtn) {
-        runBtn.innerHTML = `Generate shortlist · ${esc(String(cfCost()))} cr`;
+        runBtn.innerHTML = cfRunLabel();
         cfSyncAiRun();   // carries the "needs a target" term, not just the permission one
       }
     }

@@ -186,10 +186,10 @@ Backward compatibility: `RESEND_MARKETING_AUDIENCE_ID` is also accepted.
 Optional:
 
 ```bash
-GEMINI_MODEL=gemini-2.5-flash
-RILONO_AI_CHAT_MODEL=gemini-2.5-flash
-GEMINI_DOCUMENT_MODEL=gemini-2.5-flash
-DAILY_AI_NOTIFIER_MODEL=gemini-2.5-flash
+GEMINI_MODEL=gemini-3.1-pro-preview         # leads the app-wide default chain (this is also the default)
+RILONO_AI_CHAT_MODEL=gemini-3.5-flash       # example: pin a cheaper model for one surface
+GEMINI_DOCUMENT_MODEL=gemini-3.5-flash
+DAILY_AI_NOTIFIER_MODEL=gemini-3.5-flash
 DAILY_AI_NOTIFIER_DORMANT_AFTER_DAYS=30    # no login for this many days → account is dormant
 DAILY_AI_NOTIFIER_DORMANT_CADENCE_DAYS=14  # dormant accounts are scanned/emailed once per this many days (0 AFTER_DAYS = off)
 RESEND_CONTACTS_SYNC_BATCH_SIZE=100
@@ -201,6 +201,8 @@ RESEND_CONTACTS_SYNC_RETRY_MAX_SECONDS=6
 ```
 
 Keep AI model names in env instead of hard-coding preview model IDs. If a provider retires a model, update the relevant `*_MODEL` or comma-separated `*_MODEL_CANDIDATES` env value.
+
+**Retired models:** Gemini 2.5 (`gemini-2.5-pro`, `gemini-2.5-flash`, `gemini-2.5-flash-lite`) was retired on Vertex on 2026-10-20, and 2.0 before it. This README used to show `gemini-2.5-flash` in the examples above. If an environment copied those values, replace them: a retired id fails on every call before the chain falls back to a pricier model. The code's defaults no longer contain any 2.5 or 2.0 id. The enterprise assistant, Deep Scan, upload reading and the Chrome-extension copilot default to the cheap chain `gemini-3.1-flash-lite` → `gemini-3.5-flash` → `gemini-3.1-pro-preview`. `RILONO_AI_CHAT_MODEL` no longer steers the enterprise Chrome-extension copilot; that is `ENTERPRISE_COPILOT_MODEL`.
 
 ### Run manually
 
@@ -224,6 +226,22 @@ python -m app.services.resend_contacts_sync --unsubscribe-ineligible
 ```
 
 This does not mark contacts as unsubscribed in Resend. Notification opt-outs stay app-level so transactional emails like password resets, email verification, and enterprise invites remain deliverable.
+
+## Enterprise (B2B) Pricing Configuration
+
+The enterprise plans, limits, AI credit prices, monthly AI reading allowance, tax and currency rules are set by `ENTERPRISE_*` environment variables. All of them have defaults (pricing v2, 2026-10-22), and customer-facing copy is generated from them. The ones you are most likely to touch:
+
+```bash
+ENTERPRISE_GST_PERCENT=18             # GST on INR plan prices; 0 = no tax and no "+ GST" anywhere
+ENTERPRISE_YEARLY_ENABLED=false       # sell yearly plans (10x monthly, "2 months free"); off until the reading quality check passes
+ENTERPRISE_AI_PAUSE_ON_EXPIRY=true    # pause every AI feature when the trial ends or a paid plan lapses
+ENTERPRISE_FILE_LIMIT_GRACE_DAYS=14   # days an org may stay over its open-file limit; 0 = hard cap
+ENTERPRISE_INR_REGION_COUNTRIES=IN,NP,BD,LK,NG,GH,KE   # charged INR only; everywhere else never INR
+ENTERPRISE_COUPON_MAX_PERCENT=15      # largest discount a code may give
+# ENTERPRISE_READ_MODEL_CANDIDATES=gemini-3.1-flash-lite,gemini-3.5-flash   # upload-reading chain (unset = cheap chain)
+```
+
+Setting an old price or limit variable (for example `ENTERPRISE_STARTER_MONTHLY_PAISE` or `ENTERPRISE_COPILOT_INVITE_MESSAGES`) overrides the new defaults. The full list with defaults, meanings and the production checklist is in [docs/runbook.md](docs/runbook.md#7-enterprise-pricing-v2-configuration). The decision record is [docs/decisions.md](docs/decisions.md) (D-009).
 
 ## License
 

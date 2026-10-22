@@ -195,6 +195,31 @@ _PUBLIC_LOGO_PATHS = (
     "/api/enterprise/public/brand-mark/",
 )
 
+# Public, account-free API responses that set their OWN caching headers and must keep them.
+# Exact paths (no prefix match), so nothing mounted beneath one inherits the exemption.
+#   /api/enterprise/public/plans — the Enterprise price list. It answers `Cache-Control:
+#   public, max-age=…` plus a `Vary` on the CDN geo headers, because the visitor's country
+#   decides the currency (an INR-region visitor is always quoted INR). Rewriting that to
+#   no-store sent every pricing-page view through to the endpoint and its rate limit, and
+#   swapping its Vary for Cookie/Authorization would let a shared cache that honours the
+#   public Cache-Control serve one region's price list to another.
+_PUBLIC_CACHEABLE_API_PATHS = frozenset({
+    "/api/enterprise/public/plans",
+})
+
+
+def _keeps_own_cache_headers(path: str, response) -> bool:
+    """Whether the no-store rewrite in add_security_headers must leave `response` alone.
+
+    The cacheable paths qualify only for a 200 that actually declares itself public: a 429
+    from the rate limiter or any error raised inside the endpoint carries no caching header
+    of its own, and must still get no-store rather than whatever a CDN would default to."""
+    if path.startswith(_PUBLIC_LOGO_PATHS):
+        return True
+    if path.rstrip("/") not in _PUBLIC_CACHEABLE_API_PATHS:
+        return False
+    return response.status_code == 200 and "public" in response.headers.get("Cache-Control", "").lower()
+
 
 # Add CORS middleware with explicit origins only.
 app.add_middleware(
@@ -213,10 +238,12 @@ async def add_security_headers(request: Request, call_next):
     # API responses may contain identity, notification, billing, document, or AI data.
     # Make the safe default explicit for browsers, CDNs, and reverse proxies so a future
     # cache rule can never reuse one account's response for another visitor.
-    # Sole exception: org logos — public branding assets (an upload behind an unguessable
-    # token URL, or a mark drawn from the spec in its own path), rendered on every portal
-    # page and in client emails, carrying nothing account-specific and safe to cache hard.
-    if request.url.path.startswith("/api/") and not request.url.path.startswith(_PUBLIC_LOGO_PATHS):
+    # Exceptions (see _keeps_own_cache_headers): org logos — public branding assets (an
+    # upload behind an unguessable token URL, or a mark drawn from the spec in its own path),
+    # rendered on every portal page and in client emails, carrying nothing account-specific
+    # and safe to cache hard — and the public Enterprise price list, which sets its own
+    # Cache-Control/Vary.
+    if request.url.path.startswith("/api/") and not _keeps_own_cache_headers(request.url.path, response):
         response.headers["Cache-Control"] = "private, no-store, max-age=0"
         response.headers["CDN-Cache-Control"] = "no-store"
         response.headers["Surrogate-Control"] = "no-store"
@@ -394,10 +421,36 @@ def shutdown_background_services():
     stop_enterprise_calendar_reminder_scheduler()
     stop_document_retention_scheduler()
 
+class _StaticFilesWithRenderedPages(StaticFiles):
+    """/static, except that an .html file is served the way its page route serves it.
+
+    The marketing pages carry server-side placeholders — <!--@partial:…--> blocks and
+    {{ENT_…}} Enterprise price tokens — that only the page routes expand. Their raw files
+    are also reachable at /static/<name>.html, and served verbatim there a visitor (or a
+    crawler that found the URL) would read "{{ENT_STARTER_PRICE_INR}}" where a price should
+    be. Every other file type is served exactly as before.
+
+    The rendered response deliberately carries no ETag/Last-Modified: those describe the
+    FILE, while the body also depends on env-driven prices, so a revalidation could keep a
+    stale price alive after a re-price that didn't touch the file."""
+
+    async def get_response(self, path: str, scope):
+        response = await super().get_response(path, scope)
+        file_path = getattr(response, "path", None)
+        if (
+            isinstance(response, FileResponse)
+            and response.status_code == 200
+            and str(file_path or "").lower().endswith(".html")
+        ):
+            with open(file_path, "r", encoding="utf-8") as handle:
+                return HTMLResponse(_render_static_page(handle.read()))
+        return response
+
+
 # Serve static files
 static_dir = os.path.join(os.path.dirname(__file__), "..", "static")
 if os.path.exists(static_dir):
-    app.mount("/static", StaticFiles(directory=static_dir), name="static")
+    app.mount("/static", _StaticFilesWithRenderedPages(directory=static_dir), name="static")
 
 # Serve uploaded images
 uploads_dir = os.path.join(os.path.dirname(__file__), "..", "uploads")
@@ -410,9 +463,11 @@ async def read_root(request: Request):
     if _is_enterprise_subdomain_request(request):
         return RedirectResponse(url="/enterprise", status_code=307)
 
-    html_path = os.path.join(os.path.dirname(__file__), "..", "static", "index.html")
-    if os.path.exists(html_path):
-        return FileResponse(html_path)
+    # Through the page renderer, not FileResponse: the homepage's Enterprise band quotes the
+    # live plan price ({{ENT_…}} tokens), so the bytes on disk are not the bytes to serve.
+    page = _read_static_html("index.html")
+    if page is not None:
+        return HTMLResponse(page)
     return {"message": "Rilono API", "docs": "/docs"}
 
 
@@ -733,12 +788,32 @@ def _render_partials(page_html: str) -> str:
     return _PARTIAL_TOKEN.sub(_expand, page_html)
 
 
+def _render_static_page(page_html: str) -> str:
+    """Expand a static page's server-side placeholders: partials first (a partial may itself
+    carry price tokens), then the {{ENT_…}} Enterprise price tokens.
+
+    Prices come from app/enterprise_public_pricing.py — the same catalog checkout charges
+    from — so a re-price never needs an HTML sweep. A failure there must cost the price
+    lines, never the page: the homepage and every blog article go through here, so the
+    page is served with its tokens unexpanded (and the error logged) rather than as a 500."""
+    page_html = _render_partials(page_html)
+    if "{{ENT_" not in page_html:
+        return page_html
+    try:
+        from app import enterprise_public_pricing
+
+        return enterprise_public_pricing.render(page_html)
+    except Exception:
+        logger.exception("Enterprise price tokens failed to render; serving the page unexpanded")
+        return page_html
+
+
 def _read_static_html(name: str) -> str | None:
     path = os.path.join(os.path.dirname(__file__), "..", "static", name)
     if not os.path.exists(path):
         return None
     with open(path, "r", encoding="utf-8") as handle:
-        return _render_partials(handle.read())
+        return _render_static_page(handle.read())
 
 
 def _apply_seo_meta(
@@ -1079,10 +1154,12 @@ async def read_enterprise_blog():
 @app.get("/enterprise")
 async def read_enterprise():
     """Serve the standalone enterprise dashboard page."""
-    html_path = os.path.join(os.path.dirname(__file__), "..", "static", "enterprise.html")
-    if os.path.exists(html_path):
-        return FileResponse(html_path)
-    raise HTTPException(status_code=404, detail="Not found")
+    # Rendered, not FileResponse: the sign-in/sign-up panel quotes the trial and the entry
+    # plan price through {{ENT_…}} tokens.
+    page = _read_static_html("enterprise.html")
+    if page is None:
+        raise HTTPException(status_code=404, detail="Not found")
+    return HTMLResponse(page)
 
 
 @app.get("/enterprise/")
@@ -1211,8 +1288,9 @@ async def serve_spa(full_path: str):
     # Don't serve HTML for API routes, static files, or uploads
     if full_path.startswith(("api/", "static/", "uploads/", "docs", "redoc", "openapi.json")):
         return {"detail": "Not found"}
-    
-    html_path = os.path.join(os.path.dirname(__file__), "..", "static", "index.html")
-    if os.path.exists(html_path):
-        return FileResponse(html_path)
+
+    # Rendered like read_root: index.html carries {{ENT_…}} price tokens.
+    page = _read_static_html("index.html")
+    if page is not None:
+        return HTMLResponse(page)
     return {"message": "Rilono API", "docs": "/docs"}

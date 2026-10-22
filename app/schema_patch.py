@@ -4007,6 +4007,17 @@ _PRICING_V2_COLUMNS: dict[str, tuple[tuple[str, str], ...]] = {
     ),
 }
 
+# Pricing-v2 follow-ups, kept apart from _PRICING_V2_COLUMNS so that map stays exactly the
+# tables its tests pin; same DDL placeholders, applied by the same idempotent function.
+#   enterprise_subscription_payments.note — the admin's note on an OFFLINE plan payment
+#   (Payment Link / bank transfer / invoice). Nullable TEXT: every existing row, and every
+#   checkout row, simply has none.
+_PRICING_V2_FOLLOWUP_COLUMNS: dict[str, tuple[tuple[str, str], ...]] = {
+    "enterprise_subscription_payments": (
+        ("note", "TEXT"),
+    ),
+}
+
 # Same names create_all() derives from `index=True` on the models, so a table built either
 # way ends up with exactly one copy of each index.
 _PRICING_V2_INDEXES: tuple[tuple[str, str], ...] = (
@@ -4022,7 +4033,7 @@ _PRICING_V2_INDEXES: tuple[tuple[str, str], ...] = (
 def ensure_enterprise_pricing_v2_columns():
     """Columns for the 2026-10-22 B2B pricing model (open-file grace, Branch Packs, per-org
     overrides, one-trial-per-domain, the monthly reading allowance, per-document read
-    status, and server-side mock-interview sessions).
+    status, server-side mock-interview sessions, and the offline-payment note).
 
     Additive and idempotent on sqlite and postgres: each column is added only if missing,
     nothing is dropped or rewritten, and every NOT NULL column carries a default so existing
@@ -4037,7 +4048,7 @@ def ensure_enterprise_pricing_v2_columns():
         "bool_false": "0" if is_sqlite else "FALSE",
     }
     with engine.begin() as conn:
-        for table, columns in _PRICING_V2_COLUMNS.items():
+        for table, columns in (*_PRICING_V2_COLUMNS.items(), *_PRICING_V2_FOLLOWUP_COLUMNS.items()):
             if not _table_exists(conn, table):
                 continue
             existing = _get_table_columns(conn, table)

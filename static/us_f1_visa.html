@@ -4104,33 +4104,39 @@
                         <button type="button" id="pricingPassButton" class="btn btn-primary" onclick="handleUpgradeToPro('pricing')">Get the Visa Success Pass</button>
                     </div>
 
-                    <div class="pricing-card pricing-card-enterprise">
+                    <!-- Server-rendered from the live price book (app/enterprise_public_pricing.py fills the
+                         ENT_ price tokens), so the no-JS view is the real INR card, its tax note included only
+                         while GST is charged. app.js (refreshEnterprisePricingCard) then re-renders it from
+                         GET /api/enterprise/public/plans in the currency the server will actually charge this
+                         visitor — never a price of its own. data-tax-note is the INR tax note, for the
+                         offline fallback only. -->
+                    <div class="pricing-card pricing-card-enterprise" id="pricingEnterpriseCard" data-tax-note="{{ENT_TAX_NOTE}}">
                         <div class="pricing-badge pricing-badge-enterprise">For teams</div>
                         <div class="pricing-card-head">
                             <h2>Enterprise</h2>
                             <p>For visa consultancies, universities &amp; study-abroad teams</p>
                         </div>
-                        <div class="pricing-plan-meta pricing-plan-meta-enterprise">Free 14-day sandbox · no card required</div>
-                        <div class="pricing-plan-savings pricing-plan-savings-enterprise">Monthly plans sized to your team — AI credits included.</div>
-                        <!-- INR markup is the no-JS fallback; updatePricingByCurrency() re-renders
-                             this price (and the tier bullets below) in the selected currency.
-                             "+ GST" is INR-only — every other currency is a zero-rated export. -->
-                        <div id="pricingEnterprisePrice" class="pricing-price pricing-price-enterprise">&#8377;2,999<span>&nbsp;/month + GST</span></div>
+                        <div id="pricingEnterpriseTrial" class="pricing-plan-meta pricing-plan-meta-enterprise">{{ENT_TRIAL_LABEL}} · no card required</div>
+                        <div class="pricing-plan-savings pricing-plan-savings-enterprise">Plans sized by open student files — every AI feature and monthly AI credits included.</div>
+                        <div id="pricingEnterprisePrice" class="pricing-price pricing-price-enterprise">{{ENT_STARTER_PRICE_INR}}<span>&nbsp;/month{{ENT_TAX_SUFFIX}}</span></div>
+                        <div id="pricingEnterpriseNote" class="pricing-billing-note">{{ENT_STARTER_YEARLY_NOTE}}</div>
                         <ul class="pricing-features">
-                            <li>Starter <span id="pricingEnterpriseTierStarter">&#8377;2,999</span>/mo — 10 users, 100 clients, 1,000 AI credits/mo</li>
-                            <li>Growth <span id="pricingEnterpriseTierGrowth">&#8377;6,999</span>/mo — 30 users, 500 clients, 3,500 AI credits/mo</li>
-                            <li>Scale <span id="pricingEnterpriseTierScale">&#8377;14,999</span>/mo — 100 users, 2,000 clients, 10,000 AI credits/mo</li>
-                            <li>Team workspace with roles &amp; seats</li>
-                            <li>Client CRM — intake, pipeline &amp; document tracking</li>
-                            <li>AI document audits, mock interviews &amp; course shortlists</li>
+                            <li data-enterprise-plan="starter">{{ENT_STARTER_LABEL}} <span id="pricingEnterpriseTierStarter">{{ENT_STARTER_PRICE_INR}}</span>/mo — {{ENT_STARTER_SEATS}} staff, {{ENT_STARTER_OPEN_FILES}} open files, {{ENT_STARTER_CREDITS}} AI credits/mo</li>
+                            <li data-enterprise-plan="growth">{{ENT_TEAM_LABEL}} <span id="pricingEnterpriseTierGrowth">{{ENT_TEAM_PRICE_INR}}</span>/mo — {{ENT_TEAM_SEATS}} staff, {{ENT_TEAM_OPEN_FILES}} open files, {{ENT_TEAM_CREDITS}} AI credits/mo</li>
+                            <li data-enterprise-plan="scale">{{ENT_MULTI_BRANCH_LABEL}} <span id="pricingEnterpriseTierScale">{{ENT_MULTI_BRANCH_PRICE_INR}}</span>/mo — {{ENT_MULTI_BRANCH_SEATS}} staff, {{ENT_MULTI_BRANCH_OPEN_FILES}} open files, {{ENT_MULTI_BRANCH_CREDITS}} AI credits/mo</li>
+                            <li>Client CRM with every AI feature — document checks, SOP &amp; LOR drafts, mock interviews</li>
+                            <li>AI document reading included every month</li>
+                            <li id="pricingEnterpriseTopupRow">Credit top-ups from <span id="pricingEnterpriseTopupFrom">{{ENT_TOPUP_FROM_INR}}</span></li>
                             <li>15 destinations — from the US &amp; UK to Singapore &amp; Sweden</li>
                         </ul>
                         <a href="/enterprise/demo" class="btn btn-primary">Book a demo</a>
                         <a href="/for-enterprise" class="pricing-enterprise-link">Explore Rilono Enterprise →</a>
                     </div>
                 </div>
+                <!-- "Exactly the amount shown" stays true only while no tax is added on top of a shown price:
+                     the suffix (GST wording for Enterprise INR plans) is empty at a 0% rate. -->
                 <p class="pricing-disclaimer">Every currency has its own price — nothing is converted at a daily
-                    exchange rate. You are charged exactly the amount shown, in the currency shown.
+                    exchange rate. You are charged exactly the amount shown, in the currency shown{{ENT_TAX_DISCLAIMER_SUFFIX}}.
                 </p>
             </div>
         </div>
@@ -6921,7 +6927,7 @@
              looks for #pricingCountrySelect (gone), so the currency selector stays empty,
              the pass price never renders, and the checkout modal has no currency control
              while the server now prices per currency. -->
-        <script src="/static/app.js?v=20260902a"></script>
+        <script src="/static/app.js?v=20261022a"></script>
         <script>
         (function() {
             var toggle = document.getElementById('dashSidebarToggle');

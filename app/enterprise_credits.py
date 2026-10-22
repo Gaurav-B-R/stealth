@@ -230,6 +230,42 @@ COPILOT_ACTION_KEY = "ai_copilot"
 COPILOT_FREE_DAILY = _int_env("ENTERPRISE_COPILOT_FREE_DAILY", 5)          # free messages / org / day
 COPILOT_MSGS_PER_CREDIT = max(1, _int_env("ENTERPRISE_COPILOT_MSGS_PER_CREDIT", 2))  # billable msgs per credit
 
+# The assistant rate BEFORE the 2026-10-22 re-price: 1 credit per 5 messages. A ledger debit
+# stores only the credits it took, so any report that turns spent credits back into a message
+# count (the finance "Saved with Rilono" panel) must use the rate in force when each debit
+# was written — today's rate applied to old debits would under-report them 2.5x.
+# COPILOT_RATE_CHANGED_AT is when today's rate took effect: UTC midnight of the release day by
+# default, so debits written that day before the deploy count at the new rate (a one-off
+# undercount of a few hours). Override both if production ran a different legacy rate.
+COPILOT_LEGACY_MSGS_PER_CREDIT = max(1, _int_env("ENTERPRISE_COPILOT_LEGACY_MSGS_PER_CREDIT", 5))
+
+
+def _date_env(env_key: str, default_iso: str) -> datetime:
+    """A YYYY-MM-DD env var as a naive-UTC midnight datetime; a typo falls back to the
+    default rather than failing the import."""
+    raw = (os.getenv(env_key) or "").strip() or default_iso
+    try:
+        return datetime.strptime(raw[:10], "%Y-%m-%d")
+    except ValueError:
+        logger.warning("%s=%r is not a YYYY-MM-DD date; using %s", env_key, raw, default_iso)
+        return datetime.strptime(default_iso, "%Y-%m-%d")
+
+
+COPILOT_RATE_CHANGED_AT = _date_env("ENTERPRISE_COPILOT_RATE_CHANGED_AT", "2026-10-22")
+
+
+def copilot_messages_for_credits(legacy_credits: int, current_credits: int) -> int:
+    """Billed assistant messages represented by credits debited before (`legacy_credits`) and
+    since (`current_credits`) COPILOT_RATE_CHANGED_AT. A debit pays whole bundles: before the
+    re-price a bundle cost 1 credit; since, it costs the live ai_copilot price (also 1 by
+    default). Messages inside the free daily allowance are never debited, so this counts
+    billed messages only — an undercount, never an inflation."""
+    bundle = max(1, int(action_cost(COPILOT_ACTION_KEY) or 1))
+    return (
+        max(0, int(legacy_credits or 0)) * COPILOT_LEGACY_MSGS_PER_CREDIT
+        + max(0, int(current_credits or 0)) // bundle * COPILOT_MSGS_PER_CREDIT
+    )
+
 # The CLIENT Copilot link (a client chatting about their own case via an emailed link) is a
 # flat per-client unlock, not the staff meter above. Interim pricing (owner, 2026-10-22):
 # 30 credits buys 5 messages over 30 days — priced so the link can never be a loss, and not
@@ -886,37 +922,76 @@ def _key_period_start(key) -> Optional[datetime]:
         return None
 
 
-def _period_key_elapsed(key) -> bool:
-    """Has the period a stored key belongs to actually ended?
+def _key_period_end(key, sub=None) -> Optional[datetime]:
+    """When the allowance period a stored key belongs to actually ENDS — None for a one-time,
+    empty or unparseable key (which has no end).
 
-    The stored key is "<plan>:<period-start YYYY-MM-DD>" (or "<plan>:once"). A one-time
-    grant has no period and never expires. Otherwise the period ended PLAN_PERIOD_DAYS after
-    the start encoded in the key — so an upgrade or an early renewal, which also change the
-    key, do NOT count as an expiry.
-
-    An unparseable key returns False: failing towards "don't take credits away" is the only
-    safe direction when we cannot prove the period is over.
+    The key carries only its start DATE, and most periods are PLAN_PERIOD_DAYS long, so
+    start + PLAN_PERIOD_DAYS is the default. But the last sub-period of a yearly coverage
+    runs to the coverage end (35 days by default — see _coverage_bounds), and a key cannot
+    say that by itself. With the subscription at hand, the period is looked up on the same
+    grid _period_bounds_for grants on: the sub-period holding the key's start day. When that
+    sub-period really begins ON the key's date, its real end is used; otherwise (the grid
+    moved — a lapse and a fresh start, or no payment history to rebuild it from) the 30-day
+    default stands, which is the old rule. The lookup can only ever push the end LATER than
+    the default inside a coverage the org has actually paid for, never shorten a period.
     """
     from app import enterprise_billing as billing
 
     start = _key_period_start(key)
     if start is None:
+        return None
+    end = start + timedelta(days=billing.PLAN_PERIOD_DAYS)
+    plan_key = str(key).rpartition(":")[0]
+    if sub is None or plan_key not in billing.PAID_PLAN_KEYS:
+        return end
+    try:
+        # Probe at the last instant of the key's date: whatever time of day the period began,
+        # that instant is inside it (a sub-period is never shorter than a day), whereas
+        # midnight would still sit in the PREVIOUS sub-period.
+        probe = start + timedelta(days=1) - timedelta(microseconds=1)
+        real_start, real_end = _period_bounds_for(sub, plan_key, now=probe)
+    except Exception:  # never let a lookup failure change what a grant does
+        logger.debug("period end lookup failed for key %s", key, exc_info=True)
+        return end
+    if real_start.date() == start.date() and real_end > end:
+        return real_end
+    return end
+
+
+def _period_key_elapsed(key, sub=None) -> bool:
+    """Has the period a stored key belongs to actually ended?
+
+    The stored key is "<plan>:<period-start YYYY-MM-DD>" (or "<plan>:once"). A one-time
+    grant has no period and never expires. Otherwise the period ends when _key_period_end
+    says — PLAN_PERIOD_DAYS after the start encoded in the key, or, given the subscription,
+    the real end of a yearly coverage's longer final sub-period. So an upgrade or an early
+    renewal, which also change the key, do NOT count as an expiry — including a plan change
+    in the last five days of a year, which the bare 30-day rule read as "period over" and
+    answered with a whole extra monthly allowance.
+
+    An unparseable key returns False: failing towards "don't take credits away" is the only
+    safe direction when we cannot prove the period is over.
+    """
+    end = _key_period_end(key, sub)
+    if end is None:
         return False
-    return (start + timedelta(days=billing.PLAN_PERIOD_DAYS)) <= datetime.utcnow()
+    return end <= datetime.utcnow()
 
 
-def _period_key_live(key) -> bool:
+def _period_key_live(key, sub=None) -> bool:
     """A recurring (paid) key whose period has NOT ended yet. A key change away from one is
     a plan change INSIDE that period — not a renewal — so it earns only the difference up to
     the new tier. An empty, one-time or unparseable key is not live: an unreadable legacy key
     is no evidence that this period's allowance was already handed out, and the old code
-    granted in full on any key change, so that is where the doubt falls."""
-    return _key_period_start(key) is not None and not _period_key_elapsed(key)
+    granted in full on any key change, so that is where the doubt falls. Pass the
+    subscription so a yearly coverage's final (longer) sub-period is judged by its real end."""
+    return _key_period_start(key) is not None and not _period_key_elapsed(key, sub)
 
 
-def _previous_period_elapsed(wallet: models.EnterpriseCreditWallet) -> bool:
+def _previous_period_elapsed(wallet: models.EnterpriseCreditWallet, sub=None) -> bool:
     """_period_key_elapsed for the wallet's stored CREDIT key."""
-    return _period_key_elapsed(wallet.plan_credits_period)
+    return _period_key_elapsed(wallet.plan_credits_period, sub)
 
 
 def _grant_plan_credits(
@@ -1038,7 +1113,7 @@ def _sync_credit_allowance(
             f"{label} — allowance raised to {allowance:,}: +{delta:,} credits this period",
         ), None
 
-    if recurring and _period_key_live(stored):
+    if recurring and _period_key_live(stored, sub):
         # A plan change INSIDE a paid period whose grant is still live: an upgrade, a
         # downgrade, or a re-buy that re-anchored the period. Top up to the new tier only —
         # max(0, new − already granted this period) — and keep the period's high-water mark
@@ -1081,7 +1156,7 @@ def _sync_credit_allowance(
     # an early renewal, and clawing back there would delete allowance the customer has
     # already paid for and not yet used — the moment they gave us more money. So the
     # remainder is only forfeited once the period it belonged to has actually elapsed.
-    if not PLAN_CREDITS_ROLLOVER and granted_before > 0 and _period_key_elapsed(stored):
+    if not PLAN_CREDITS_ROLLOVER and granted_before > 0 and _period_key_elapsed(stored, sub):
         # Claw back the unspent remainder of the PREVIOUS period's grant before the new one
         # lands. Capped at the live balance so it can never eat purchased credits: if the
         # org spent its allowance and then topped up, `plan_credits_remaining` is already 0
@@ -1154,7 +1229,7 @@ def _sync_read_allowance(
             wallet.reads_granted = allowance
         return
 
-    if recurring and _period_key_live(stored):
+    if recurring and _period_key_live(stored, sub):
         # Plan change inside a live paid period: raise to the new tier, keep what was used.
         wallet.reads_period = period_key
         wallet.reads_granted = max(granted, allowance)

@@ -84,6 +84,18 @@ Each request selects its exact supported model and context tier. Cached tokens a
 
 The catalog in `app/ai_cost_calculation.py` is versioned as `google-standard-list-2026-09-07-v1`, verified against Google's [Gemini API pricing](https://ai.google.dev/gemini-api/docs/pricing) and [Google Cloud pricing](https://cloud.google.com/gemini-enterprise-agent-platform/generative-ai/pricing). It supports exact identifiers `gemini-3.1-pro-preview`, `gemini-2.5-pro` and `gemini-2.5-flash` for the documented standard rates and supported modalities. Unknown model names or unsupported processing tiers get no guessed fallback price.
 
+**Cheap-chain rates (added 2026-10-22, not yet invoice-reconciled).** Gemini 2.5 was retired on Vertex on 2026-10-20. Since then the enterprise assistant, Deep Scan, the Chrome-extension copilot and enterprise upload reading default to `gemini-3.1-flash-lite` → `gemini-3.5-flash` → `gemini-3.1-pro-preview`. The 2.5 rates stay in the catalog so historical rows still value. The catalog adds three models at public list prices from October 2026, in USD per 1M tokens (input / output, cache at 10% of input):
+
+| Model | Input | Output |
+| --- | --- | --- |
+| `gemini-3.1-flash-lite` | $0.25 | $1.50 |
+| `gemini-3.5-flash` | $1.50 | $9.00 |
+| `gemini-3.5-flash-lite` | $0.30 | $2.50 |
+
+Each model also has a `-preview` id at the same rates. These entries are flagged `unreconciled`, so every event valued on them is `partial` with the coverage reason `rate_from_public_price_list_not_invoice_reconciled`. They are also `text_only`: an event with audio input evidence is `unavailable` rather than valued at the text rate. And they are `global_only`, the same Vertex regional-endpoint rule as `gemini-3.1-pro-preview`. Once a Google invoice confirms the rates, remove the `unreconciled` flag and bump `RATE_VERSION`.
+
+**Enterprise upload reading has its own usage source**, `enterprise_document_read`, separate from the shared `document_ai`. It is listed in `enterprise_credits.ENTERPRISE_COST_SOURCES`, so the admin revenue report can compare what the monthly reads allowance costs to serve against plan revenue.
+
 **Historical records are valued at this currently published standard-rate catalog.** This is not a claim that every historical date had that price or that Google invoiced the calculated amount. The response includes rate version, verification date, source URLs, calculation basis and missing-data reasons. Historical dates, missing provider/tier information, unverified region/scope, missing modality information and excluded components cause partial or unavailable coverage. If Flash input modality is absent, only its verified output component can be calculated; input and cache cost remain unavailable. Google modality counters take precedence over dispatch hints.
 
 `complete` means the supported recorded components can be calculated on the stated list-rate basis; it does not mean invoice-verified. `partial` retains the known amount and lists missing components or pricing evidence. `unavailable` displays 0 with a reason. `no_usage` displays 0 because there are no retained calls in that range. Duplicate and definitively unbilled attempts contribute 0.

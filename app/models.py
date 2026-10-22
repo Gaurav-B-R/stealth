@@ -1,4 +1,4 @@
-from sqlalchemy import Column, Integer, BigInteger, String, DateTime, Date, ForeignKey, Text, Boolean, Numeric, Float, Index, UniqueConstraint, event
+from sqlalchemy import Column, Integer, BigInteger, String, DateTime, Date, ForeignKey, Text, Boolean, Numeric, Float, Index, UniqueConstraint, event, or_
 from sqlalchemy.orm import relationship, Session
 from sqlalchemy.sql import func
 from app.database import Base
@@ -919,6 +919,12 @@ class EnterpriseClientWritingDraft(Base):
     )
 
 
+# The status a mock-interview session ends in once its feedback report is generated (see
+# EnterpriseInterviewSession.counts_as_interview). Shared so the router, the assistant and the
+# finance report can't spell it three ways.
+INTERVIEW_SESSION_COMPLETED = "completed"
+
+
 class EnterpriseInterviewSession(Base):
     """An AI mock visa interview for a client (transcript + feedback).
 
@@ -956,6 +962,19 @@ class EnterpriseInterviewSession(Base):
     updated_at = Column(DateTime(timezone=True), onupdate=func.now())
 
     client = relationship("EnterpriseClient", back_populates="interview_sessions")
+
+    @classmethod
+    def counts_as_interview(cls):
+        """SQL criterion for the sessions that count as a mock INTERVIEW — finished ones.
+
+        Since server-side sessions, a row exists from the moment an interview STARTS, so an
+        unfiltered query also sees in-progress and abandoned runs (partial transcript, no
+        feedback). Every "how many interviews / the latest verdict / the results" reader
+        must use this, or a half-finished run reads as a completed interview with no
+        verdict. NULL is accepted defensively: legacy rows were backfilled "completed", and
+        before the column existed a row was only ever written once finished.
+        """
+        return or_(cls.status == INTERVIEW_SESSION_COMPLETED, cls.status.is_(None))
 
 
 class EnterpriseInterviewInvite(Base):
@@ -1456,6 +1475,11 @@ class EnterpriseSubscriptionPayment(Base):
     refunded_amount_paise = Column(Integer, nullable=False, default=0, server_default="0")
     verified_at = Column(DateTime(timezone=True), nullable=True)
     error_message = Column(Text, nullable=True)
+    # Free-text note Rilono staff attach when recording an OFFLINE payment (Payment Link,
+    # bank transfer, invoice) in the admin console — the deal terms, who confirmed the
+    # transfer, an invoice number. Internal only: never shown to the customer. NULL on every
+    # checkout row. Before this column existed the note only reached the server log.
+    note = Column(Text, nullable=True)
     created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
     updated_at = Column(DateTime(timezone=True), onupdate=func.now())
 

@@ -1,6 +1,6 @@
 # Rilono Runbook
 
-Last updated: 2026-03-25
+Last updated: 2026-10-22
 
 ## 1) Local Development Startup
 
@@ -48,8 +48,9 @@ Feature groups:
 - Email: `RESEND_*`, `BASE_URL`, `USE_TEST_EMAIL`
 - Turnstile: `TURNSTILE`, `TURNSTILE_ENABLED`, `TURNSTILE_SITE_KEY`, `TURNSTILE_SECRET_KEY`
 - Storage: `R2_*`
-- AI: `GEMINI_API_KEY` and/or Vertex settings
+- AI: `GEMINI_API_KEY` and/or Vertex settings; model chains via `*_MODEL` / `*_MODEL_CANDIDATES` (see section 7 — no Gemini 2.5/2.0 ids since their 2026-10-20 retirement)
 - Payments: `RAZORPAY_*`, plan amount/currency vars
+- Enterprise plans, credits, reads, tax and currency: `ENTERPRISE_*` (full list with defaults in section 7)
 - Background jobs: `DAILY_AI_NOTIFIER_*`, `F1_NEWS_INGESTION_*`
 
 To inspect current env usage in code:
@@ -164,7 +165,20 @@ Email delivery failures:
 Subscription/payment failures:
 
 - Validate `RAZORPAY_*` keys and webhook secret
-- Check records in `subscription_payments`
+- Check records in `subscription_payments` (B2C) and `enterprise_subscription_payments` (B2B; offline payments recorded in the admin console have `razorpay_order_id = "offline:<reference>"`)
+
+Enterprise customer says AI "stopped working" or every AI button answers 402:
+
+- Their trial ended or their paid plan lapsed — the shared AI-paused gate (`enterprise_billing.ai_access_state`). The admin console's enterprise account shows the AI-paused state, trial end and plan period. Fix by recording the payment (offline payment), extending `trial_ends_at` (overrides), or, for a platform-wide misfire, `ENTERPRISE_AI_PAUSE_ON_EXPIRY=false`.
+- A 402 that names credits rather than the plan is an empty wallet, not a pause.
+
+Enterprise customer can't add a client:
+
+- Open files over the plan limit after the grace period (`ENTERPRISE_FILE_LIMIT_GRACE_DAYS`), or the trial has ended. The 402 detail says which. Closing finished files (stage "Closed") frees slots; an admin override of `max_clients` or a Branch Pack raises the limit.
+
+Uploaded documents show "Not read yet":
+
+- The org's monthly AI document reads are used up (or AI is paused). Expected behaviour: the file is stored, and "Read now" reads it once reads are available. Raise `monthly_reads` with an admin override if agreed with the customer.
 
 ## 6) Verification Checklist After Deploy
 
@@ -174,8 +188,119 @@ Subscription/payment failures:
 4. Document upload and listing work for a test user.
 5. `/api/meta` reports expected app version/name.
 6. Background schedulers log normal startup messages.
+7. Enterprise pricing: the "After deploy" step of section 7 (public price list, marketing-page tokens, admin billing controls).
 
-## 7) Current Gaps
+## 7) Enterprise Pricing v2 Configuration
 
-- No automated test suite is currently checked in.
+The 2026-10-22 B2B pricing model ([decision D-009](decisions.md#d-009-enterprise-pricing-v2-open-file-plans-metered-ai-one-ai-paused-gate)) is configured entirely by environment variables with safe defaults: **an unset variable means the shipped default**. Every number below is read at process start, so a change needs a restart (on Render, saving an environment change redeploys the service). Customer-facing copy — the price cards, the marketing pages' `{{ENT_*}}` tokens, emails and the assistant's product help — is generated from these values, never typed by hand, so changing a value changes every surface at once.
+
+### Production checklist (before and after the pricing-v2 deploy)
+
+1. **Remove stale price and limit overrides.** Any of these set on the Render service will silently override the new defaults. List the service's environment (Render dashboard → Environment) and delete each one unless it is a deliberate override:
+   - plan prices: `ENTERPRISE_STARTER_MONTHLY_PAISE`, `ENTERPRISE_GROWTH_MONTHLY_PAISE`, `ENTERPRISE_SCALE_MONTHLY_PAISE` (old ₹2,999 / ₹6,999 / ₹14,999)
+   - plan limits: `ENTERPRISE_{SANDBOX,STARTER,GROWTH,SCALE}_{MAX_SEATS,MAX_CLIENTS,CREDITS}`
+   - action prices: `ENTERPRISE_CREDIT_COST_DOCUMENT_SCAN` (old 1), `ENTERPRISE_CREDIT_COST_WRITING_STUDIO` (old 1), `ENTERPRISE_CREDIT_COST_DEEP_SCAN` (old 20), `ENTERPRISE_CREDIT_COST_COPILOT_CLIENT` (old 20)
+   - metering: `ENTERPRISE_COPILOT_MSGS_PER_CREDIT` (old 5), `ENTERPRISE_COPILOT_INVITE_MESSAGES` (old 100), `ENTERPRISE_DEEP_SCAN_FREE_SCANS_PER_CLIENT` (old 1), `DEEP_SCAN_MAX_DOCUMENTS` (old 40)
+2. **Model environment variables.** Gemini 2.5 was retired on Vertex on 2026-10-20. Make sure none of these name a `gemini-2.5-*` or `gemini-2.0-*` id (a retired id is a failing round-trip on every call, after which the chain falls through to the most expensive model): `GEMINI_MODEL`, `GEMINI_DOCUMENT_MODEL(_CANDIDATES)`, `RILONO_AI_CHAT_MODEL(_CANDIDATES)`, `RILONO_INTERVIEW_MODEL(_CANDIDATES)`, `DAILY_AI_NOTIFIER_MODEL(_CANDIDATES)`, `SOP_GENERATOR_MODEL(_CANDIDATES)`, `COURSE_CATALOG_MODEL(_CANDIDATES)`, `ADMIN_GROWTH_AGENT_MODEL(_CANDIDATES)`, `ENTERPRISE_AI_MODEL(_CANDIDATES)`, `ENTERPRISE_WRITING_MODEL(_CANDIDATES)`, `ENTERPRISE_READ_MODEL(_CANDIDATES)`, `ENTERPRISE_COPILOT_MODEL(_CANDIDATES)`. In particular **leave `ENTERPRISE_AI_MODEL` unset** unless you mean to: it replaces the cheap chain for the assistant and Deep Scan, and also steers mock interviews and Writing Studio's fallback. The README's old `gemini-2.5-flash` examples are retired — if production copied them, replace them.
+3. **`ENTERPRISE_GST_PERCENT`.** The owner has deferred GST registration. Set it explicitly: `0` while not registered (no tax charged, no "+ GST" anywhere), or the registered rate (default when unset: 18). A typo falls back to 18, never to 0.
+4. **`ENTERPRISE_YEARLY_ENABLED`.** Leave unset/false until the reading quality check (item 7) passes. Turning it on shows yearly prices on every surface and enables yearly checkout.
+5. **Coupons.** Deactivate any 100% (or otherwise large) discount codes in the admin console (Enterprise Accounts → an account → "Discount codes"). Codes above `ENTERPRISE_COUPON_MAX_PERCENT` (15) are applied at the cap at checkout, so a customer promised more will be charged more than they expect — tell them, or pause the code.
+6. **Existing paying customers.** Plan keys were reused, not migrated, so an org on `starter` moves to the new Starter limits (5 seats / 40 open files) the moment this deploys, and its credit allowance drops to the new number from its next period. Before deploying, list paid orgs whose seats or open files exceed their new limits and set admin overrides (`PUT /api/admin/enterprise/accounts/{id}/overrides`) where the owner wants to honour what they bought. Otherwise they can't invite more staff, and they can add files only for the grace period. Live Razorpay mandates keep charging the amount of the Razorpay plan they were created with (old price + GST) — the owner must decide whether to cancel and re-subscribe them at the new price.
+7. **Flash-Lite reading quality check (~50 documents).** Upload reading now defaults to `gemini-3.1-flash-lite`. Before enabling yearly billing (and ideally before launch), compare it with 3.1 Pro on about 50 real enterprise documents covering passports, bank statements, transcripts, offer letters / I-20 / CAS, scanned photos and PDFs over 15 pages. From a shell with production AI credentials:
+   ```python
+   from app.utils import gemini_service as g
+   data = open("sample.pdf", "rb").read()
+   cheap = g.extract_text_from_document(data, "sample.pdf", "application/pdf", model_candidates=["gemini-3.1-flash-lite"])
+   pro = g.extract_text_from_document(data, "sample.pdf", "application/pdf", model_candidates=["gemini-3.1-pro-preview"])
+   ```
+   Check names, dates of birth, document numbers, expiry dates, amounts and balances, institution names and grades against the original. If Flash-Lite misses facts that matter, pin a stronger chain with `ENTERPRISE_READ_MODEL_CANDIDATES` and re-check the margin. These calls are billed (usage source `enterprise_document_read`).
+8. **After deploy:** `GET /api/enterprise/public/plans?currency=INR` returns the new prices, `tax.note` is `"+ GST"` only when GST is above 0, and `yearly_enabled` matches the flag; the for-enterprise marketing page and the homepage contain no literal `{{ENT_` text; the admin console's enterprise account shows Billing controls (offline payment, credits, limits & trial).
+
+### Environment variables added or changed by pricing v2
+
+Plans and limits (`app/enterprise_billing.py`; prices in `app/money.py`):
+
+| Variable | Default | Meaning |
+| --- | --- | --- |
+| `ENTERPRISE_STARTER_MONTHLY_PAISE` / `ENTERPRISE_GROWTH_MONTHLY_PAISE` / `ENTERPRISE_SCALE_MONTHLY_PAISE` | 149900 / 399900 / 999900 | Ex-tax INR monthly price of Starter / Team / Multi-branch (was 299900 / 699900 / 1499900). The other-currency `*_USD_MINOR` … `*_SGD_MINOR` ladders are unchanged. |
+| `ENTERPRISE_SANDBOX_MAX_SEATS` / `_MAX_CLIENTS` / `_CREDITS` / `_READS` | 3 / 15 / 50 / 50 | Free trial: staff seats, open files, one-time credits, reads for the whole trial. |
+| `ENTERPRISE_STARTER_MAX_SEATS` / `_MAX_CLIENTS` / `_CREDITS` / `_READS` | 5 / 40 / 150 / 150 | Starter: seats, open files, credits a month, reads a month. |
+| `ENTERPRISE_GROWTH_MAX_SEATS` / `_MAX_CLIENTS` / `_CREDITS` / `_READS` | 25 / 150 / 450 / 500 | Team (internal key `growth`). |
+| `ENTERPRISE_SCALE_MAX_SEATS` / `_MAX_CLIENTS` / `_CREDITS` / `_READS` | 50 / 500 / 1200 / 1000 | Multi-branch (internal key `scale`). |
+| `ENTERPRISE_TRIAL_DEMO_BONUS_CREDITS` | 50 | Credits Rilono staff can grant once per org after a demo call (admin console). 0 disables the bonus. |
+| `ENTERPRISE_BRANCH_PACK_FILES` / `_SEATS` / `_CREDITS` / `_READS` | 100 / 10 / 200 / 200 | What one Branch Pack adds on top of a paid plan (packs are set per org by an admin). |
+| `ENTERPRISE_FILE_LIMIT_GRACE_DAYS` | 14 | Days an org may stay over its open-file limit (from the first over-limit add) before adds are refused. 0 = hard cap. |
+| `ENTERPRISE_AI_PAUSE_ON_EXPIRY` | true | Pause every AI path (402) when the trial has expired or a paid plan lapsed. `false` is the kill switch; it does not reopen adding clients or seats. |
+| `ENTERPRISE_YEARLY_ENABLED` | false | Sell yearly plans (one-off order, no mandate). |
+| `ENTERPRISE_YEARLY_PRICE_MONTHS` | 10 | Yearly price = this many months of the monthly price, in every currency. |
+| `ENTERPRISE_YEARLY_PERIOD_DAYS` | 365 | Coverage of one yearly payment; allowances are still granted per `ENTERPRISE_PLAN_PERIOD_DAYS` (30). |
+| `ENTERPRISE_INR_REGION_COUNTRIES` | `IN,NP,BD,LK,NG,GH,KE` | Countries charged INR only (IN is always included). Everywhere else is never charged INR. |
+| `ENTERPRISE_GST_PERCENT` | 18 | GST on INR plan prices. `0` is honoured end to end (no tax, no "+ GST"); an invalid value falls back to 18. |
+| `ENTERPRISE_COUPON_MAX_PERCENT` | 15 | Highest discount an admin can create; existing codes above it apply at the cap. |
+| `ENTERPRISE_ONE_TRIAL_PER_DOMAIN` | true | A new workspace whose owner is at a company domain that already has a workspace starts with its trial ended. |
+| `ENTERPRISE_FREE_MAIL_DOMAINS_EXTRA` | (empty) | Extra comma-separated public-mailbox domains the one-trial rule must ignore (`app/email_domains.py`). |
+
+Credits and AI action prices (`app/enterprise_credits.py`):
+
+| Variable | Default | Meaning |
+| --- | --- | --- |
+| `ENTERPRISE_CREDIT_COST_DOCUMENT_SCAN` | 4 | Credits per 15-page block of a paid document check (was 1 per document). |
+| `ENTERPRISE_CREDIT_COST_WRITING_STUDIO` | 5 | SOP/LOR draft or refinement (was 1). |
+| `ENTERPRISE_CREDIT_COST_DEEP_SCAN` | 40 | One Deep Scan (was 20). |
+| `ENTERPRISE_CREDIT_COST_COPILOT_CLIENT` | 30 | One client Copilot link, charged at first open (was 20). |
+| `ENTERPRISE_COPILOT_MSGS_PER_CREDIT` | 2 | Assistant message units per credit after the free daily units (was 5). |
+| `ENTERPRISE_COPILOT_INVITE_MESSAGES` / `ENTERPRISE_COPILOT_INVITE_EXPIRES_DAYS` | 5 / 30 | Messages and lifetime of a new client Copilot link (was 100 messages). Read only through `enterprise_credits`. |
+| `ENTERPRISE_DEEP_SCAN_FREE_SCANS_PER_CLIENT` | 0 | Free Deep Scans per client (was 1). Raising it re-enables the free-scan copy everywhere. |
+| `DEEP_SCAN_MAX_DOCUMENTS` | 20 | Documents one Deep Scan reads — the newest ones when a client has more (was 40). |
+| `ENTERPRISE_INTERVIEW_MAX_QUESTIONS` | 12 | Officer questions per mock-interview session (hard-capped at 20 by the interview engine). |
+| `ENTERPRISE_INTERVIEW_ABANDON_HOURS` | 3 | Idle hours after which an unfinished interview session is marked abandoned (it was charged; no report). |
+| `ENTERPRISE_CREDITS_LOW_THRESHOLD` | most expensive action price (40) | Balance below which the low-credit banner and notification fire. |
+| `ENTERPRISE_COPILOT_BUDGET_MAX_OUTPUT_TOKENS` | 4096 | Output cap for a Chrome-extension copilot turn the wallet can only partly cover. |
+| `ENTERPRISE_COPILOT_LEGACY_MSGS_PER_CREDIT` / `ENTERPRISE_COPILOT_RATE_CHANGED_AT` | 5 / 2026-10-22 | Reporting only: the assistant rate before the re-price and when it changed, so the finance "Saved with Rilono" panel converts old credit debits back into message counts at the rate in force at the time. |
+
+AI document reading (`app/utils/gemini_service.py`, `app/routers/enterprise.py`):
+
+| Variable | Default | Meaning |
+| --- | --- | --- |
+| `ENTERPRISE_READ_MODEL` / `ENTERPRISE_READ_MODEL_CANDIDATES` | cheap chain | Model chain for free upload reading. Unset = `gemini-3.1-flash-lite` → `gemini-3.5-flash` → `gemini-3.1-pro-preview`. |
+| `ENTERPRISE_READ_MAX_BLOCKS` | 10 | Most 15-page blocks read (and reads charged) per document — the first 150 pages. |
+| `ENTERPRISE_READ_MAX_OUTPUT_TOKENS` | 2048 | Output cap per block request. |
+| `ENTERPRISE_READ_UPLOAD_TIMEOUT_SECONDS` | 120 | Developer-API file-processing wait for a block (Vertex unaffected). |
+| `ENTERPRISE_DOC_READ_RATE_LIMIT` / `ENTERPRISE_DOC_READ_RATE_WINDOW_SECONDS` | 30 / 3600 | "Read now" requests per user per window. |
+| `ENTERPRISE_DOC_READ_STALE_MINUTES` | 30 | A "pending" read older than this (orphaned by a restart) may be claimed again by "Read now". |
+
+Model routing for the Chrome-extension copilot (`app/enterprise_copilot.py`):
+
+| Variable | Default | Meaning |
+| --- | --- | --- |
+| `ENTERPRISE_COPILOT_MODEL` / `ENTERPRISE_COPILOT_MODEL_CANDIDATES` | cheap chain | Staff Chrome-extension copilot. It no longer follows the B2C `RILONO_AI_CHAT_MODEL`. |
+
+Public price list (`GET /api/enterprise/public/plans`):
+
+| Variable | Default | Meaning |
+| --- | --- | --- |
+| `ENTERPRISE_PUBLIC_PLANS_RATE_LIMIT` / `ENTERPRISE_PUBLIC_PLANS_RATE_WINDOW` | 60 / 60 s | Per-IP rate limit. |
+| `ENTERPRISE_PUBLIC_PLANS_MAX_AGE` | 300 | `Cache-Control: public, max-age` in seconds (the path is exempt from the global `/api/` no-store rewrite in `app/main.py`). |
+
+Admin console typo guards (`app/routers/admin.py`):
+
+| Variable | Default | Meaning |
+| --- | --- | --- |
+| `ENTERPRISE_ADMIN_OFFLINE_PAYMENT_MAX_MINOR` | 100000000 | Largest offline plan payment an admin can record, in minor units (₹10,00,000). |
+| `ENTERPRISE_ADMIN_CREDIT_ADJUST_MAX` | `ENTERPRISE_MAX_CREDIT_REFUND` (100000) | Largest single credit adjustment, and the cap on an `included_credits` override. |
+| `ENTERPRISE_ADMIN_MAX_BRANCH_PACKS` | 100 | Most Branch Packs per org. |
+| `ENTERPRISE_ADMIN_OVERRIDE_MAX` | 1000000 | Largest seat / open-file / reads override. |
+| `ENTERPRISE_ADMIN_MAX_TRIAL_DAYS` | 365 | How far ahead an admin can set a trial end. |
+
+Unchanged but relevant: `ENTERPRISE_TRIAL_DAYS` (14), `ENTERPRISE_PLAN_PERIOD_DAYS` (30), `ENTERPRISE_PLAN_GRACE_DAYS` (3), `ENTERPRISE_FREE` (false; billing kill switch), `ENTERPRISE_CREDITS_ENFORCE` (true), `ENTERPRISE_COPILOT_FREE_DAILY` (5), `ENTERPRISE_CREDIT_COST_MOCK_INTERVIEW` (20), `ENTERPRISE_INTERVIEW_FREE_STAFF_PREVIEWS` (3), `ENTERPRISE_AI_MODEL` / `_CANDIDATES` (unset = cheap chain for the assistant and Deep Scan).
+
+To list every `ENTERPRISE_*` variable the code reads:
+
+```bash
+rg -o '"ENTERPRISE_[A-Z0-9_]+"' app | sed -E 's/.*"(ENTERPRISE_[A-Z0-9_]+)"/\1/' | sort -u
+```
+
+## 8) Current Gaps
+
+- Automated tests live in `tests/` (pytest, plus node-run `tests/*.js` UI tests), but no CI workflow is checked in — run both suites before deploying.
 - Scheduler jobs are in-process; multi-instance deployment requires duplication controls.

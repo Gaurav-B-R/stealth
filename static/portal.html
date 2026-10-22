@@ -339,8 +339,9 @@
         return (data.stages||[]).slice().sort(function(a,b){return (a.order||0)-(b.order||0);})
           .filter(function(s){
             // A payload without the flags must not collapse the track to a lone Approved
-            // node — fall back to the two keys that are off the track by definition.
-            if(typeof s.is_terminal!=="boolean") return s.key!=="rejected"&&s.key!=="on_hold";
+            // node — fall back to the keys that are off the track by definition (Closed, the
+            // "ended without a visa outcome" stage, sits off it exactly like Rejected).
+            if(typeof s.is_terminal!=="boolean") return s.key!=="rejected"&&s.key!=="closed"&&s.key!=="on_hold";
             return s.key==="approved"||(!s.is_terminal&&s.key!=="on_hold");
           });
       }
@@ -354,9 +355,16 @@
       function stageSkipped(key){ return (data.stages_skipped||[]).indexOf(key)>=0; }
       function behindCls(key){ return stageSkipped(key)?"skipped":"done"; }
 
+      // Ended without the win: Rejected, Closed, or any terminal stage the server adds later
+      // (its is_terminal flag) — the track reads these alike, the banner tells them apart.
+      function endedWithoutApproval(status){
+        var st=(data.stages||[]).filter(function(s){return s.key===status;})[0];
+        if(st&&typeof st.is_terminal==="boolean") return st.is_terminal&&status!=="approved";
+        return status==="rejected"||status==="closed";
+      }
       function journeyHtml(){
         var path=journeyPath(), pos=pathIndex(path);
-        var status=data.status, isRejected=status==="rejected", isOnHold=status==="on_hold";
+        var status=data.status, isRejected=endedWithoutApproval(status), isOnHold=status==="on_hold";
         // Only a stage on the track can be "current". An on-hold case with no recorded hold
         // position, or any status key that isn't on the track, must leave curIdx at -1 —
         // otherwise the whole track (incl. Approved) paints as done.
@@ -378,7 +386,8 @@
           return '<div class="jt-step '+cls+'"><div class="jt-node">'+inner+'</div><div class="jt-label">'+esc(s.label)+'</div></div>';
         }).join("");
         var banner="";
-        if(isRejected) banner='<div class="p-banner red">😞 <div><b>This application was refused.</b> Your consultancy can walk you through what happened and what reapplying would look like — your consultancy can talk you through the reasons and your options.</div></div>';
+        if(status==="rejected") banner='<div class="p-banner red">😞 <div><b>This application was refused.</b> Your consultancy can walk you through what happened and what reapplying would look like — your consultancy can talk you through the reasons and your options.</div></div>';
+        else if(isRejected) banner='<div class="p-banner gray">📁 <div><b>Your consultancy has closed this file.</b> Contact them if you have questions or want to pick it up again.</div></div>';
         else if(isOnHold) banner='<div class="p-banner gray">⏸ <div><b>Your application is currently on hold'+(data.held_from_stage?' (paused at "'+esc(data.held_from_stage.label)+'")':"")+'.</b> Contact your consultancy if you have questions about resuming.</div></div>';
         else if(status==="approved") banner='<div class="p-banner green">🎉 <div><b>Congratulations — your visa has been approved!</b></div></div>';
         return '<div class="jt">'+nodes+'</div>'+banner;
@@ -388,7 +397,7 @@
         var stages=(data.stages||[]).slice().sort(function(a,b){return (a.order||0)-(b.order||0);});
         var path=journeyPath(), pos=pathIndex(path);
         var records=data.stage_records||{};
-        var status=data.status, isRejected=status==="rejected", isOnHold=status==="on_hold";
+        var status=data.status, isRejected=endedWithoutApproval(status), isOnHold=status==="on_hold";
         var curKey=isOnHold?(data.held_from_status||status):status;
         var curIdx=pos.hasOwnProperty(curKey)?pos[curKey]:-1;  // off-track keys (on_hold/rejected) never mark the track done
         // Every stage on the track always renders; Rejected / On Hold sections only when staff recorded details there.
@@ -404,8 +413,8 @@
           var skipped=behind&&stageSkipped(s.key);
           var done=behind&&!skipped;
           var st=done?"done":(skipped?"skipped":(isCur?"current":""));
-          var open=isCur||(isRejected&&s.key==="rejected");
-          var dot=done?"✓":(skipped?"–":(onPath?String(pos[s.key]+1):(s.key==="rejected"?"!":"⏸")));
+          var open=isCur||(isRejected&&s.key===status);
+          var dot=done?"✓":(skipped?"–":(onPath?String(pos[s.key]+1):(s.key==="on_hold"?"⏸":"!")));
           var note=fields.length?('<span class="n">'+fields.length+' detail'+(fields.length===1?"":"s")+'</span>'):"";
           var kv=fields.length
             ? '<div class="kv">'+fields.map(function(f){ return '<div class="it"><label>'+esc(f.label)+'</label><div>'+(f.type==="date"?esc(fmtDate(f.value)||f.value):esc(f.value))+'</div></div>'; }).join("")+'</div>'

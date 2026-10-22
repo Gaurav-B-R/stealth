@@ -752,13 +752,15 @@ details.mw-fold[open] > summary { margin-bottom: 14px; }
 .price-tax { font-size: 12px; font-weight: 600; color: var(--text-2); margin-top: 4px; }
 .price-note { font-size: 12px; font-weight: 700; color: var(--muted); margin-top: 2px; }
 
-/* The three numbers that actually differentiate the tiers: users, active clients and the
-   monthly AI credit allowance. Sits between the price and the feature list so the
-   comparison is one glance across cards rather than a read of four bullet lists. */
+/* The numbers that actually differentiate the tiers: staff seats, open files, the monthly
+   AI credit allowance and the monthly AI document reads. Sits between the price and the
+   feature list so the comparison is one glance across cards rather than a read of four
+   bullet lists. Two by two: four columns would squeeze each label into a 50px cell on the
+   230px minimum card. */
 .plan-caps {
   display: grid;
-  grid-template-columns: repeat(3, 1fr);
-  gap: 6px;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 10px 6px;
   margin-top: 16px;
   padding: 12px 0;
   border-top: 1px solid var(--border);
@@ -4276,3 +4278,47 @@ a.ld-dh-chip:hover { background: rgba(255, 255, 255, .28); }
   .dupw-row { flex-direction: column; align-items: stretch; }
   .dupw-open { width: 100%; }
 }
+
+/* ===========================================================================
+   Pricing v2 (2026-10-22) — server-driven plan cards, allowances and AI-paused states
+   =========================================================================== */
+/* An empty banner slot (healthy plan) must take no room; trialBanner() always renders the
+   slot so late-arriving plan data can repaint just the banner. */
+.trial-banner-slot:empty { display: none; }
+/* "Approved, Rejected, Closed and On Hold files don't count." — the server's sentence under
+   the caps, so nobody reads "40 open files" as "40 clients ever". */
+.plan-files-note { font-size: 11.5px; color: var(--muted); text-align: center; margin-top: 8px; line-height: 1.4; }
+/* The US$ estimate for non-Indian members of the INR region: an estimate, never the charge. */
+.price-usd { font-size: 12px; color: var(--muted); margin-top: 2px; }
+/* Monthly / Yearly — only rendered while the server sells yearly (yearly_enabled). */
+.cycle-toggle {
+  display: flex; width: max-content; max-width: 100%; margin: 0 auto 16px; padding: 4px;
+  border: 1.5px solid var(--border-strong); border-radius: 12px; background: var(--surface); gap: 4px;
+}
+.cycle-opt {
+  border: 0; background: transparent; color: var(--text-2); font: inherit; font-size: 13.5px; font-weight: 650;
+  padding: 7px 14px; border-radius: 9px; cursor: pointer; display: inline-flex; align-items: center; gap: 6px;
+}
+.cycle-opt.active { background: var(--grad); color: #fff; }
+.cycle-save { font-size: 11px; font-weight: 700; padding: 2px 7px; border-radius: 999px; background: rgba(16,185,129,.14); color: var(--success); }
+.cycle-opt.active .cycle-save { background: rgba(255,255,255,.22); color: #fff; }
+/* One quiet line under a usage bar: grace deadline, paused adds, refresh date. */
+.usage-note { font-size: 12px; color: var(--muted); margin-top: 5px; line-height: 1.45; }
+.usage-note.warn { color: var(--warning, #f59e0b); font-weight: 650; }
+.usage-note.bad { color: var(--danger, #ef4444); font-weight: 650; }
+/* Credits → Top up while AI is paused: the packs stay visible, the reason sits above them. */
+.cr-topup-blocked { margin: 0 0 14px; font-size: 13px; color: var(--text-2); line-height: 1.5; }
+/* Documents: AI paused (uploads still stored) and the per-document reading state. */
+.doc-paused-note {
+  margin-top: 10px; padding: 8px 11px; border-radius: 9px; font-size: 12.5px; line-height: 1.5;
+  color: var(--text-2); background: rgba(245, 158, 11, .08); border: 1px solid rgba(245, 158, 11, .3);
+}
+.doc-read-row .doc-read-now { padding: 3px 10px; font-size: 12px; }
+.doc-read-msg { flex-basis: 100%; }
+/* Closed (a file ended without a visa outcome) sits off the journey next to Rejected. */
+.jtrack-alt-closed.active { background: rgba(107,114,128,.12); border-color: rgba(107,114,128,.5); color: #4b5563; }
+/* Assistant: an in-thread note (a turn the wallet only partly covered) and the paused card. */
+.ai-note { align-self: center; max-width: 520px; font-size: 12px; color: var(--muted); text-align: center; line-height: 1.5; }
+.ai-empty.ai-paused .btn { margin-top: 12px; }
+/* Team → Edit access: the plan note inside "Fine-tune individual permissions". */
+.tm-plan-hint { color: var(--warning, #b45309); }

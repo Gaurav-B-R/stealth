@@ -16,8 +16,11 @@ import pytest
 
 from app import enterprise_access as access
 from app import enterprise_billing as billing
+from app import enterprise_catalog as catalog
+from app import enterprise_coupons as coupons
 from app import enterprise_credits as credits
 from app import enterprise_help as help_mod
+from app import money
 
 WEB_APP = Path(__file__).resolve().parents[1]
 
@@ -98,30 +101,240 @@ def test_every_data_scope_is_documented(full_text):
 # Registry drift — plans, credit actions, packs
 # ---------------------------------------------------------------------------
 
+def _plan_line(text: str, key: str) -> str:
+    """The rendered plans-list bullet for one plan (`(key)` is unique to it)."""
+    line = next((ln for ln in text.splitlines() if f"(`{key}`)" in ln), None)
+    assert line, f"plan {key} has no line in the plans list"
+    return line
+
+
 def test_every_plan_is_documented(full_text):
     for key in billing.PLAN_ORDER:
         plan = billing.PLANS[key]
-        assert plan["label"] in full_text, f"plan {plan['label']!r} missing from help"
-        assert f"{plan['included_credits']:,}" in full_text, (
-            f"plan {key} credit allowance missing from help"
-        )
+        line = _plan_line(full_text, key)
+        assert plan["label"] in line, f"plan {plan['label']!r} missing from help"
+        assert f"{plan['included_credits']:,} AI credits" in line, f"plan {key} credits missing"
+        assert f"{plan['max_seats']:,} staff seat" in line, f"plan {key} seats missing"
+        assert f"{plan['max_clients']:,} open student files" in line, f"plan {key} open files missing"
+        assert f"{plan['max_reads']:,} AI document reads" in line, f"plan {key} reads missing"
+        if key in billing.PAID_PLAN_KEYS:
+            price = money.format_money(billing.plan_price_minor(key, "INR"), "INR")
+            assert f"{price}/month" in line, f"plan {key} INR price missing"
+
+
+def test_plans_follow_env_overrides(monkeypatch):
+    """The plans list is rendered from PLANS at request time, never cached copy: an env
+    override (here simulated on the registry) must show up in the very next answer."""
+    monkeypatch.setitem(billing.PLANS["starter"], "max_reads", 777)
+    monkeypatch.setitem(billing.PLANS["starter"], "max_clients", 4321)
+    line = _plan_line(help_mod.full_guide_text(), "starter")
+    assert "777 AI document reads" in line
+    assert "4,321 open student files" in line
+
+
+def test_old_client_limit_wording_is_gone(full_text):
+    """Plans are sized by OPEN student files since 2026-10-22; "active clients" taught the
+    assistant the old rule (every client counts)."""
+    assert not re.search(r"active[- ]clients?", full_text, re.I)
+    assert "open student files" in full_text
 
 
 def test_every_credit_action_is_documented(full_text):
-    for action in credits.ACTIONS.values():
+    for action in credits.actions_payload():
         assert action["label"] in full_text, f"credit action {action['label']!r} missing"
+        # The price is quoted with its UNIT ("4 credits per 15 pages"), never as a bare
+        # number that reads as a flat price.
+        assert f"**{action['label']}** — {action['price_label']}." in full_text, (
+            f"credit action {action['key']} must be priced with its price_label"
+        )
+    assert not re.search(r"\d+ credit\(s\)", full_text), "bare credit counts are back"
 
 
 def test_every_topup_pack_is_documented(full_text):
-    for key in credits.PACKAGE_ORDER:
-        pack = credits.PACKAGES[key]
+    for pack in credits.packages_payload("INR"):
         assert pack["label"] in full_text, f"pack {pack['label']!r} missing from help"
+        assert f"{pack['amount_display']} for {pack['total_credits']:,} credits" in full_text
 
 
 def test_free_allowances_are_documented(full_text):
+    copilot = next(a for a in credits.actions_payload() if a["key"] == credits.COPILOT_ACTION_KEY)
     assert f"{credits.COPILOT_FREE_DAILY} AI assistant messages" in full_text
-    assert f"{credits.DEEP_SCAN_FREE_MONTHLY_ORG_CAP} free Deep Scans" in full_text
+    assert f"then {copilot['price_label']}" in full_text
     assert f"{credits.INTERVIEW_FREE_STAFF_PREVIEWS} free staff mock-interview previews" in full_text
+
+
+def test_free_deep_scans_only_when_configured(monkeypatch):
+    """No free Deep Scans by default (2026-10-22). The free-scan sentence must exist only
+    while ENTERPRISE_DEEP_SCAN_FREE_SCANS_PER_CLIENT > 0 — and come back if a promotion
+    turns it on, so the help never contradicts the scan screen either way."""
+    monkeypatch.setattr(credits, "DEEP_SCAN_FREE_SCANS_PER_CLIENT", 0)
+    text = help_mod.full_guide_text()
+    assert "free Deep Scans" not in text
+    assert not re.search(r"first (?:Deep )?scans? (?:is |are )?free", text, re.I)
+    assert "no free scans" in text
+
+    monkeypatch.setattr(credits, "DEEP_SCAN_FREE_SCANS_PER_CLIENT", 1)
+    text = help_mod.full_guide_text()
+    assert "each client's first 1 Deep Scan" in text
+    assert f"{credits.DEEP_SCAN_FREE_MONTHLY_ORG_CAP} free Deep Scans" in text
+    assert "no free scans" not in text
+
+
+# ---------------------------------------------------------------------------
+# Registry drift — tax, yearly, currency (each printed only while it is true)
+# ---------------------------------------------------------------------------
+
+def test_gst_wording_follows_the_tax_rate(monkeypatch):
+    """ENTERPRISE_GST_PERCENT=0 is a supported configuration (GST registration deferred):
+    then nothing in the help may say GST, exactly like the price cards and checkout."""
+    monkeypatch.setattr(money, "GST_PERCENT", money.Decimal(0))
+    assert money.tax_note("INR") == ""
+    text = help_mod.full_guide_text()
+    assert "GST" not in text
+    assert "No tax is added at checkout" in text
+    starter_price = money.format_money(billing.plan_price_minor("starter", "INR"), "INR")
+    assert f"{starter_price}/month." in _plan_line(text, "starter")
+
+    monkeypatch.setattr(money, "GST_PERCENT", money.Decimal(18))
+    text = help_mod.full_guide_text()
+    assert f"{starter_price}/month + GST." in _plan_line(text, "starter")
+    assert "18% GST is added at checkout" in text
+
+
+def test_yearly_only_when_enabled(monkeypatch):
+    monkeypatch.setattr(billing, "YEARLY_ENABLED", False)
+    monkeypatch.setattr(billing, "ENTERPRISE_FREE", False)
+    text = help_mod.full_guide_text()
+    assert "yearly" not in text.lower()
+    assert "months free" not in text
+
+    monkeypatch.setattr(billing, "YEARLY_ENABLED", True)
+    text = help_mod.full_guide_text()
+    yearly = money.format_money(billing.plan_price_minor("starter", "INR", "yearly"), "INR")
+    assert "billed monthly or yearly" in text
+    assert f"{billing.PLANS['starter']['label']} {yearly}" in text
+    assert f"{12 - money.YEARLY_PRICE_MONTHS} months free" in text
+
+
+def test_currency_region_rule_is_documented(full_text):
+    assert "billed in INR only" in full_text
+    assert "can't be billed in INR" in full_text
+    for code in money.supported_charge_currencies():
+        if code != "INR":
+            assert code in full_text, f"charge currency {code} missing from the region rule"
+    for code in billing.INR_REGION_COUNTRIES - {"IN"}:
+        name = help_mod._COUNTRY_NAMES.get(code, code)
+        assert name in full_text, f"INR-region country {code} missing"
+
+
+def test_coupon_cap_is_documented(full_text):
+    assert f"at most {help_mod._percent(coupons.max_percent_off())}% off" in full_text
+
+
+# ---------------------------------------------------------------------------
+# Registry drift — open files, trial / AI pause, reads, Team features, client links
+# ---------------------------------------------------------------------------
+
+def test_open_file_rule_is_documented(full_text):
+    for stage in catalog.CLIENT_STAGES:
+        assert stage["label"] in full_text, f"stage {stage['label']!r} missing from the open-file rule"
+    closed = catalog.CLIENT_STAGE_MAP[catalog.STAGE_CLOSED]
+    assert f"move it to \"{closed['label']}\"" in full_text
+    assert closed["description"] in full_text
+    assert f"{billing.FILE_LIMIT_GRACE_DAYS} days from the first add" in full_text
+    assert "Reopening a file" in full_text
+
+
+def test_file_grace_zero_reads_as_hard_limit(monkeypatch):
+    monkeypatch.setattr(billing, "FILE_LIMIT_GRACE_DAYS", 0)
+    text = help_mod.full_guide_text()
+    assert "The open-file limit is a hard limit" in text
+    assert "keep adding for" not in text
+    assert "adding past the open-file limit is allowed" not in text
+
+
+def test_trial_and_ai_pause_are_documented(full_text):
+    trial = billing.trial_facts()
+    assert f"starts on the {trial['label']}" in full_text
+    assert f"{trial['reads']:,} AI document reads for the whole trial" in full_text
+    assert f"+{trial['demo_bonus_credits']:,} more, once, after a demo call" in full_text
+    assert billing.AI_PAUSED_TRIAL_MESSAGE in full_text
+    assert billing.AI_PAUSED_CLIENT_MESSAGE in full_text
+    assert billing.AI_PAUSED_LAPSED_MESSAGE.format(plan=billing.PLANS["starter"]["label"]) in full_text
+    assert "One free trial per company" in full_text
+    # Top-ups are add-ons to a live plan or trial (POST /credits/topup/checkout 402s while paused).
+    assert "can't be bought while AI is paused" in full_text
+
+
+def test_ai_pause_text_follows_its_switch(monkeypatch):
+    monkeypatch.setattr(billing, "AI_PAUSE_ON_EXPIRY", False)
+    text = help_mod.full_guide_text()
+    assert billing.AI_PAUSED_TRIAL_MESSAGE not in text
+    assert "can't be bought while AI is paused" not in text
+    assert "AI features keep working" in text
+
+
+def test_reads_allowance_is_documented(full_text):
+    for key in billing.PLAN_ORDER:
+        plan = billing.PLANS[key]
+        assert f"{plan['label']} {plan['max_reads']:,}" in full_text, f"reads for {key} missing"
+    assert f"One read covers up to {credits.DOCUMENT_BLOCK_PAGES} pages" in full_text
+    assert "\"Not read yet\"" in full_text and "\"Read now\"" in full_text
+    assert "never uses reads" in full_text
+
+
+def test_team_features_are_documented(full_text):
+    team = [billing.PLANS[k]["label"] for k in billing.PLAN_ORDER
+            if k in billing.PAID_PLAN_KEYS and billing.PLANS[k]["features_tier"] == "team"]
+    starter_like = [billing.PLANS[k]["label"] for k in billing.PLAN_ORDER
+                    if k in billing.PAID_PLAN_KEYS and billing.PLANS[k]["features_tier"] != "team"]
+    assert team and starter_like, "expected both tiers in the catalog"
+    assert f"are part of the {help_mod._join(team)} plans and the free trial while it runs" in full_text
+    assert f"On {help_mod._join(starter_like)}: one office" in full_text
+    assert "Nothing is taken away on a lower plan" in full_text
+
+
+def test_client_link_terms_are_documented(full_text):
+    by_key = {a["key"]: a for a in credits.actions_payload()}
+    assert f"Client Copilot link: {by_key['copilot_client']['price_label']}" in full_text
+    assert f"up to {credits.COPILOT_CLIENT_MESSAGES} messages over {credits.COPILOT_CLIENT_DAYS} days" in full_text
+    assert f"up to {credits.INTERVIEW_MAX_QUESTIONS} officer questions and one feedback report" in full_text
+
+
+def test_hand_written_guide_states_no_billing_numbers():
+    """The curated prose must not restate anything a registry owns — prices, "+ GST",
+    seat/file/credit/read/message counts, the trial length, free allowances. Those come only
+    from {{PLACEHOLDER}} blocks, which is what keeps them true after an env override, a
+    re-price or GST going to 0. (The old guide hand-wrote "up to 100 messages" and "18% GST"
+    and both went stale on the 2026-10-22 re-price.)"""
+    topics = help_mod._parse_guide(help_mod.GUIDE_PATH.read_text(encoding="utf-8"))
+    banned = [
+        r"\b\d[\d,]*\s+(?:AI\s+)?credits?\b",
+        r"\b\d[\d,]*\s+(?:AI\s+)?(?:document\s+)?reads?\b",
+        r"\b\d[\d,]*\s+(?:free\s+)?(?:assistant\s+)?messages?\b",
+        r"\b\d[\d,]*\s+open(?:\s+student)?\s+files?\b",
+        r"\b\d[\d,]*\s+(?:team\s+|staff\s+)?seats?\b",
+        r"\b\d[\d,]*\s+(?:officer\s+)?questions\b",
+        r"\bGST\b",
+        r"\b\d+-day\s+(?:free\s+)?(?:trial|sandbox|grace)\b",
+        r"\bfirst\s+(?:Deep\s+)?scan\s+(?:is\s+)?free\b",
+        r"\bactive[- ]clients?\b",
+        r"\bmonths free\b",
+    ]
+    prices = [
+        money.format_money(billing.plan_price_minor(k, "INR"), "INR")
+        for k in billing.PAID_PLAN_KEYS
+    ] + [p["amount_display"] for p in credits.packages_payload("INR")]
+    for key, topic in topics.items():
+        body = topic["body"]
+        for pattern in banned:
+            hit = re.search(pattern, body, re.I)
+            assert not hit, (
+                f"topic {key} hand-writes {hit.group(0)!r} — use a generated block "
+                "(app/enterprise_help.py) instead"
+            )
+        for price in prices:
+            assert price not in body, f"topic {key} hand-writes the price {price}"
 
 
 # ---------------------------------------------------------------------------

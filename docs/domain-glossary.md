@@ -1,6 +1,6 @@
 # Rilono Domain Glossary
 
-Last updated: 2026-03-25
+Last updated: 2026-10-22
 
 ## Product Terms
 
@@ -64,6 +64,61 @@ Unique user code used to attribute referred signups and referral rewards.
 
 `Coupon code`
 Discount code tracked in `coupon_codes` with percentage and optional usage limits.
+
+## Enterprise Plan And Metering Terms
+
+These terms come from the 2026-10-22 pricing model. Every number they mention is a default and can be changed with an environment variable; see [runbook.md](runbook.md#7-enterprise-pricing-v2-configuration) and [decision D-009](decisions.md#d-009-enterprise-pricing-v2-open-file-plans-metered-ai-one-ai-paused-gate).
+
+`Plan (enterprise)`
+The tier an organization is on, stored in `enterprise_subscriptions.plan`. The internal keys never change (`sandbox`, `starter`, `growth`, `scale`) because DB rows and Razorpay notes carry them. Customers see "14-day free trial", "Starter", "Team" and "Multi-branch". `normalize_plan_key` also accepts `team` and `multi_branch`. Defined in `app/enterprise_billing.py` `PLANS`; prices are in `app/money.py` `PRICE_BOOK`.
+
+`Open student file`
+An enterprise client whose stage has `is_open=True` in `app/enterprise_catalog.py` `CLIENT_STAGES`. A plan's client limit (`max_clients`, shown as "open files") counts only these: `billing.open_client_count`. Approved, Rejected, Closed and On Hold files don't count. Customer copy says "open student files", never "active clients".
+
+`Closed (stage)`
+A terminal, not-open client stage for a file that ended without a visa outcome (the student withdrew, deferred or went elsewhere). It frees the file's open-file slot. It sits off the journey tracker, like Rejected.
+
+`Reopen`
+A stage change from a not-open stage (Approved, Rejected, Closed, On Hold) into an open one (`catalog.is_reopen`). The open-file limit treats it as an add, so closing, adding and reopening cannot walk past the limit.
+
+`File grace period`
+How long an organization may stay over its open-file limit before adds are refused: `ENTERPRISE_FILE_LIMIT_GRACE_DAYS`, default 14, where 0 means a hard cap. The clock starts at the first over-limit add (`enterprise_subscriptions.files_over_limit_since`) and stops counting once open files are back within the limit. Seats have no grace period.
+
+`AI read (AI document read)`
+One unit of the monthly reading allowance. A read covers up to 15 pages of free upload text extraction, so a document needs `ceil(pages/15)` reads (images and text files need 1), up to 10 per document. The per-plan allowance is granted per billing period (once for the trial) and stored on the credit wallet (`reads_period`, `reads_granted`, `reads_used`). Unused reads don't roll over. Reads are not credits: they are never bought. A paid document check never uses them.
+
+`Read status`
+`enterprise_client_documents.read_status`, one of `read`, `not_read`, `pending`, `failed`, or NULL for legacy rows. A document uploaded while the reads are used up, or while AI is paused, is stored as `not_read` ("Not read yet" in the UI). "Read now" (`POST /api/enterprise/clients/{id}/documents/{doc_id}/read`) reads it later and consumes reads.
+
+`AI paused`
+The shared gate (`billing.ai_access_state` / `enforce_ai_access_or_402`) that refuses every AI path with HTTP 402 before any model call or charge. It closes when the free trial has expired, or when a paid plan has lapsed with no paid period in force. While paused, uploads are stored "not read", credit top-ups are refused, and data stays readable. Staff see "Your free trial has ended — AI features are paused…" (or the lapsed or company-domain variant). Clients on interview and Copilot links see a neutral "contact your consultancy" message. Kill switch: `ENTERPRISE_AI_PAUSE_ON_EXPIRY=false`.
+
+`Team features`
+The features gated by plan: creating or editing offices (`branches`), creating or editing custom roles (`custom_roles`), and per-branch reporting and filters (`branch_reporting`) — `billing.FEATURE_KEYS`. Team and Multi-branch include them, and so does a live free trial. Starter has the default office and the built-in roles. On a lower plan, existing offices and roles keep working; only creating or editing them returns 402 (`enforce_feature_or_402`). Every AI feature is on every plan.
+
+`Branch Pack`
+An add-on for networks above the top plan's open-file limit, sold by invoice and set per organization by Rilono staff (`enterprise_subscriptions.branch_packs`). Each pack adds 100 open files, 10 seats, 200 credits a month and 200 reads a month on top of a paid plan or an admin override. Packs apply only while a paid plan is in force.
+
+`Admin override`
+A per-organization limit set by Rilono staff in the admin console: `override_max_seats`, `override_max_clients`, `override_included_credits` or `override_monthly_reads`. Staff can also set a `trial_ends_at` extension. An override replaces the plan's number, and Branch Packs add on top. Overrides stop applying once a paid plan lapses.
+
+`Demo-call bonus`
+Extra trial credits that Rilono staff grant once per organization after a demo call: `ENTERPRISE_TRIAL_DEMO_BONUS_CREDITS`, default 50. The grant goes through admin credits/adjust with `kind=demo_call_bonus`, and `enterprise_subscriptions.demo_bonus_granted_at` makes it once only. It is not part of the plan allowance, so it doesn't expire with a period.
+
+`One trial per company domain`
+The signup rule in `app/routers/enterprise.py` and `app/email_domains.py`. A new workspace whose owner email is at a company domain (not a public mailbox) already used by another workspace starts with its trial already ended (`trial_domain_blocked`).
+
+`Currency region`
+The countries charged INR only (`ENTERPRISE_INR_REGION_COUNTRIES`, default IN, NP, BD, LK, NG, GH, KE). Everywhere else is charged a fixed non-INR price ladder and never INR. The rule lives in `billing.charge_currency_for_org`.
+
+`Price label`
+How an AI action's price reads with its unit, for example "4 credits per 15 pages", "40 credits per scan" or "1 credit per 2 messages" (`credits.actions_payload()["price_label"]`). UI and help text show this label, never the bare per-unit `credits` number.
+
+`Tax note`
+`money.tax_note(currency)` returns "+ GST" when a tax is charged on top of the ex-tax price, and "" otherwise, including when `ENTERPRISE_GST_PERCENT=0`. It is the only source of "+ GST" wording.
+
+`Mock interview session`
+A server-side `EnterpriseInterviewSession` row. It is created and charged when an interview starts, after the officer's first question succeeds. It holds the transcript, up to `ENTERPRISE_INTERVIEW_MAX_QUESTIONS` (12) officer questions and one feedback report. `status` is `in_progress`, `completed` or `abandoned`. Only completed sessions count as interviews in lists and reports.
 
 ## Platform Terms
 

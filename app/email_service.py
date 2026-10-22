@@ -436,15 +436,59 @@ def send_student_welcome_email(
         return False
 
 
+def _enterprise_trial_sentence(*, trial_domain_blocked: bool) -> str:
+    """The welcome email's plan sentence (HTML), built from the live trial catalog
+    (enterprise_billing.trial_facts) so it can never promise a different trial than the
+    one the workspace actually got — the old hand-typed "2 users, 10 active clients and
+    100 AI credits" outlived two re-pricings.
+
+    A signup whose company email domain already used a trial gets NO trial, so it must not
+    be promised one: it is told to choose a plan instead, in the same words the portal uses.
+    While billing is switched off (ENTERPRISE_FREE) there is no trial to describe at all.
+    """
+    # Lazy import: email_service is imported by nearly every router, and keeping billing
+    # (and its catalog/money imports) out of that import chain avoids a cycle.
+    from app import enterprise_billing as billing
+
+    if billing.ENTERPRISE_FREE:
+        return ""
+    if trial_domain_blocked:
+        return (
+            "Your company has already used its free trial, so this workspace starts without "
+            "one — a plan turns on adding students and the AI features."
+        )
+    facts = billing.trial_facts()
+
+    def n(value) -> str:
+        return f"{int(value or 0):,}"
+
+    credits_part = f"{n(facts['included_credits'])} AI credits"
+    if int(facts.get("demo_bonus_credits") or 0) > 0:
+        credits_part += f" (+{n(facts['demo_bonus_credits'])} after a demo call)"
+    sentence = (
+        f"Your {escape(str(facts['label']))} includes {n(facts['max_seats'])} staff seats, "
+        f"{n(facts['max_open_files'])} open student files, {credits_part} and "
+        f"{n(facts['reads'])} AI document reads — no card needed."
+    )
+    if facts.get("ai_pauses_on_expiry"):
+        sentence += " When it ends, AI features pause until you choose a plan — your data stays."
+    return sentence
+
+
 def send_enterprise_welcome_email(
     *,
     to_email: str,
     full_name: str = "",
     company: str = "",
     portal_url: str = DEFAULT_PUBLIC_BASE_URL,
+    trial_domain_blocked: bool = False,
 ) -> bool:
     """Onboarding email for a new B2B enterprise owner, sent once when their workspace
-    is created. Transactional — no-ops without Resend."""
+    is created. Transactional — no-ops without Resend.
+
+    `trial_domain_blocked`: the workspace was created with its trial already over because
+    the owner's company email domain had one before (see the signup route) — the email
+    then asks them to choose a plan instead of promising a trial."""
     if not RESEND_API_KEY:
         print("Enterprise welcome email skipped: RESEND_API_KEY not configured.")
         return False
@@ -455,6 +499,19 @@ def send_enterprise_welcome_email(
     org = escape((company or "").strip() or "your consultancy")
     portal = portal_url.rstrip("/")
     portal_open = portal + "/enterprise"
+    trial_sentence = _enterprise_trial_sentence(trial_domain_blocked=bool(trial_domain_blocked))
+    next_steps = (
+        "choose a plan in <b>Plans &amp; Billing</b>, then add your first student and invite your team."
+        if trial_domain_blocked else
+        "add your first student, invite your team, and explore the AI copilot."
+    )
+    # A blocked signup may be a genuine false positive (a second team at a large company), so
+    # the reply line invites that conversation too.
+    closing = (
+        "Think that's a mistake, or want a walkthrough? Just reply to this email."
+        if trial_domain_blocked else
+        "Want a walkthrough? Just reply to this email."
+    )
     features = (
         _welcome_feature_row("🗂️", "Clients & pipeline in one place",
                              "Track every student, document, stage and deadline — with team roles and assignment.")
@@ -481,9 +538,9 @@ def send_enterprise_welcome_email(
                 font-weight:700;font-size:15px;padding:13px 24px;border-radius:11px">Open your portal →</a>
             </div>
             <p style="margin:16px 0 0;color:#64748b;font-size:13px;line-height:1.6">
-              <b>Next steps:</b> add your first student, invite your team, and explore the AI copilot.
-              You're on the free 14-day sandbox — 2 users, 10 active clients and 100 AI credits, no card.
-              Want a walkthrough? Just reply to this email.</p>
+              <b>Next steps:</b> {next_steps}
+              {trial_sentence}
+              {closing}</p>
           </div>
         </div>
         <p style="text-align:center;color:#94a3b8;font-size:11px;margin-top:16px">
@@ -3253,13 +3310,38 @@ def send_enterprise_copilot_invite_email(
     destination_country: str,
     visa_type: str,
     logo_url: Optional[str] = None,
+    messages_included: Optional[int] = None,
+    expires_at: Optional[datetime] = None,
 ) -> tuple[bool, Optional[str], Optional[str]]:
-    """Email a client a secure link to chat with their consultancy's AI copilot about their application."""
+    """Email a client a secure link to chat with their consultancy's AI copilot about their application.
+
+    `messages_included` / `expires_at` are the link's real limits (the invite row's message
+    allowance and expiry). When given, the email states them — a client link is a small,
+    fixed allowance (enterprise_credits.COPILOT_CLIENT_MESSAGES), and an email promising
+    help "any time" would be contradicted by the chat page a few messages in."""
     if not RESEND_API_KEY:
         return False, None, "Email service is not configured."
     recipient = (to_email or "").strip().lower()
     if not recipient:
         return False, None, "Recipient email is missing."
+
+    limits_text = ""
+    if messages_included is not None and int(messages_included) > 0:
+        count = int(messages_included)
+        limits_text = f"This link includes {count:,} message{'' if count == 1 else 's'}"
+        if expires_at is not None:
+            limits_text += f" and works until {expires_at:%d %b %Y}"
+        limits_text += "."
+    limits_html = (
+        f'<p style="margin:0 0 18px;font-size:14px;color:#334155;">{escape(limits_text)}</p>'
+        if limits_text else ""
+    )
+    # Without known limits keep the old open-ended phrasing; with them, don't say "any time".
+    ask_tail = (
+        "and your timelines in plain language — it answers from your own application file."
+        if limits_text else
+        "and your timelines — any time, in plain language, and it answers from your own application file."
+    )
 
     org_label = _sanitize_header_text(organization_name) or "Your consultancy"
     name = (client_name or "").strip() or "there"
@@ -3290,7 +3372,8 @@ def send_enterprise_copilot_invite_email(
               <p style="margin:0 0 14px;">Hi {safe_name},</p>
               <p style="margin:0 0 18px;"><b>{safe_org}</b> has set up a personal copilot for your
                 <b>{safe_country}</b> application ({safe_visa}). Ask it about your documents, your next steps
-                and your timelines — any time, in plain language, and it answers from your own application file.</p>
+                {ask_tail}</p>
+              {limits_html}
               <table role="presentation" cellspacing="0" cellpadding="0" style="margin:0 auto 18px;"><tr><td align="center" style="border-radius:12px;background:linear-gradient(135deg,#4f46e5,#7c3aed);">
                 <a href="{safe_url}" style="display:inline-block;padding:13px 30px;color:#fff;text-decoration:none;font-weight:700;font-size:15px;">Open my copilot &rarr;</a>
               </td></tr></table>
@@ -3306,8 +3389,9 @@ def send_enterprise_copilot_invite_email(
     text_content = (
         f"Hi {name},\n\n{org_label} has set up a personal copilot for your "
         f"{destination_country or ''} application ({visa_type or ''}).\n"
-        f"Ask about your documents, next steps and timelines any time at:\n{copilot_url}\n\n"
-        "For your security, clicking the link asks for a one-time code sent to this email. "
+        f"Ask about your documents, next steps and timelines{' any time' if not limits_text else ''} at:\n{copilot_url}\n\n"
+        + (f"{limits_text}\n\n" if limits_text else "")
+        + "For your security, clicking the link asks for a one-time code sent to this email. "
         "This link is personal to you — please don't share it.\n"
     )
     try:

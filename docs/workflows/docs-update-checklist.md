@@ -1,6 +1,6 @@
 # Docs Update Checklist
 
-Last updated: 2026-08-15
+Last updated: 2026-10-22
 
 Use this checklist before merging any feature, fix, or operational change.
 
@@ -28,10 +28,18 @@ Run this checklist if your change touches any of:
    assistant's in-product help guide
    [app/prompts/ENTERPRISE_HELP_GUIDE.md](../../app/prompts/ENTERPRISE_HELP_GUIDE.md)
    (the Rilono AI assistant answers "how do I…" questions from it). Registry-driven
-   facts (permissions, roles, scopes, plans, credit prices) inject themselves via
-   `{{PLACEHOLDER}}` blocks — only hand-written walkthrough prose needs editing.
-   Then run `python -m pytest tests/test_enterprise_help.py` — it fails when the
-   guide drifts from the code's registries or the portal's screen names.
+   facts inject themselves via `{{PLACEHOLDER}}` blocks generated in
+   `app/enterprise_help.py`. These cover permissions, roles, scopes, plans and their
+   limits, prices and "+ GST" (only while tax applies), yearly billing (only while
+   enabled), open files and grace, AI reads, the AI-paused rule, Team features, credit
+   prices and client-link terms. Only hand-written walkthrough prose needs editing, and
+   it must not restate a price, limit, allowance or "GST". A new billing fact gets a
+   generator, not a sentence. Then run `python -m pytest tests/test_enterprise_help.py`.
+   It fails when the guide drifts from the code's registries or the portal's screen
+   names, or when the prose hand-writes a billing number.
+10. If an `ENTERPRISE_*` (or other) environment variable was added or its default
+    changed, add it to the table in [runbook.md § 7](../runbook.md#7-enterprise-pricing-v2-configuration)
+    with its default and meaning.
 
 ## Definition Of Done
 

@@ -1444,15 +1444,15 @@
         .enterprise-section { border-top-color: rgba(15, 23, 42, 0.08); }
 
         /* ---- Pricing tiers ------------------------------------------------
-           Four cards, one per published tier. Every price here is the INR
-           anchor from app/money.py PRICE_BOOK (version 2026-08-17), quoted
-           ex-GST. GST applies ONLY to INR billing in India; the other launch
-           currencies (USD, GBP, EUR, CAD, AUD, AED, SGD) are zero-rated
-           exports, so any "+ GST" copy must stay scoped to INR — the same
-           rule the product enforces server-side (app/money.py::quote_with_tax).
-           If these numbers change, they change in app/money.py PRICE_BOOK and
-           in app/enterprise_billing.py PLANS too, or the page and the checkout
-           will quote different prices. */
+           Four cards: the free trial and the three paid plans. Every number
+           in them is an ENT_ price token that app/main.py fills at serve time
+           from app/enterprise_public_pricing.py — i.e. from app/money.py
+           PRICE_BOOK and app/enterprise_billing.py PLANS, the same code
+           checkout charges from — so never type a price, limit or credit
+           cost into this markup. The tax note is a token too: it is empty while
+           ENTERPRISE_GST_PERCENT is 0 (and the empty line hides itself), and
+           yearly copy sits inside YEARLY blocks that render nothing until
+           yearly billing is switched on. */
         .ent-price-grid {
             display: grid;
             grid-template-columns: repeat(4, 1fr);
@@ -1514,6 +1514,15 @@
             font-weight: 700;
             color: var(--enterprise-muted);
         }
+        /* The tax line is a token that renders empty at a 0% GST rate; without this the
+           empty div would still take a flex gap under the price. */
+        .ent-price-gst:empty { display: none; }
+        .ent-price-yearly {
+            margin-top: -0.45rem;
+            font-size: 0.78rem;
+            font-weight: 700;
+            color: #4f46e5;
+        }
         .ent-price-specs {
             display: grid;
             gap: 0.35rem;
@@ -1539,6 +1548,38 @@
             margin: 1.4rem 0 0;
             font-size: 0.86rem;
             color: var(--enterprise-muted);
+        }
+        .ent-price-actions {
+            margin-top: 1.4rem;
+            padding: 1.1rem 1.25rem;
+            border: 1px solid var(--enterprise-line);
+            border-radius: 16px;
+            background: #ffffff;
+        }
+        .ent-price-actions h3 {
+            margin: 0 0 0.6rem;
+            font-size: 0.95rem;
+            font-weight: 800;
+            color: var(--enterprise-ink);
+        }
+        .ent-price-actions ul {
+            display: grid;
+            grid-template-columns: repeat(2, minmax(0, 1fr));
+            gap: 0.35rem 1.4rem;
+            margin: 0;
+            padding: 0;
+            list-style: none;
+        }
+        .ent-price-actions li {
+            display: flex;
+            justify-content: space-between;
+            gap: 0.8rem;
+            font-size: 0.86rem;
+            color: #475569;
+        }
+        .ent-price-actions li b { color: var(--enterprise-ink); font-weight: 800; text-align: right; }
+        @media (max-width: 720px) {
+            .ent-price-actions ul { grid-template-columns: 1fr; }
         }
         @media (max-width: 1000px) {
             .ent-price-grid { grid-template-columns: repeat(2, 1fr); }
@@ -1715,7 +1756,7 @@
                 "name": "What does Rilono Enterprise cost?",
                 "acceptedAnswer": {
                     "@type": "Answer",
-                    "text": "Plans are Starter at \u20b92,999/month, Growth at \u20b96,999/month and Scale at \u20b914,999/month, plus GST on INR billing in India only. You can also pay in USD, GBP, EUR, CAD, AUD, AED or SGD, billed tax-free as exports. They cover 10, 30 and 100 users and 100, 500 and 2,000 active clients respectively, and each includes a monthly AI credit allowance of 1,000, 3,500 and 10,000 credits. Every workspace starts on a free 14-day self-serve sandbox with 2 users, 10 active clients and 100 one-time AI credits, and no card."
+                    "text": "Every plan gets every AI feature; plans differ by open student files, staff and the AI credits included each month. {{ENT_STARTER_LABEL}} is {{ENT_STARTER_PRICE_INR}}/month for {{ENT_STARTER_OPEN_FILES}} open files, {{ENT_STARTER_SEATS}} staff and {{ENT_STARTER_CREDITS}} AI credits a month. {{ENT_TEAM_LABEL}} is {{ENT_TEAM_PRICE_INR}}/month for {{ENT_TEAM_OPEN_FILES}} open files, {{ENT_TEAM_SEATS}} staff and {{ENT_TEAM_CREDITS}} credits, and adds multiple offices, custom roles and per-branch reporting. {{ENT_MULTI_BRANCH_LABEL}} is {{ENT_MULTI_BRANCH_PRICE_INR}}/month for {{ENT_MULTI_BRANCH_OPEN_FILES}} open files, {{ENT_MULTI_BRANCH_SEATS}} staff and {{ENT_MULTI_BRANCH_CREDITS}} credits. {{ENT_TAX_SENTENCE}} International offices pay in {{ENT_CURRENCIES_OTHER}}.{{ENT_YEARLY_SENTENCE}} Every workspace starts on a {{ENT_TRIAL_LABEL}} with {{ENT_TRIAL_SEATS}} staff, {{ENT_TRIAL_OPEN_FILES}} open files and {{ENT_TRIAL_CREDITS_NOTE}} — no card needed."
                 }
             },
             {
@@ -1723,7 +1764,31 @@
                 "name": "Are AI credits included in the plan or bought separately?",
                 "acceptedAnswer": {
                     "@type": "Answer",
-                    "text": "Both. Your plan grants its credit allowance to your wallet at the start of every billing period, and that is what normal use runs on. If a busy month exhausts it you can top up at any time. Unused plan credits do not carry into the next period; top-up credits you purchase never expire."
+                    "text": "Both. Your plan grants its credit allowance to your wallet at the start of every billing period, and that is what normal use runs on. A document check is {{ENT_DOC_CHECK_PRICE}}, an SOP or LOR draft {{ENT_WRITING_PRICE}}, a mock visa interview {{ENT_INTERVIEW_PRICE}} and a Deep Scan file audit {{ENT_DEEP_SCAN_PRICE}}. If a busy month uses up the allowance, top up at any time: {{ENT_TOPUP_PACKS_INR}}. Unused plan credits do not carry into the next period; top-up credits you purchase never expire."
+                }
+            },
+            {
+                "@type": "Question",
+                "name": "What counts as an open student file?",
+                "acceptedAnswer": {
+                    "@type": "Answer",
+                    "text": "A client whose file is still in progress. {{ENT_FILES_NOTE}}{{ENT_IF_FILE_GRACE}} If a busy month takes you over your plan's limit, you can keep adding files for {{ENT_FILE_GRACE_DAYS}} days, then close finished files or upgrade.{{ENT_END_IF_FILE_GRACE}}"
+                }
+            },
+            {
+                "@type": "Question",
+                "name": "What is AI document reading?",
+                "acceptedAnswer": {
+                    "@type": "Answer",
+                    "text": "Rilono AI reads every document you upload so the assistant, checks and audits can use it. Each plan includes a monthly reading allowance, one read per {{ENT_READ_PAGES}} pages. If it runs out, uploads are still stored and marked Not read yet until the allowance refreshes. A paid document check reads the file itself and never uses your reads."
+                }
+            },
+            {
+                "@type": "Question",
+                "name": "What happens when the free trial ends?",
+                "acceptedAnswer": {
+                    "@type": "Answer",
+                    "text": "{{ENT_TRIAL_END_NOTE}}. Choose a plan to carry on — nothing in your workspace is deleted."
                 }
             },
             {
@@ -1859,7 +1924,7 @@
                 <div class="enterprise-hero-copy-block">
                     <div class="enterprise-eyebrow">
                         <span class="enterprise-eyebrow-dot"></span>
-                        For study-abroad consultancies &middot; plans from &#8377;2,999/month + GST (India), AI credits included
+                        For study-abroad consultancies &middot; plans from {{ENT_FROM_PRICE_INR}}/month{{ENT_TAX_SUFFIX}}, AI credits included
                     </div>
                     <h1>
                         Run your study-abroad practice in one platform.
@@ -1868,7 +1933,7 @@
                     <p class="enterprise-hero-copy">
                         Leads, clients, documents, application stages and team access in one portal — across 15 study
                         destinations, from the US to Singapore. AI shortlists universities and checks documents before
-                        you submit. <strong>Free 14-day sandbox, no card.</strong>
+                        you submit. <strong>{{ENT_TRIAL_LABEL}}, no card.</strong>
                     </p>
                     <div class="enterprise-actions">
                         <a class="enterprise-btn enterprise-btn-primary" href="https://enterprise.rilono.com/enterprise">
@@ -1890,13 +1955,13 @@
                         </div>
                         <div class="enterprise-proof-card">
                             <div class="proof-ic">🗂️</div>
-                            <strong>Free 14-day sandbox</strong>
+                            <strong>{{ENT_TRIAL_LABEL}}</strong>
                             <span>No card required</span>
                         </div>
                         <div class="enterprise-proof-card">
                             <div class="proof-ic">👥</div>
                             <strong>Team roles</strong>
-                            <span>Admin to Viewer, plus custom roles</span>
+                            <span>Admin to Viewer, plus custom roles on {{ENT_TEAM_LABEL}}</span>
                         </div>
                     </div>
                 </div>
@@ -1990,11 +2055,11 @@
                 <div class="enterprise-switch-stats">
                     <div><strong>1 portal</strong><span>replaces 5+ disconnected tools and spreadsheets</span></div>
                     <div><strong>AI-first</strong><span>readiness checks before every submission</span></div>
-                    <div><strong>Free to start</strong><span>14-day sandbox — no card required</span></div>
+                    <div><strong>Free to start</strong><span>{{ENT_TRIAL_LABEL}} — no card required</span></div>
                 </div>
                 <div class="enterprise-actions" style="margin-top:1.8rem">
                     <a class="enterprise-btn enterprise-btn-primary" href="https://enterprise.rilono.com/enterprise">
-                        Start free for 14 days
+                        Start free for {{ENT_TRIAL_DAYS}} days
                     </a>
                 </div>
             </div>
@@ -2027,7 +2092,7 @@
                                 d="M9 12h6m-6 4h6M7 3h7l5 5v13H7a2 2 0 01-2-2V5a2 2 0 012-2z" />
                         </svg>
                         <h3>Multi-branch agencies</h3>
-                        <p>Branch managers see their office only, counsellors see their own caseload, the owner sees everything.</p>
+                        <p>Branch managers see their office only, counsellors see their own caseload, the owner sees everything. Multiple offices come with {{ENT_TEAM_LABEL}} and {{ENT_MULTI_BRANCH_LABEL}}.</p>
                     </div>
                     <div class="enterprise-card">
                         <svg fill="none" viewBox="0 0 24 24" stroke="currentColor">
@@ -2035,7 +2100,7 @@
                                 d="M17 20h5v-2a4 4 0 00-4-4h-1M9 20H4v-2a4 4 0 014-4h1m0-4a4 4 0 118 0 4 4 0 01-8 0z" />
                         </svg>
                         <h3>Reviewer-heavy teams</h3>
-                        <p>Admin, Branch manager, Counsellor, Finance and Viewer roles — plus custom roles and branch / caseload scopes, so reviewers see only the cases they should.</p>
+                        <p>Admin, Branch manager, Counsellor, Finance and Viewer roles with branch and caseload scopes, so reviewers see only the cases they should. Custom roles come with {{ENT_TEAM_LABEL}} and {{ENT_MULTI_BRANCH_LABEL}}.</p>
                     </div>
                 </div>
             </div>
@@ -2209,67 +2274,91 @@
             <div class="enterprise-shell">
                 <div class="enterprise-section-heading">
                     <div class="enterprise-kicker">Pricing</div>
-                    <h2>Pick the tier that matches your office. AI credits are included.</h2>
+                    <h2>One flat monthly price. AI credits are included.</h2>
                     <p>
-                        Credits cover Deep Scan document audits, mock interviews, SOP and LOR drafts and course
-                        shortlists. Busy month? Top up any time.
+                        Every plan gets every AI feature. Plans differ by open student files, staff and the AI
+                        credits included each month. {{ENT_FILES_NOTE}} Busy month? Top up from {{ENT_TOPUP_FROM_INR}}.
                     </p>
                 </div>
                 <div class="ent-price-grid">
                     <div class="ent-price-card">
-                        <div class="ent-price-name">Self-serve sandbox</div>
-                        <div class="ent-price-amount">&#8377;0</div>
-                        <div class="ent-price-gst">14-day evaluation &middot; no card</div>
+                        <div class="ent-price-name">{{ENT_TRIAL_LABEL}}</div>
+                        <div class="ent-price-amount">Free</div>
+                        <div class="ent-price-gst">No card needed</div>
                         <div class="ent-price-specs">
-                            <div><span>Users</span><b>2</b></div>
-                            <div><span>Active clients</span><b>10</b></div>
-                            <div><span>AI credits</span><b>100 one-time</b></div>
+                            <div><span>Staff</span><b>{{ENT_TRIAL_SEATS}}</b></div>
+                            <div><span>Open student files</span><b>{{ENT_TRIAL_OPEN_FILES}}</b></div>
+                            <div><span>AI credits</span><b>{{ENT_TRIAL_CREDITS}} at signup</b></div>
+                            {{ENT_IF_DEMO_BONUS}}<div><span>After a demo call</span><b>+{{ENT_TRIAL_DEMO_BONUS}} credits</b></div>{{ENT_END_IF_DEMO_BONUS}}
+                            <div><span>AI document reading</span><b>{{ENT_TRIAL_READS}} for the trial</b></div>
                         </div>
-                        <p class="ent-price-purpose">Evaluate the whole platform on your own real cases. No custom setup.</p>
+                        <p class="ent-price-purpose">Every feature, including offices and custom roles. {{ENT_TRIAL_END_NOTE}}.</p>
                     </div>
                     <div class="ent-price-card">
-                        <div class="ent-price-name">Starter</div>
-                        <div class="ent-price-amount">&#8377;2,999 <span>/month</span></div>
-                        <div class="ent-price-gst">+ GST (India)</div>
+                        <div class="ent-price-name">{{ENT_STARTER_LABEL}}</div>
+                        <div class="ent-price-amount">{{ENT_STARTER_PRICE_INR}} <span>/month</span></div>
+                        <div class="ent-price-gst">{{ENT_TAX_NOTE}}</div>
+                        {{ENT_IF_YEARLY}}<div class="ent-price-yearly">{{ENT_STARTER_YEARLY_NOTE}}</div>{{ENT_END_IF_YEARLY}}
                         <div class="ent-price-specs">
-                            <div><span>Users</span><b>10</b></div>
-                            <div><span>Active clients</span><b>100</b></div>
-                            <div><span>AI credits</span><b>1,000/month</b></div>
+                            <div><span>Staff</span><b>{{ENT_STARTER_SEATS}}</b></div>
+                            <div><span>Open student files</span><b>{{ENT_STARTER_OPEN_FILES}}</b></div>
+                            <div><span>AI credits / month</span><b>{{ENT_STARTER_CREDITS}}</b></div>
+                            <div><span>AI document reading</span><b>{{ENT_STARTER_READS}} / month</b></div>
+                            <div><span>International</span><b>{{ENT_STARTER_INTL_PRICES}}</b></div>
                         </div>
-                        <p class="ent-price-purpose">Small consultancy or single branch.</p>
+                        <p class="ent-price-purpose">{{ENT_STARTER_PURPOSE}}. One office with the built-in roles.</p>
                     </div>
                     <div class="ent-price-card is-featured">
                         <div class="ent-price-tag">Most popular</div>
-                        <div class="ent-price-name">Growth</div>
-                        <div class="ent-price-amount">&#8377;6,999 <span>/month</span></div>
-                        <div class="ent-price-gst">+ GST (India)</div>
+                        <div class="ent-price-name">{{ENT_TEAM_LABEL}}</div>
+                        <div class="ent-price-amount">{{ENT_TEAM_PRICE_INR}} <span>/month</span></div>
+                        <div class="ent-price-gst">{{ENT_TAX_NOTE}}</div>
+                        {{ENT_IF_YEARLY}}<div class="ent-price-yearly">{{ENT_TEAM_YEARLY_NOTE}}</div>{{ENT_END_IF_YEARLY}}
                         <div class="ent-price-specs">
-                            <div><span>Users</span><b>30</b></div>
-                            <div><span>Active clients</span><b>500</b></div>
-                            <div><span>AI credits</span><b>3,500/month</b></div>
+                            <div><span>Staff</span><b>{{ENT_TEAM_SEATS}}</b></div>
+                            <div><span>Open student files</span><b>{{ENT_TEAM_OPEN_FILES}}</b></div>
+                            <div><span>AI credits / month</span><b>{{ENT_TEAM_CREDITS}}</b></div>
+                            <div><span>AI document reading</span><b>{{ENT_TEAM_READS}} / month</b></div>
+                            <div><span>International</span><b>{{ENT_TEAM_INTL_PRICES}}</b></div>
                         </div>
-                        <p class="ent-price-purpose">Multi-counsellor, multi-branch office.</p>
+                        <p class="ent-price-purpose">{{ENT_TEAM_PURPOSE}}. Adds multiple offices, custom roles and per-branch reporting.</p>
                     </div>
                     <div class="ent-price-card">
-                        <div class="ent-price-name">Scale</div>
-                        <div class="ent-price-amount">&#8377;14,999 <span>/month</span></div>
-                        <div class="ent-price-gst">+ GST (India)</div>
+                        <div class="ent-price-name">{{ENT_MULTI_BRANCH_LABEL}}</div>
+                        <div class="ent-price-amount">{{ENT_MULTI_BRANCH_PRICE_INR}} <span>/month</span></div>
+                        <div class="ent-price-gst">{{ENT_TAX_NOTE}}</div>
+                        {{ENT_IF_YEARLY}}<div class="ent-price-yearly">{{ENT_MULTI_BRANCH_YEARLY_NOTE}}</div>{{ENT_END_IF_YEARLY}}
                         <div class="ent-price-specs">
-                            <div><span>Users</span><b>100</b></div>
-                            <div><span>Active clients</span><b>2,000</b></div>
-                            <div><span>AI credits</span><b>10,000/month</b></div>
+                            <div><span>Staff</span><b>{{ENT_MULTI_BRANCH_SEATS}}</b></div>
+                            <div><span>Open student files</span><b>{{ENT_MULTI_BRANCH_OPEN_FILES}}</b></div>
+                            <div><span>AI credits / month</span><b>{{ENT_MULTI_BRANCH_CREDITS}}</b></div>
+                            <div><span>AI document reading</span><b>{{ENT_MULTI_BRANCH_READS}} / month</b></div>
+                            <div><span>International</span><b>{{ENT_MULTI_BRANCH_INTL_PRICES}}</b></div>
                         </div>
-                        <p class="ent-price-purpose">Larger consultancies and networks.</p>
+                        <p class="ent-price-purpose">{{ENT_MULTI_BRANCH_PURPOSE}}. Everything in {{ENT_TEAM_LABEL}}. Over {{ENT_MULTI_BRANCH_OPEN_FILES}} files, add Branch Packs by invoice: +{{ENT_BRANCH_PACK_FILES}} files, +{{ENT_BRANCH_PACK_SEATS}} staff and +{{ENT_BRANCH_PACK_CREDITS}} credits a month each.</p>
                     </div>
                 </div>
+                <div class="ent-price-actions">
+                    <h3>What AI credits buy</h3>
+                    <ul>
+                        <li><span>Document check</span><b>{{ENT_DOC_CHECK_PRICE}}</b></li>
+                        <li><span>SOP or LOR draft or refinement</span><b>{{ENT_WRITING_COST}}</b></li>
+                        <li><span>Mock visa interview (up to {{ENT_INTERVIEW_MAX_QUESTIONS}} questions + report)</span><b>{{ENT_INTERVIEW_PRICE}}</b></li>
+                        <li><span>Deep Scan file audit (up to {{ENT_DEEP_SCAN_MAX_DOCS}} documents)</span><b>{{ENT_DEEP_SCAN_PRICE}}</b></li>
+                        <li><span>University or course shortlist</span><b>{{ENT_SHORTLIST_COST}}</b></li>
+                        <li><span>Rilono AI assistant ({{ENT_ASSISTANT_FREE_DAILY}} free messages a day)</span><b>{{ENT_ASSISTANT_PRICE}}</b></li>
+                    </ul>
+                </div>
                 <p class="ent-price-foot">
-                    Billed monthly via Razorpay in INR, USD, GBP, EUR, CAD, AUD, AED or SGD &mdash; GST applies to INR
-                    billing in India; other currencies are billed tax-free as exports. Plan credits refresh each
-                    billing period and don&rsquo;t carry over; top-up credits never expire. Catalog browsing is always free.
+                    AI document reading: every upload is read by Rilono AI from your plan&rsquo;s monthly reading
+                    allowance (one read per {{ENT_READ_PAGES}} pages). Plan credits and reads refresh each month and
+                    don&rsquo;t carry over; top-up credits ({{ENT_TOPUP_PACKS_INR}}) never expire. Billed monthly in INR,
+                    or in {{ENT_CURRENCIES_OTHER}} depending on where your office is. {{ENT_TAX_SENTENCE}}{{ENT_YEARLY_SENTENCE}}
+                    Catalog browsing is always free.
                 </p>
                 <div class="enterprise-actions" style="margin-top:1.6rem">
                     <a class="enterprise-btn enterprise-btn-primary" href="https://enterprise.rilono.com/enterprise">
-                        Start your free 14-day sandbox
+                        Start your {{ENT_TRIAL_LABEL}}
                     </a>
                 </div>
             </div>
@@ -2287,11 +2376,23 @@
                 <div class="enterprise-faq">
                     <details open>
                         <summary>What does Rilono Enterprise cost? <span class="chev">+</span></summary>
-                        <div class="ans">Plans are Starter at &#8377;2,999/month, Growth at &#8377;6,999/month and Scale at &#8377;14,999/month, plus GST on INR billing in India only. You can also pay in USD, GBP, EUR, CAD, AUD, AED or SGD, billed tax-free as exports. They cover 10, 30 and 100 users and 100, 500 and 2,000 active clients respectively, and each includes a monthly AI credit allowance of 1,000, 3,500 and 10,000 credits. Every workspace starts on a free 14-day self-serve sandbox with 2 users, 10 active clients and 100 one-time AI credits, and no card.</div>
+                        <div class="ans">Every plan gets every AI feature; plans differ by open student files, staff and the AI credits included each month. {{ENT_STARTER_LABEL}} is {{ENT_STARTER_PRICE_INR}}/month for {{ENT_STARTER_OPEN_FILES}} open files, {{ENT_STARTER_SEATS}} staff and {{ENT_STARTER_CREDITS}} AI credits a month. {{ENT_TEAM_LABEL}} is {{ENT_TEAM_PRICE_INR}}/month for {{ENT_TEAM_OPEN_FILES}} open files, {{ENT_TEAM_SEATS}} staff and {{ENT_TEAM_CREDITS}} credits, and adds multiple offices, custom roles and per-branch reporting. {{ENT_MULTI_BRANCH_LABEL}} is {{ENT_MULTI_BRANCH_PRICE_INR}}/month for {{ENT_MULTI_BRANCH_OPEN_FILES}} open files, {{ENT_MULTI_BRANCH_SEATS}} staff and {{ENT_MULTI_BRANCH_CREDITS}} credits. {{ENT_TAX_SENTENCE}} International offices pay in {{ENT_CURRENCIES_OTHER}}.{{ENT_YEARLY_SENTENCE}} Every workspace starts on a {{ENT_TRIAL_LABEL}} with {{ENT_TRIAL_SEATS}} staff, {{ENT_TRIAL_OPEN_FILES}} open files and {{ENT_TRIAL_CREDITS_NOTE}} — no card needed.</div>
                     </details>
                     <details>
                         <summary>Are AI credits included in the plan or bought separately? <span class="chev">+</span></summary>
-                        <div class="ans">Both. Your plan grants its credit allowance to your wallet at the start of every billing period, and that is what normal use runs on. If a busy month exhausts it you can top up at any time. Unused plan credits do not carry into the next period; top-up credits you purchase never expire.</div>
+                        <div class="ans">Both. Your plan grants its credit allowance to your wallet at the start of every billing period, and that is what normal use runs on. A document check is {{ENT_DOC_CHECK_PRICE}}, an SOP or LOR draft {{ENT_WRITING_PRICE}}, a mock visa interview {{ENT_INTERVIEW_PRICE}} and a Deep Scan file audit {{ENT_DEEP_SCAN_PRICE}}. If a busy month uses up the allowance, top up at any time: {{ENT_TOPUP_PACKS_INR}}. Unused plan credits do not carry into the next period; top-up credits you purchase never expire.</div>
+                    </details>
+                    <details>
+                        <summary>What counts as an open student file? <span class="chev">+</span></summary>
+                        <div class="ans">A client whose file is still in progress. {{ENT_FILES_NOTE}}{{ENT_IF_FILE_GRACE}} If a busy month takes you over your plan's limit, you can keep adding files for {{ENT_FILE_GRACE_DAYS}} days, then close finished files or upgrade.{{ENT_END_IF_FILE_GRACE}}</div>
+                    </details>
+                    <details>
+                        <summary>What is AI document reading? <span class="chev">+</span></summary>
+                        <div class="ans">Rilono AI reads every document you upload so the assistant, checks and audits can use it. Each plan includes a monthly reading allowance, one read per {{ENT_READ_PAGES}} pages. If it runs out, uploads are still stored and marked Not read yet until the allowance refreshes. A paid document check reads the file itself and never uses your reads.</div>
+                    </details>
+                    <details>
+                        <summary>What happens when the free trial ends? <span class="chev">+</span></summary>
+                        <div class="ans">{{ENT_TRIAL_END_NOTE}}. Choose a plan to carry on — nothing in your workspace is deleted.</div>
                     </details>
                     <details>
                         <summary>Does browsing the course catalog cost credits? <span class="chev">+</span></summary>
@@ -2321,11 +2422,11 @@
             <div class="enterprise-shell enterprise-cta-inner">
                 <h2>One platform — with a Rilono AI assistant — instead of five disconnected tools.</h2>
                 <p>
-                    Free 14-day sandbox, set up in a minute. No card required.
+                    {{ENT_TRIAL_LABEL}}, set up in a minute. No card required.
                 </p>
                 <div class="enterprise-actions">
                     <a class="enterprise-btn enterprise-btn-primary" href="https://enterprise.rilono.com/enterprise">
-                        Start your free sandbox
+                        Start your free trial
                     </a>
                     <a class="enterprise-btn enterprise-btn-secondary" href="/contact">
                         Contact Enterprise Team

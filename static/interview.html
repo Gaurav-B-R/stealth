@@ -283,6 +283,11 @@
       var $ = function (id) { return document.getElementById(id); };
       var info = null, sessionToken = null, history = [], voiceOn = false, busy = false, spoken = 0, recog = null;
       var concluded = false, feedbackStarted = false, pendingDecision = null;
+      // The interview lives on the SERVER: start returns a run token (held only in memory,
+      // never stored), every answer and the one feedback report present it, and the officer
+      // reads the server's transcript. `history` below is only what this page displays — it is
+      // never sent, so nothing in the browser can rewrite what the officer saw or decided.
+      var runToken = null, questionsAsked = 0, maxQuestions = null;
       var micSupported = !!(window.SpeechRecognition || window.webkitSpeechRecognition);
 
       function show(id) { ["loading","invalidView","verifyView","interviewView"].forEach(function (v) { $(v).classList.toggle("hidden", v !== id); }); }
@@ -448,7 +453,8 @@
         if(voice){ var m=micModel(); $("micStatus").className="visa-mic-status "+m.tone; $("micStatusText").textContent=m.text;
           var sb=$("speakBtn"); sb.textContent=iv.listening?"Mic Listening...":"Mic Auto-On"; sb.classList.toggle("is-listening", iv.listening);
           sb.disabled=!SR||iv.pending||iv.listening; sb.title=iv.micPermission==="denied"?"Microphone is blocked in browser settings — allow it, then click to retry.":(iv.listening?"Listening — just speak.":"Mic opens by itself after each question. Click to open it now."); sb.textContent=iv.listening?"Mic Listening...":(iv.micFatal||iv.micPermission==="denied"?"Retry Mic":"Mic Auto-On"); }
-        $("ivGuide").textContent = !running ? guideIdle() : (voice ? "Mic is always on for responses. Just speak when the officer finishes asking." : "Type and send each answer below.");
+        var progress = running && maxQuestions ? ("Question "+Math.min(Math.max(questionsAsked,1),maxQuestions)+" of up to "+maxQuestions+" · ") : "";
+        $("ivGuide").textContent = !running ? guideIdle() : progress + (voice ? "Mic is always on for responses. Just speak when the officer finishes asking." : "Type and send each answer below.");
         setModeBadge(); syncFsBtn();
       }
       function setMicPermission(p){ iv.micPermission=p||"unknown"; renderControls(); }
@@ -518,22 +524,34 @@
         iv.pending=true; stopRecognition(); hideErr("iChatError"); renderControls();
         var voice=iv.channel==="voice", thinking=voice?"VO is thinking...":"VO is typing...";
         setStatus(thinking); setPendingBubble(thinking);
-        var prior=history.slice(); if(!isInitial) history.push({role:"user",content:message});
-        var body=isInitial?{session_token:sessionToken,start:true}:{session_token:sessionToken,message:message,history:prior};
-        var shouldListen=false;
+        if(!isInitial) history.push({role:"user",content:message});
+        var mode=voice?"voice":"chat";
+        var body=isInitial?{session_token:sessionToken,start:true,mode:mode}:{session_token:sessionToken,run_token:runToken,message:message,mode:mode};
+        var shouldListen=false, sessionOver=false;
         return api("/chat",body).then(function(d){
             clearPendingBubble();
+            if(d.run_token) runToken=d.run_token;
+            if(typeof d.questions_asked==="number") questionsAsked=d.questions_asked;
+            if(d.max_questions) maxQuestions=d.max_questions;
             var reply=String(d.reply||"").replace(/INTERVIEW_COMPLETE/gi,"").trim();
             history.push({role:"officer",content:reply}); if(typeof d.remaining==="number") info.remaining=d.remaining;
             logItem("assistant","<strong>Visa Officer:</strong> "+fmt(reply));
             if(d.finished){ concluded=true; pendingDecision=d.decision||null; }
             if(voice){ return speakOfficer(reply).then(function(){ shouldListen=!concluded; }); }
             setStatus(concluded?"Completed":"Type your answer"); })
-          .catch(function(ex){ clearPendingBubble(); setStatus("Error"); showErr("iChatError", safeError(ex));
-            if(isInitial){ // the session never started: give the Start button back
-              iv.active=false; stopTimer(); iv.timerStart=0; renderTimer(); iv.channel=null; leaveBooth(); resetLog(); setStatus("Idle"); } })
+          .catch(function(ex){ clearPendingBubble(); setStatus("Error");
+            if(isInitial){ // the session never started (and nothing was used up): give the Start button back
+              showErr("iChatError", safeError(ex));
+              iv.active=false; stopTimer(); iv.timerStart=0; renderTimer(); iv.channel=null; leaveBooth(); resetLog(); setStatus("Idle"); return; }
+            if(ex.status===409){
+              // The server takes no more answers on this run: the officer already closed it (its
+              // report is still due), or it finished / expired. Ask for the report — if that is
+              // refused as well, the run is over and a new interview is the only way on.
+              history.pop(); concluded=true; return; }
+            if(ex.status===400||ex.status===404){ history.pop(); sessionOver=true; endRun(safeError(ex)); return; }
+            showErr("iChatError", safeError(ex)); })
           .then(function(){ iv.pending=false; renderControls();
-            if(!iv.active) return;
+            if(sessionOver||!iv.active) return;
             if(concluded||iv.finishQueued){ concludeInterview(pendingDecision); return; }
             if(shouldListen&&iv.channel==="voice"){ setStatus("Listening..."); listen(); }
             else if(iv.channel==="chat"){ var a=$("answer"); if(a) a.focus(); } }); }
@@ -549,6 +567,7 @@
         enterBooth(); // inside the click, so the browser honours the full-screen request
         var start=function(){
           stopRecognition(); stopSpeak(); concluded=false; feedbackStarted=false; pendingDecision=null;
+          runToken=null; questionsAsked=0; maxQuestions=null;
           iv.finishQueued=false; iv.reportGenerating=false; iv.micFatal=false; iv.micFailures=0; history=[]; iv.active=true; iv.channel=channel; iv.pending=false;
           $("feedback").classList.add("hidden"); $("feedback").innerHTML=""; $("afterFb").innerHTML="";
           $("thread").innerHTML=""; logItem("system","Session started."); setStatus("Starting interview..."); startTimer(); renderControls();
@@ -580,7 +599,10 @@
         var gen=logItem("system report-generating",'<span class="report-generating-spinner" aria-hidden="true"></span><span class="report-generating-copy">Generating final report…<small>'+(decision?"The officer has ended the interview. ":"")+'Evaluating your answers against the full transcript.</small></span>');
         $("feedback").classList.remove("hidden");
         $("feedback").innerHTML=decisionBanner(decision)+'<div class="center"><span class="spinner dark"></span><p class="muted" style="margin-top:10px">Preparing your report…</p></div>';
-        api("/feedback",{session_token:sessionToken,history:history,mode:iv.channel==="voice"?"voice":"chat",decision:decision||null}).then(function(d){
+        // {session_token, run_token, mode} only — the report is built from the server's transcript
+        // and the officer's own recorded decision; nothing from this page is trusted for it.
+        api("/feedback",{session_token:sessionToken,run_token:runToken,mode:iv.channel==="voice"?"voice":"chat"}).then(function(d){
+            runToken=null;
             info.remaining=d.remaining; stopTimer(); iv.reportGenerating=false; renderTimer(); setStatus("Completed");
             gen.className="visa-mock-log-item system report-done"; gen.innerHTML='<span class="report-done-icon">✓</span>Report generated successfully in '+fmtElapsed(Date.now()-t0)+'.';
             var emailNote=d.emailed?'<div class="ok" style="margin:0 0 14px">📧 A copy of this report has been emailed to '+esc(d.masked_email||"your email")+'.</div>':'';
@@ -589,9 +611,25 @@
             $("afterFb").innerHTML='<div class="remain" style="margin-bottom:12px">Interviews remaining: '+info.remaining+'</div>'+(info.remaining>0?'<button class="btn btn-soft" id="againBtn">↻ Take another interview</button>':'<div class="muted">That was your last interview on this link. Good luck! 🎓</div>');
             var ab=$("againBtn"); if(ab) ab.onclick=function(){ feedbackStarted=false; concluded=false; pendingDecision=null; iv.channel=null; iv.timerStart=0; renderTimer(); $("feedback").classList.add("hidden"); $("feedback").innerHTML=""; $("afterFb").innerHTML=""; resetLog(); setStatus("Idle"); renderControls(); };
             try{ $("feedback").scrollIntoView({behavior:"smooth",block:"nearest"}); }catch(e){} })
-          .catch(function(ex){ iv.reportGenerating=false; stopTimer(); renderTimer(); setStatus("Report error");
+          .catch(function(ex){ iv.reportGenerating=false; stopTimer(); renderTimer();
+            if(ex.status===409||ex.status===400||ex.status===404){
+              // This run is over for good (report already made, or the run expired): retrying
+              // can only fail again, so hand back the Start button instead.
+              gen.className="visa-mock-log-item system"; gen.textContent="This interview session has ended.";
+              $("feedback").innerHTML='<div class="err">'+esc(safeError(ex))+'</div>';
+              endRun(null); return; }
+            setStatus("Report error");
             gen.className="visa-mock-log-item system"; gen.textContent="The report could not be generated. You can try Finish & Report again.";
             $("feedback").innerHTML=decisionBanner(decision)+'<div class="err">'+esc(safeError(ex))+'</div>'; feedbackStarted=false; iv.active=true; renderControls(); }); }
+      // The server says this run can't go on (expired, finished, unknown): stop everything and
+      // return to the idle console — Start is offered again while the link has interviews left.
+      function endRun(message){
+        stopRecognition(); stopSpeak(); leaveBooth(); stopTimer();
+        iv.active=false; iv.pending=false; iv.finishQueued=false; iv.reportGenerating=false; iv.channel=null;
+        runToken=null; questionsAsked=0; maxQuestions=null; concluded=false; feedbackStarted=false; pendingDecision=null;
+        setStatus("Session ended");
+        if(message) showErr("iChatError", message+(info.remaining>0?" You can start a new interview.":""));
+        renderControls(); }
 
       load();
     })();
