@@ -244,12 +244,12 @@ def test_the_kill_switch_turns_the_rule_off(monkeypatch):
     assert billing.domestic_only_charge("INR", "IN") is False
 
 
-def test_an_unknown_policy_falls_back_to_review(monkeypatch):
-    monkeypatch.setenv("ENTERPRISE_INR_FOREIGN_CARD_POLICY", "refund-everything")
-    assert billing._foreign_card_policy_env() == billing.FOREIGN_CARD_POLICY_REVIEW
-    monkeypatch.setenv("ENTERPRISE_INR_FOREIGN_CARD_POLICY", "Reprice")
-    assert billing._foreign_card_policy_env() == billing.FOREIGN_CARD_POLICY_REPRICE
-    monkeypatch.delenv("ENTERPRISE_INR_FOREIGN_CARD_POLICY")
+def test_the_owner_chose_refund_and_a_typo_never_switches_the_fence_off(monkeypatch):
+    monkeypatch.delenv("ENTERPRISE_INR_FOREIGN_CARD_POLICY", raising=False)
+    assert billing._foreign_card_policy_env() == billing.FOREIGN_CARD_POLICY_REFUND
+    monkeypatch.setenv("ENTERPRISE_INR_FOREIGN_CARD_POLICY", "reveiw")
+    assert billing._foreign_card_policy_env() == billing.FOREIGN_CARD_POLICY_REFUND
+    monkeypatch.setenv("ENTERPRISE_INR_FOREIGN_CARD_POLICY", "Review")
     assert billing._foreign_card_policy_env() == billing.FOREIGN_CARD_POLICY_REVIEW
 
 

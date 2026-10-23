@@ -820,11 +820,12 @@ INR_MANUAL_CAPTURE = _bool_env("ENTERPRISE_INR_MANUAL_CAPTURE", True)
 INR_MANUAL_CAPTURE_EXPIRY_MINUTES = min(7200, _int_env("ENTERPRISE_INR_MANUAL_CAPTURE_EXPIRY_MINUTES", 0))
 
 # What happens to an INR payment made with a card issued outside India on a domestic-only
-# charge. The owner picks one; until then "review" changes nothing but the log.
-#   review  — accept it, and log it loudly for a human to look at.
-#   refund  — refuse it: an order's authorisation is never captured, a captured charge is
-#             refunded, a mandate is cancelled; nothing is granted, so the trial (or the
-#             current plan) carries on as it was.
+# charge. The owner chose "refund" (2026-10-23); the other two stay as config fallbacks.
+#   refund  — (default) refuse it: an order's authorisation is never captured, a captured
+#             charge is refunded, a mandate is cancelled; nothing is granted, so the trial (or
+#             the current plan) carries on as it was.
+#   review  — accept it, and log it loudly for a human to look at. An escape hatch if refusals
+#             ever misfire; it fences nothing.
 #   reprice — accept it, and bar the org from INR (EnterpriseOrganization.inr_barred_at): every
 #             later quote and checkout is on the foreign ladder, and an INR mandate stops at the
 #             end of the period just paid for.
@@ -832,16 +833,18 @@ FOREIGN_CARD_POLICY_REVIEW = "review"
 FOREIGN_CARD_POLICY_REFUND = "refund"
 FOREIGN_CARD_POLICY_REPRICE = "reprice"
 FOREIGN_CARD_POLICIES = (FOREIGN_CARD_POLICY_REVIEW, FOREIGN_CARD_POLICY_REFUND, FOREIGN_CARD_POLICY_REPRICE)
+DEFAULT_FOREIGN_CARD_POLICY = FOREIGN_CARD_POLICY_REFUND
 
 
 def _foreign_card_policy_env() -> str:
     raw = os.getenv("ENTERPRISE_INR_FOREIGN_CARD_POLICY", "").strip().lower()
     if raw and raw not in FOREIGN_CARD_POLICIES:
+        # A typo must not quietly switch the fence off, so it falls back to the default.
         logger.error(
             "ENTERPRISE_INR_FOREIGN_CARD_POLICY=%r is not one of %s; using %r",
-            raw, FOREIGN_CARD_POLICIES, FOREIGN_CARD_POLICY_REVIEW,
+            raw, FOREIGN_CARD_POLICIES, DEFAULT_FOREIGN_CARD_POLICY,
         )
-    return raw if raw in FOREIGN_CARD_POLICIES else FOREIGN_CARD_POLICY_REVIEW
+    return raw if raw in FOREIGN_CARD_POLICIES else DEFAULT_FOREIGN_CARD_POLICY
 
 
 INR_FOREIGN_CARD_POLICY = _foreign_card_policy_env()

@@ -145,7 +145,7 @@ Status legend:
 
 ## D-011 Rupee Prices Are Paid With Indian Payment Methods
 
-- Status: Accepted. The foreign-card policy is still the owner's choice; until it is made, the policy is `review`.
+- Status: Accepted. The owner chose `refund` on 2026-10-23, and it is the default.
 - Recorded: 2026-10-23
 - Context: D-010 stops showing the INR ladder outside the INR region. Checkout still decides the currency from two inputs a buyer controls: the company country (editable until the first payment) and the CDN geo country (a VPN changes it). A foreign office that reaches an INR checkout can pay ₹1,499 for a $39 plan with its own card. Razorpay has no checkout or order option that refuses foreign cards. Its only international switch is account-wide, and turning it off would also block every USD, GBP and AUD sale. The docs were read on 2026-10-23 with `?preferred-country=IN`.
 - Decision:
@@ -161,16 +161,18 @@ Status legend:
     - A refused foreign card is never captured. Razorpay releases the authorisation when it expires.
   - **Mandates are checked after capture.** A Razorpay Subscription has no manual capture, so its first charge and every renewal are checked once captured. A refused charge is refunded in full and the mandate is cancelled.
   - **Detection** uses the payment's `international` or `card.international` flag. Razorpay reports no card country.
-  - **Policy** (`ENTERPRISE_INR_FOREIGN_CARD_POLICY`):
-    - `review` (default): accept the payment and log `inr-card-rule:` at ERROR level.
-    - `refund`: refuse the payment. It is not captured, or it is refunded. Nothing is granted, and the trial or current plan carries on.
+  - **Policy** (`ENTERPRISE_INR_FOREIGN_CARD_POLICY`, owner-approved: `refund`):
+    - `refund` (default): refuse the payment. It is not captured, or it is refunded. Nothing is granted, and the trial or current plan carries on. Every case logs `inr-card-rule:` at ERROR level.
+    - `review`: accept the payment and only log it. Kept as an escape hatch in case refusals misfire; it fences nothing.
     - `reprice`: accept the payment and set `enterprise_organizations.inr_barred_at`. From then on every quote and checkout uses the foreign ladder (the geo country's currency, else USD). An INR mandate is cancelled at the end of the period just paid for.
+    - An unrecognised value falls back to `refund`, so a typo can't switch the fence off.
   - **Refused statuses.** `foreign_card_refused` and `foreign_card_refund_due` are not revenue statuses. They never count as coverage, as "has paid" (the billing-country lock) or as revenue. A failed refund stays `foreign_card_refund_due` and is retried on the next webhook delivery.
   - **Portal.**
     - When INR is the charge currency, one line under the plan grid and in the top-up modal states the rule.
     - A refused payment gets a 402 with code `inr_foreign_card`, which the portal shows in an in-app notice.
     - Checkout `config` hides PayPal on domestic-only orders. This is cosmetic.
 - Alternatives rejected:
+  - *Accept the foreign card once and move the org to the foreign ladder at its next renewal* (`reprice`). Rejected by the owner: it still sells the first period at the rupee price. It stays available as a setting.
   - *Turn off international cards on the Razorpay account.* Rejected: it also blocks every foreign-currency sale.
   - *Hide cards on INR checkouts, or allow-list Indian card issuers.* Rejected: most Indian offices pay by card, and an issuer list turns away any bank left off it. Checkout options also run in the buyer's browser, so they enforce nothing.
   - *Refund after capture on orders too.* Rejected wherever manual capture is possible: the foreign card would be charged, and Razorpay keeps its fee on a refund.

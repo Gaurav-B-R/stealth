@@ -318,14 +318,14 @@ An INR plan or credit charge to an org billed in India must be paid with an Indi
 | `ENTERPRISE_INR_DOMESTIC_ONLY` | true | The rule itself. `false` turns it off: no manual capture, no check, no portal line. |
 | `ENTERPRISE_INR_MANUAL_CAPTURE` | true | Create domestic-only one-off orders with manual capture. With `false`, those orders are auto-captured, and a refused foreign card is refunded after capture instead. |
 | `ENTERPRISE_INR_MANUAL_CAPTURE_EXPIRY_MINUTES` | unset | How long an uncaptured authorisation lives before Razorpay releases it (auto-refund). Unset means nothing is sent and Razorpay's default applies: 7200 minutes, i.e. 5 days, which is the maximum. A refused foreign card's hold can therefore last up to 5 days. Values from 12 to 7200 are sent. Razorpay's docs require it to be at least `automatic_expiry_period`, and don't say what that is on a manual-capture order. Try a shorter value in Razorpay test mode first: a rejected order would break every Indian checkout. |
-| `ENTERPRISE_INR_FOREIGN_CARD_POLICY` | `review` | What happens to a card issued outside India on a domestic-only charge. `review`: accept and log. `refund`: refuse; the order is never captured, a mandate charge is refunded and the mandate cancelled, and nothing is granted. `reprice`: accept, set `enterprise_organizations.inr_barred_at` (foreign ladder from then on), and stop an INR mandate at the end of its paid period. Any other value is logged and treated as `review`. |
+| `ENTERPRISE_INR_FOREIGN_CARD_POLICY` | `refund` | What happens to a card issued outside India on a domestic-only charge. `refund` (the owner's choice): refuse; the order is never captured, a mandate charge is refunded and the mandate cancelled, and nothing is granted. `review`: accept and only log; an escape hatch if refusals misfire. `reprice`: accept, set `enterprise_organizations.inr_barred_at` (foreign ladder from then on), and stop an INR mandate at the end of its paid period. Any other value is logged and treated as `refund`. |
 
 **Before deploying:**
 
 1. In the Razorpay Dashboard, go to Webhooks and open the enterprise credits webhook (`/api/enterprise/webhook/razorpay-credits`).
 2. Add the `payment.authorized` event. Keep `payment.captured` and the `subscription.*` events.
 3. Check the setup works. Without `payment.authorized`, a domestic buyer who closes the tab before the browser callback is never captured. Razorpay releases that payment when the authorisation expires, and the buyer has to pay again.
-4. Choose the foreign-card policy with the owner and set `ENTERPRISE_INR_FOREIGN_CARD_POLICY`.
+4. Leave `ENTERPRISE_INR_FOREIGN_CARD_POLICY` unset: the default is `refund`, which the owner chose. Set it only to switch the fence off temporarily (`review`).
 5. The deploy adds `domestic_only` to `enterprise_subscription_payments` and `enterprise_credit_payments`, and `inr_barred_at` to `enterprise_organizations`. `ensure_enterprise_pricing_v2_columns` does this; the change is additive and existing rows read false or NULL.
 
 **Operating it:**
