@@ -160,7 +160,7 @@ Status legend:
   - *Unknown country quoted INR* (checkout's domestic default). Rejected for display: behind Cloudflare an unknown country is not an Indian office.
 - Consequences:
   - Local development shows USD unless a geo header is sent (see [runbook.md](runbook.md)).
-  - The price is still discoverable through a VPN; enforcement stays at checkout (`INR_REQUIRE_GEO_MATCH`, the owner-locked company country). Accepting INR only through Indian payment methods would be a stronger fence.
+  - The price is still discoverable through a VPN; enforcement stays at checkout (`INR_REQUIRE_GEO_MATCH`, the owner-locked company country). [D-011](#d-011-rupee-prices-are-paid-with-indian-payment-methods) adds the stronger fence: INR is accepted only through Indian payment methods.
   - The student Visa Success Pass keeps its currency selector: its ladder is near-parity by design.
 
 ## D-011 Rupee Prices Are Paid With Indian Payment Methods
