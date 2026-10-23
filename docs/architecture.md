@@ -1,6 +1,6 @@
 # Rilono Architecture
 
-Last updated: 2026-10-22
+Last updated: 2026-10-23
 
 ## System Overview
 
@@ -153,6 +153,15 @@ Other configured background services continue to run. See [catalog and news poli
 "Read now" (`POST /api/enterprise/clients/{id}/documents/{doc_id}/read`) takes the reads synchronously, so an insufficient allowance is a 402, and then queues the same worker. A paid document check (`document_scan`, charged as `action_cost(key, document_scan_units(pages))`) reads the file itself and never consumes reads.
 
 **Plan allowance sync.** `sync_plan_credits` grants credits and reads once per period key (`<plan>:<period start>`, or `<plan>:once` for the trial). A yearly coverage is cut into monthly sub-periods. A plan change inside a live period grants only `max(0, new allowance − already granted)`.
+
+**Rupee prices need an Indian payment method ([D-011](decisions.md#d-011-rupee-prices-are-paid-with-indian-payment-methods)).** An INR plan or credit checkout for an org billed in India is "domestic-only". `billing.domestic_only_charge` decides this, and the row stores it in `domestic_only`.
+
+- **One-off orders** are created with manual capture (`billing.domestic_only_order_options`). `/billing/verify`, `/credits/topup/verify` and the credits webhook's `payment.authorized` branch run `_inr_card_rule` on the payment entity (`international` / `card.international`). They then capture (`POST /payments/:id/capture`) only what `ENTERPRISE_INR_FOREIGN_CARD_POLICY` accepts.
+- **Mandates** are checked in `/billing/verify` and `_handle_subscription_charged` after capture.
+- **On a refusal**, the row becomes `foreign_card_refused` or `foreign_card_refund_due`. Neither is a revenue status. A captured charge is refunded, and a mandate is cancelled.
+- **Under `reprice`**, the org gets `inr_barred_at`, which `billing.org_billing_country` reads to keep it off INR.
+
+Every honouring path checks the refused statuses under the same row lock as its existing idempotency check, so a replayed verify or a redelivered webhook never grants or refunds twice.
 
 **Admin billing controls.** These live in the admin console's enterprise account, under `/api/admin/enterprise/accounts/{id}/…`:
 

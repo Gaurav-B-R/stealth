@@ -1,6 +1,6 @@
 # Rilono Decision Log
 
-Last updated: 2026-10-22
+Last updated: 2026-10-23
 
 This file records durable technical decisions visible in the current codebase.
 
@@ -142,3 +142,43 @@ Status legend:
   - Old price and limit env vars set on the host override the new defaults silently.
   - The cheap-model rates in the cost catalog come from public price lists and are reported as `partial` until they are checked against a Google invoice ([ai-cost-accounting.md](ai-cost-accounting.md)).
   - Assistant message counts derived from historical credit debits must use the rate in force when each debit was written: 1 credit per 5 messages before this change.
+
+## D-011 Rupee Prices Are Paid With Indian Payment Methods
+
+- Status: Accepted. The foreign-card policy is still the owner's choice; until it is made, the policy is `review`.
+- Recorded: 2026-10-23
+- Context: D-010 stops showing the INR ladder outside the INR region. Checkout still decides the currency from two inputs a buyer controls: the company country (editable until the first payment) and the CDN geo country (a VPN changes it). A foreign office that reaches an INR checkout can pay ₹1,499 for a $39 plan with its own card. Razorpay has no checkout or order option that refuses foreign cards. Its only international switch is account-wide, and turning it off would also block every USD, GBP and AUD sale. The docs were read on 2026-10-23 with `?preferred-country=IN`.
+- Decision:
+  - **Scope.**
+    - An INR plan or credit charge to an org billed in India is sold "domestic-only" (`billing.domestic_only_charge`). An org whose country is unknown counts as billed in India.
+    - The payment row records this in `domestic_only`.
+    - Other INR-region members (NP, BD, LK, NG, GH, KE) are outside the rule, because they hold no Indian payment methods.
+    - Foreign-currency orders are unchanged.
+    - Orders and mandates created before this change are not domestic-only, so they keep renewing as they were sold.
+  - **One-off orders are checked before capture.** This covers credit top-ups, yearly plans, and monthly plans when auto-renew is off.
+    - A domestic-only order is created with manual capture (`"payment": {"capture": "manual"}`).
+    - `/billing/verify`, `/credits/topup/verify` and the `payment.authorized` webhook read the payment entity, and capture only what the policy accepts.
+    - A refused foreign card is never captured. Razorpay releases the authorisation when it expires.
+  - **Mandates are checked after capture.** A Razorpay Subscription has no manual capture, so its first charge and every renewal are checked once captured. A refused charge is refunded in full and the mandate is cancelled.
+  - **Detection** uses the payment's `international` or `card.international` flag. Razorpay reports no card country.
+  - **Policy** (`ENTERPRISE_INR_FOREIGN_CARD_POLICY`):
+    - `review` (default): accept the payment and log `inr-card-rule:` at ERROR level.
+    - `refund`: refuse the payment. It is not captured, or it is refunded. Nothing is granted, and the trial or current plan carries on.
+    - `reprice`: accept the payment and set `enterprise_organizations.inr_barred_at`. From then on every quote and checkout uses the foreign ladder (the geo country's currency, else USD). An INR mandate is cancelled at the end of the period just paid for.
+  - **Refused statuses.** `foreign_card_refused` and `foreign_card_refund_due` are not revenue statuses. They never count as coverage, as "has paid" (the billing-country lock) or as revenue. A failed refund stays `foreign_card_refund_due` and is retried on the next webhook delivery.
+  - **Portal.**
+    - When INR is the charge currency, one line under the plan grid and in the top-up modal states the rule.
+    - A refused payment gets a 402 with code `inr_foreign_card`, which the portal shows in an in-app notice.
+    - Checkout `config` hides PayPal on domestic-only orders. This is cosmetic.
+- Alternatives rejected:
+  - *Turn off international cards on the Razorpay account.* Rejected: it also blocks every foreign-currency sale.
+  - *Hide cards on INR checkouts, or allow-list Indian card issuers.* Rejected: most Indian offices pay by card, and an issuer list turns away any bank left off it. Checkout options also run in the buyer's browser, so they enforce nothing.
+  - *Refund after capture on orders too.* Rejected wherever manual capture is possible: the foreign card would be charged, and Razorpay keeps its fee on a refund.
+  - *Apply the rule to the whole INR region.* Rejected: offices in Nepal, Bangladesh and the other members have no Indian payment method.
+- Consequences:
+  - The enterprise credits webhook must also subscribe to `payment.authorized` (see [runbook.md](runbook.md#rupee-prices-indian-payment-methods-only-d-011)). Without it, a domestic buyer who closes the tab before the callback is not captured. Razorpay auto-refunds that payment when it expires.
+  - Still not enforceable:
+    - A foreign office that claims a non-Indian INR-region country and browses from it, or hides its geo, can pay the rupee price with a foreign card.
+    - An Indian business that pays with a foreign-issued card is treated as foreign.
+  - Razorpay keeps its fee on a refunded mandate charge.
+  - Only Rilono staff can lift the INR bar, in the database. There is no admin console control yet.

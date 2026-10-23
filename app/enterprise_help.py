@@ -347,6 +347,9 @@ def _plans_block() -> str:
         "be changed by Rilono support. Plans & Billing always shows the currency you will "
         "actually be charged in."
     )
+    inr_methods = _inr_payment_methods_text()
+    if inr_methods:
+        lines.append(inr_methods)
 
     # Tax. Worded from the live rate; at 0% nothing here may say "GST".
     if money.tax_applies("INR"):
@@ -383,6 +386,35 @@ def _plans_block() -> str:
     except Exception:
         logger.debug("coupon cap unavailable for help text", exc_info=True)
     return "\n".join(lines)
+
+
+def _inr_payment_methods_text() -> str:
+    """D-011: what a rupee price must be paid with (billing.domestic_only_charge), and what
+    happens to a card issued outside India — worded from the live INR_FOREIGN_CARD_POLICY, so
+    the guide never promises a refusal (or a currency move) the server isn't making."""
+    billing = _billing_mod()
+    if not billing.INR_DOMESTIC_ONLY:
+        return ""
+    text = (
+        "Workspaces in India pay rupee (INR) prices with an Indian payment method: UPI, "
+        "netbanking, or an India-issued card or wallet. Plans & Billing and the top-up "
+        "checkout say so whenever INR is the charge currency."
+    )
+    policy = billing.INR_FOREIGN_CARD_POLICY
+    if policy == billing.FOREIGN_CARD_POLICY_REFUND:
+        text += (
+            " A card issued outside India isn't accepted for a rupee price: the payment isn't "
+            "taken (on an auto-renewing plan it is refunded in full and auto-renewal stops) and "
+            "nothing changes — the trial or current plan carries on."
+        )
+    elif policy == billing.FOREIGN_CARD_POLICY_REPRICE:
+        text += (
+            " A card issued outside India is accepted, but from then on the workspace is billed "
+            "in its local currency (or USD) instead of INR, and an auto-renewing plan stops at "
+            "the end of the period already paid for. Rilono support can review that for a "
+            "business that is in India."
+        )
+    return text
 
 
 def _one_trial_per_domain() -> bool:
