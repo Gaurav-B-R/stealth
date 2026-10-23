@@ -10740,6 +10740,8 @@
       ${!(d.plans || []).length ? "" : `<p style="text-align:center;color:var(--muted);font-size:13px;margin-top:18px">
         Prices are in ${esc(shownCur)}, per ${yearly ? "year" : "month"}${footTax ? `, exclusive of ${esc(footTax)}` : ""}. Secure payments via Razorpay.${
           yearly ? " Yearly is paid once for 12 months and doesn't renew automatically." : " Cancel anytime."}<br>
+        ${shownCur === "INR" && sub.inr_payment_rule ? `${esc(sub.inr_payment_rule)}<br>` : ""}
+        ${sub.inr_barred ? `A rupee payment on this workspace was made with a card issued outside India, so it is billed in ${esc(shownCur)}. Contact support if your business is in India.<br>` : ""}
         Your plan's AI credits and document reads refresh every month${yearly ? " — on yearly plans too" : ""}; unused allowance doesn't carry over. Need more credits? Top up any time in <a href="#" onclick="__ent.go('credits');return false">Credits</a>.
       </p>`}`;
     const curSel = $("#billingCurrencySel");
@@ -10805,6 +10807,17 @@
   // payment sheet closes. Left unguarded, a second click during that window opens a second
   // order — and on the recurring path a second MANDATE — so the flag spans the whole thing
   // and is released on every way out, including the user simply dismissing the sheet.
+  // D-011: a rupee price paid with a card issued outside India is refused by the server
+  // (402, code "inr_foreign_card"). The payment did happen, so a toast reading "verification
+  // failed" would send the buyer to support; an in-app notice says what happened to the money.
+  function showForeignCardRefusal(ex) {
+    if (!ex || ex.status !== 402 || !ex.data || ex.data.code !== "inr_foreign_card") return false;
+    confirmModal(String(ex.data.detail || ex.message || ""), {
+      title: "Card issued outside India", okText: "OK", hideCancel: true, danger: false,
+    });
+    return true;
+  }
+
   let checkoutBusy = false;
   async function checkout(plan, el) {
     if (checkoutBusy) return;
@@ -10862,6 +10875,8 @@
       name: res.organization_name || "Rilono",
       description: parts.join(" · "),
       ...(isSub ? { subscription_id: res.subscription_id } : { order_id: res.order_id }),
+      // Rupee orders for an Indian org (D-011): the server's display config (hides PayPal).
+      ...(res.checkout_config ? { config: res.checkout_config } : {}),
       prefill: checkoutPrefill(res.prefill),
       theme: { color: "#6366f1" },
       // Closing the sheet without paying ends the attempt — without this the plan button
@@ -10883,7 +10898,10 @@
           updatePlanChip();
           toast(v.message || "Plan activated!", "success");
           renderBilling();
-        } catch (ex) { toast("Payment verification failed: " + ex.message, "error"); }
+        } catch (ex) {
+          if (!showForeignCardRefusal(ex)) toast("Payment verification failed: " + ex.message, "error");
+          else renderBilling();
+        }
         finally { release(); }
       },
     });
@@ -11287,6 +11305,9 @@
         partially_refunded: ["Part refunded", "#f59e0b"],
         refunded: ["Refunded", "#64748b"],
         failed: ["Failed", "#ef4444"],
+        // D-011: a rupee price paid with a card issued outside India.
+        foreign_card_refused: ["Refused · foreign card", "#64748b"],
+        foreign_card_refund_due: ["Refund pending", "#f59e0b"],
       };
       const [label, color] = map[s] || [s || "—", "#64748b"];
       return `<span class="status-pill" style="background:${color}1a;color:${color};white-space:nowrap"><span class="sd" style="background:${color}"></span>${esc(label)}</span>`;
@@ -13674,6 +13695,8 @@
         <div class="co-note">${b.free
           ? "✓ This order is fully covered by your discount — no payment needed."
           : "🔒 Secure payment via Razorpay · UPI, cards &amp; NetBanking"} · Top-up credits never expire.</div>
+        ${!b.free && b.currency === "INR" && (creditsUi.wallet || {}).inr_payment_rule
+          ? `<div class="co-note">${esc(creditsUi.wallet.inr_payment_rule)}</div>` : ""}
         ${b.free ? "" : chargeNote(b.total, b.currency)}
       </div>
       <div class="modal-foot">
@@ -13764,6 +13787,7 @@
       name: res.organization_name || "Rilono",
       description: res.package_label + " · " + res.total_credits + " credits",
       order_id: res.order_id,
+      ...(res.checkout_config ? { config: res.checkout_config } : {}),
       // Pass the server's prefill through untouched. Razorpay's docs are explicit that an
       // international payment FAILS on a dummy email/phone, so the server omits fields it
       // doesn't have rather than inventing them — do not fill in placeholders here.
@@ -13780,7 +13804,9 @@
           state.credits = v.wallet; state.creditCoupon = null; updatePlanChip();
           toast(v.message || "Credits added!", "success");
           renderCredits();
-        } catch (ex) { toast("Payment verification failed: " + ex.message, "error"); }
+        } catch (ex) {
+          if (!showForeignCardRefusal(ex)) toast("Payment verification failed: " + ex.message, "error");
+        }
       },
     });
     rzp.on("payment.failed", () => toast("Payment was not completed.", "error"));

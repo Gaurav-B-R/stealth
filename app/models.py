@@ -213,6 +213,11 @@ class EnterpriseOrganization(Base):
     # country, then INR. Note this does NOT affect what they collect from their own
     # students — Razorpay Route is INR-only.
     billing_currency = Column(String, nullable=True)
+    # Set when this org paid a rupee price with a card issued outside India and the
+    # foreign-card policy is "reprice" (enterprise_billing.INR_FOREIGN_CARD_POLICY): from
+    # then on it is billed on the foreign ladder, never INR, whatever its country says.
+    # NULL = no such payment. Only Rilono staff clear it.
+    inr_barred_at = Column(DateTime(timezone=True), nullable=True)
     created_by_user_id = Column(Integer, ForeignKey("users.id"), nullable=False, index=True)
     # Proof the organization accepted the Data Processing Agreement (controller↔processor
     # terms for handling its clients' personal data). Captured at signup.
@@ -1462,6 +1467,10 @@ class EnterpriseSubscriptionPayment(Base):
     base_currency = Column(String, nullable=False, default="INR")
     fx_rate_used = Column(Numeric(18, 6), nullable=True)
     is_international = Column(Boolean, nullable=False, default=False)
+    # Sold for Indian payment methods only (an INR charge to an org billed in India; see
+    # enterprise_billing.domestic_only_charge). A card issued outside India on such a row is
+    # handled by INR_FOREIGN_CARD_POLICY. Renewals of a mandate follow its first row.
+    domestic_only = Column(Boolean, nullable=False, default=False, server_default="0")
     price_book_version = Column(String, nullable=True)
     # AI credits this payment entitles the org to for the period it opens. Snapshotted so
     # a later change to the plan's allowance cannot alter what an org already bought.
@@ -1611,6 +1620,8 @@ class EnterpriseCreditPayment(Base):
     base_currency = Column(String, nullable=False, default="INR")
     fx_rate_used = Column(Numeric(18, 6), nullable=True)
     is_international = Column(Boolean, nullable=False, default=False)
+    # Sold for Indian payment methods only — see EnterpriseSubscriptionPayment.domestic_only.
+    domestic_only = Column(Boolean, nullable=False, default=False, server_default="0")
     price_book_version = Column(String, nullable=True)
     razorpay_order_id = Column(String, nullable=False, unique=True, index=True)
     razorpay_payment_id = Column(String, nullable=True, unique=True, index=True)

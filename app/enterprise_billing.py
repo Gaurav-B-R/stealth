@@ -701,10 +701,16 @@ def request_geo_country(request) -> Optional[str]:
         return None
 
 
-def billing_country_for(org_country: str | None, request=None) -> Optional[str]:
+def billing_country_for(
+    org_country: str | None, request=None, *, inr_barred: bool = False,
+) -> Optional[str]:
     """The country the currency-region rule is applied with, for an org whose stored
     `country_code` is `org_country`, billed in the context of `request`.
 
+      * An org barred from INR (`inr_barred`: it paid a rupee price with a card issued
+        outside India under the "reprice" policy, see INR_FOREIGN_CARD_POLICY) -> never an
+        INR-region country: the geo country when it is known and outside the region, else
+        "US" (the USD ladder). Callers holding the org use org_billing_country().
       * No country on file -> the request's CDN geo country (None when unknown).
       * An INR-region country on file, but a KNOWN geo country outside the region (and
         INR_REQUIRE_GEO_MATCH on) -> the geo country. The stored country is owner-editable,
@@ -717,6 +723,8 @@ def billing_country_for(org_country: str | None, request=None) -> Optional[str]:
     the currency selector) goes through this, so the price shown is the price charged."""
     org_c = _norm_country(org_country)
     geo = request_geo_country(request)
+    if inr_barred:
+        return geo if geo and geo not in INR_REGION_COUNTRIES else "US"
     if org_c is None:
         return geo
     if (
@@ -758,9 +766,171 @@ def charge_currency_for_org(db: Session, organization, hint: str | None, request
                     + ", ".join(money.supported_charge_currencies()) + "."
                 ),
             )
-    country = billing_country_for(getattr(org, "country_code", None), request)
+    country = org_billing_country(org, request)
     candidate = code or fallback_charge_currency(getattr(org, "billing_currency", None), country)
     return region_charge_currency(candidate, country)
+
+
+def org_billing_country(organization, request=None) -> Optional[str]:
+    """billing_country_for() for an org model (or None): its stored country, the request's
+    geo country and its INR bar all applied."""
+    return billing_country_for(
+        getattr(organization, "country_code", None), request,
+        inr_barred=getattr(organization, "inr_barred_at", None) is not None,
+    )
+
+
+# ---------------------------------------------------------------------------
+# Rupee prices are paid with Indian payment methods (D-011)
+# ---------------------------------------------------------------------------
+#
+# The region rule above decides who is QUOTED the rupee price, but its inputs can be walked
+# around: a VPN exit in India, or "India" typed into Settings before the first payment. The
+# last fence is the payment instrument. An INR charge to an org billed in India (or of
+# unknown country, which is billed as Indian) is sold for Indian payment methods only — UPI,
+# netbanking, India-issued cards, Indian wallets — and a payment Razorpay reports as
+# `international` (a card issued outside India, PayPal) is handled by INR_FOREIGN_CARD_POLICY.
+#
+# What Razorpay lets us enforce (docs read 2026-10-23, ?preferred-country=IN):
+#   * No checkout or order option admits Indian cards while refusing foreign ones. The only
+#     international switch is account-wide, and it also carries every USD/GBP/… sale.
+#   * A one-off ORDER can be created with manual capture (domestic_only_order_options): the
+#     money is authorised, and we capture it only once the payment entity says it is not
+#     international. A refused foreign card is never captured; Razorpay releases the
+#     authorisation when it expires. This is a server-side fence: the browser can't skip it.
+#   * A MANDATE (Razorpay Subscription) has no manual capture and no method filter, so its
+#     first charge and every renewal are checked after capture and refunded when refused.
+#   * Checkout display config is cosmetic (the buyer's browser runs it): it hides PayPal.
+#
+# The other INR-region members (Nepal, Bangladesh, …) are billed in rupees but hold no Indian
+# payment methods — their card is foreign by definition — so the rule does not apply to them.
+# That leaves one hole no instrument check can close: a foreign office that claims one of
+# those countries AND browses from it (or hides its geo).
+
+INR_DOMESTIC_ONLY = _bool_env("ENTERPRISE_INR_DOMESTIC_ONLY", True)
+# Manual capture on domestic-only ORDERS. Needs the enterprise credits webhook subscribed to
+# `payment.authorized` as well as `payment.captured`: an order whose buyer closes the tab
+# before the browser callback is captured by that webhook, and is otherwise released by
+# Razorpay (auto-refunded) when the authorisation expires.
+INR_MANUAL_CAPTURE = _bool_env("ENTERPRISE_INR_MANUAL_CAPTURE", True)
+# How long an uncaptured authorisation lives before Razorpay releases it, in minutes (Razorpay
+# accepts up to 7200). Unset (0) sends nothing and Razorpay's own default applies (7200, the
+# documented maximum): the docs require manual_expiry_period >= automatic_expiry_period, and an
+# order Razorpay rejects would break every Indian checkout, so a shorter window is opt-in.
+INR_MANUAL_CAPTURE_EXPIRY_MINUTES = min(7200, _int_env("ENTERPRISE_INR_MANUAL_CAPTURE_EXPIRY_MINUTES", 0))
+
+# What happens to an INR payment made with a card issued outside India on a domestic-only
+# charge. The owner picks one; until then "review" changes nothing but the log.
+#   review  — accept it, and log it loudly for a human to look at.
+#   refund  — refuse it: an order's authorisation is never captured, a captured charge is
+#             refunded, a mandate is cancelled; nothing is granted, so the trial (or the
+#             current plan) carries on as it was.
+#   reprice — accept it, and bar the org from INR (EnterpriseOrganization.inr_barred_at): every
+#             later quote and checkout is on the foreign ladder, and an INR mandate stops at the
+#             end of the period just paid for.
+FOREIGN_CARD_POLICY_REVIEW = "review"
+FOREIGN_CARD_POLICY_REFUND = "refund"
+FOREIGN_CARD_POLICY_REPRICE = "reprice"
+FOREIGN_CARD_POLICIES = (FOREIGN_CARD_POLICY_REVIEW, FOREIGN_CARD_POLICY_REFUND, FOREIGN_CARD_POLICY_REPRICE)
+
+
+def _foreign_card_policy_env() -> str:
+    raw = os.getenv("ENTERPRISE_INR_FOREIGN_CARD_POLICY", "").strip().lower()
+    if raw and raw not in FOREIGN_CARD_POLICIES:
+        logger.error(
+            "ENTERPRISE_INR_FOREIGN_CARD_POLICY=%r is not one of %s; using %r",
+            raw, FOREIGN_CARD_POLICIES, FOREIGN_CARD_POLICY_REVIEW,
+        )
+    return raw if raw in FOREIGN_CARD_POLICIES else FOREIGN_CARD_POLICY_REVIEW
+
+
+INR_FOREIGN_CARD_POLICY = _foreign_card_policy_env()
+
+# Payment-row statuses for a refused foreign card. Neither is a revenue status
+# (enterprise_credits.REVENUE_PAYMENT_STATUSES), so a refused payment never counts as
+# coverage, as "has paid" (the billing-country lock), or as revenue.
+#   foreign_card_refused     — never captured, or captured and refunded in full.
+#   foreign_card_refund_due  — captured, and the automatic refund failed: refund it by hand.
+#                              The next webhook delivery for the payment retries it.
+FOREIGN_CARD_REFUSED = "foreign_card_refused"
+FOREIGN_CARD_REFUND_DUE = "foreign_card_refund_due"
+FOREIGN_CARD_STATUSES = (FOREIGN_CARD_REFUSED, FOREIGN_CARD_REFUND_DUE)
+
+DOMESTIC_ONLY_RULE = (
+    "Rupee prices are paid with an Indian payment method: UPI, netbanking, "
+    "or an India-issued card or wallet."
+)
+
+
+def domestic_only_charge(currency: str | None, billing_country: str | None) -> bool:
+    """Whether a charge in `currency` to an org billed in `billing_country` is sold for
+    Indian payment methods only: INR, and the country is India or unknown."""
+    if not INR_DOMESTIC_ONLY:
+        return False
+    if money.normalize_currency(currency, strict=False) != "INR":
+        return False
+    country = _norm_country(billing_country)
+    return country is None or country == "IN"
+
+
+def org_domestic_only_charge(organization, currency: str | None, request=None) -> bool:
+    """domestic_only_charge() for an org, with the country its checkout is decided by."""
+    return domestic_only_charge(currency, org_billing_country(organization, request))
+
+
+def domestic_only_order_options() -> dict:
+    """Extra POST /v1/orders fields for a domestic-only ONE-OFF order: manual capture, so the
+    server sees the payment entity (`international`) before any money is captured. Empty when
+    INR_MANUAL_CAPTURE is off — the post-capture check then refunds instead."""
+    if not INR_MANUAL_CAPTURE:
+        return {}
+    # Speed of the automatic refund of an authorisation we never capture (mandatory).
+    capture_options: dict = {"refund_speed": "normal"}
+    if INR_MANUAL_CAPTURE_EXPIRY_MINUTES >= 12:
+        capture_options["manual_expiry_period"] = INR_MANUAL_CAPTURE_EXPIRY_MINUTES
+    return {"payment": {"capture": "manual", "capture_options": capture_options}}
+
+
+def domestic_only_checkout_config() -> dict:
+    """Razorpay Checkout `config` for a domestic-only order. Cosmetic: Checkout has no switch
+    for foreign cards (cards can only be hidden whole, or allow-listed by Indian issuer, which
+    would also turn away every bank left off the list), so this only hides PayPal, which
+    converts the rupee price for a foreign buyer. The enforcement is the capture check."""
+    return {"display": {"hide": [{"method": "wallet", "wallets": ["paypal"]}]}}
+
+
+def paid_with_foreign_instrument(entity: dict | None) -> bool:
+    """Razorpay's own verdict on a payment entity: `international` is true for a card issued
+    outside India (and for an international wallet). UPI, netbanking and Indian wallets are
+    never international. `card.international` is the same fact on the expanded card."""
+    entity = entity or {}
+    card = entity.get("card") if isinstance(entity.get("card"), dict) else {}
+    return bool(entity.get("international")) or bool(card.get("international"))
+
+
+def foreign_card_on_domestic_only(row, entity: dict | None) -> bool:
+    """A payment that breaks the rule: `row` was sold domestic-only and `entity` is foreign."""
+    return bool(getattr(row, "domestic_only", False)) and paid_with_foreign_instrument(entity)
+
+
+def foreign_card_refused_message(kind: str, row) -> str:
+    """What the buyer is told when INR_FOREIGN_CARD_POLICY refuses their payment, from the
+    refused payment row (`kind` is "credits" or "plan"). Kept under the portal's 300-character
+    cap for server messages."""
+    kept = (
+        "Nothing was added to your wallet." if kind == "credits"
+        else "Nothing on your plan has changed."
+    )
+    if getattr(row, "status", None) == FOREIGN_CARD_REFUND_DUE:
+        money_back = "Rilono will refund the payment in full."
+    elif int(getattr(row, "refunded_amount_paise", 0) or 0) > 0:
+        money_back = "We've refunded it in full; banks usually return it within 5–7 working days."
+    else:
+        money_back = (
+            "The payment wasn't taken; your bank releases any hold automatically, usually "
+            "within 5–7 working days."
+        )
+    return f"That card was issued outside India. {DOMESTIC_ONLY_RULE} {money_back} {kept}"
 
 
 def usd_estimate_minor(inr_minor: int) -> Optional[int]:
@@ -1607,6 +1777,7 @@ def _build_subscription_state(
             models.EnterpriseOrganization.created_at,
             models.EnterpriseOrganization.billing_currency,
             models.EnterpriseOrganization.country_code,
+            models.EnterpriseOrganization.inr_barred_at,
         )
         .filter(models.EnterpriseOrganization.id == int(organization_id))
         .first()
@@ -1618,7 +1789,10 @@ def _build_subscription_state(
     # US$-estimate flag all match what /billing/plans shows and checkout charges. Ignoring
     # the request here once quoted a London office with no country on file in INR while its
     # cards (and its checkout) were in GBP.
-    org_country = billing_country_for(org_row[2] if org_row else None, request)
+    inr_barred = bool(org_row and org_row[3] is not None)
+    org_country = billing_country_for(
+        org_row[2] if org_row else None, request, inr_barred=inr_barred,
+    )
     grandfathered = is_grandfathered(sub, org_created_at)
     files = _file_limit_state(sub, clients_used, max_clients)
     can_add_client = files["can_add"] and not trial_expired
@@ -1781,6 +1955,11 @@ def _build_subscription_state(
         "inr_region": org_country is None or org_country in INR_REGION_COUNTRIES,
         "show_usd_estimate": show_usd_estimate,
         "usd_estimate": usd_estimate,
+        # D-011: the one-line rule for a rupee charge to this org (None when its rupee
+        # charges aren't domestic-only), and whether a foreign card on a rupee payment has
+        # moved it onto the foreign ladder ("reprice" policy).
+        "inr_payment_rule": DOMESTIC_ONLY_RULE if domestic_only_charge("INR", org_country) else None,
+        "inr_barred": inr_barred,
     }
 
 

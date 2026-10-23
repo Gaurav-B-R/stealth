@@ -3542,7 +3542,7 @@ def _offline_default_currency(db: Session, organization_id: int, currencies: lis
         if latest and latest[0] and money.is_chargeable(latest[0]):
             code = enterprise_billing.region_charge_currency(
                 money.normalize_currency(latest[0], strict=False),
-                enterprise_billing.billing_country_for(getattr(org, "country_code", None)),
+                enterprise_billing.org_billing_country(org),
             )
         if not code:
             code = enterprise_billing.charge_currency_for_org(db, org, None)

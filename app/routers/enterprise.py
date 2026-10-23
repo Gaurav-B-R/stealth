@@ -14,6 +14,7 @@ import requests
 from jose import jwt as jose_jwt, JWTError
 from fastapi import APIRouter, Body, Depends, File, Form, HTTPException, Request, Response, UploadFile, status
 from fastapi.concurrency import run_in_threadpool
+from fastapi.responses import JSONResponse
 from sqlalchemy import and_, func, or_
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
@@ -2978,6 +2979,10 @@ def _serialize_subscription_state(state: dict) -> dict:
         "inr_region": state.get("inr_region", True),
         "show_usd_estimate": state.get("show_usd_estimate", False),
         "usd_estimate": state.get("usd_estimate"),
+        # D-011: the one-line rule shown beside a rupee price (None when rupee charges to
+        # this org aren't domestic-only), and whether a foreign card moved it off INR.
+        "inr_payment_rule": state.get("inr_payment_rule"),
+        "inr_barred": state.get("inr_barred", False),
     }
 
 
@@ -8150,6 +8155,166 @@ async def enterprise_route_webhook(request: Request, db: Session = Depends(get_d
     return {"status": "ok"}
 
 
+# ---- Rupee prices: Indian payment methods only (D-011) ----------------------
+#
+# A plan or credit row sold domestic-only (billing.domestic_only_charge) must be paid with an
+# Indian payment method. One-off orders are created with manual capture, so these helpers see
+# the payment entity before the money is captured; mandates are checked after capture. Every
+# path that honours a payment — /billing/verify, /credits/topup/verify, the plan and credit
+# webhooks, the renewal handler — runs _inr_card_rule first, under the same row lock as its
+# idempotency check, and treats a row in billing.FOREIGN_CARD_STATUSES as already refused.
+
+INR_FOREIGN_CARD_CODE = "inr_foreign_card"
+
+
+def _foreign_card_refused_response(kind: str, row) -> JSONResponse:
+    """The browser's answer for a refused payment: a 402 with a code the portal turns into an
+    in-app notice (the payment did happen, so a generic "verification failed" would mislead)."""
+    return JSONResponse(
+        status_code=402,
+        content={"detail": billing.foreign_card_refused_message(kind, row), "code": INR_FOREIGN_CARD_CODE},
+    )
+
+
+def _awaiting_capture(entity: dict) -> bool:
+    """A payment.authorized entity: authorised, not captured yet."""
+    return str(entity.get("status") or "") == "authorized" and not bool(entity.get("captured"))
+
+
+def _capture_authorized_payment(entity: dict, *, amount_minor: int, currency: str) -> dict:
+    """Capture a manual-capture payment the INR rule has cleared, and return the captured
+    entity. Already captured (the browser and the webhook raced) -> the fetched entity."""
+    if bool(entity.get("captured")):
+        return entity
+    payment_id = str(entity.get("id") or "").strip()
+    try:
+        return _razorpay_request(
+            "POST", f"/payments/{payment_id}/capture",
+            {"amount": int(amount_minor), "currency": currency},
+        )
+    except HTTPException:
+        fresh = _razorpay_request("GET", f"/payments/{payment_id}")
+        if bool(fresh.get("captured")):
+            return fresh
+        raise
+
+
+def _refuse_foreign_card_payment(
+    db: Session, *, row, entity: dict, payment_id: str, mandate_id: str | None = None, sub=None,
+) -> None:
+    """Policy "refund": record `row` as refused and make sure the buyer keeps their money.
+
+    An uncaptured (manual-capture) payment is simply never captured — Razorpay releases the
+    authorisation at its expiry. A captured one (a mandate's charge, or an order created
+    while manual capture was off) is refunded in full; if that call fails the row is left
+    foreign_card_refund_due, and the next delivery of the payment's webhook retries it. A
+    refused mandate is cancelled at once: every later charge would land on the same card.
+    Never raises (a refusal must not 500 a webhook into endless retries); the caller commits.
+    """
+    first_refusal = row.status not in billing.FOREIGN_CARD_STATUSES
+    amount = int(row.amount_paise or 0)
+    if payment_id and not row.razorpay_payment_id:
+        row.razorpay_payment_id = payment_id
+    row.is_international = True
+    # Only ever called on a payment about to be honoured: authorised, or captured.
+    captured = not _awaiting_capture(entity)
+    refunded = int(entity.get("amount_refunded") or 0)
+    if captured and refunded < amount and row.status != billing.FOREIGN_CARD_REFUSED:
+        try:
+            _razorpay_request("POST", f"/payments/{payment_id}/refund", {
+                "amount": amount - refunded,
+                "speed": "normal",
+                "notes": {
+                    "organization_id": str(row.organization_id),
+                    "reason": "Card issued outside India on a rupee price (D-011)",
+                },
+            })
+            refunded = amount
+        except Exception:
+            logger.exception(
+                "inr-card-rule: automatic refund FAILED for org %s payment %s — REFUND IT BY HAND",
+                row.organization_id, payment_id,
+            )
+    if not captured:
+        row.status = billing.FOREIGN_CARD_REFUSED
+        row.error_message = "Card issued outside India on a rupee price: not captured (released by Razorpay)."
+    elif refunded >= amount:
+        row.status = billing.FOREIGN_CARD_REFUSED
+        row.refunded_amount_paise = amount
+        row.error_message = "Card issued outside India on a rupee price: refunded in full."
+    else:
+        row.status = billing.FOREIGN_CARD_REFUND_DUE
+        row.error_message = "Card issued outside India on a rupee price: the automatic refund failed — refund by hand."
+    if mandate_id and first_refusal:
+        try:
+            _razorpay_request("POST", f"/subscriptions/{mandate_id}/cancel", {"cancel_at_cycle_end": 0})
+        except Exception:
+            logger.exception(
+                "inr-card-rule: could not cancel mandate %s for org %s — CANCEL IT BY HAND",
+                mandate_id, row.organization_id,
+            )
+        if sub is not None and (sub.razorpay_subscription_id or "") == mandate_id:
+            sub.mandate_status = "cancelled"
+            sub.cancel_at_period_end = True
+            sub.canceled_at = sub.canceled_at or datetime.utcnow()
+
+
+def _inr_card_rule(
+    db: Session, *, row, entity: dict, payment_id: str, mandate_id: str | None = None, sub=None,
+) -> str:
+    """Apply D-011 to a payment about to be honoured. Returns "apply" (go on), "reprice" (go
+    on, then _bar_org_from_inr) or "refused" (`row` is recorded as refused: grant nothing)."""
+    if not billing.foreign_card_on_domestic_only(row, entity):
+        return "apply"
+    policy = billing.INR_FOREIGN_CARD_POLICY
+    card = entity.get("card") if isinstance(entity.get("card"), dict) else {}
+    logger.error(
+        "inr-card-rule: org=%s paid a domestic-only %s %s with a card issued outside India "
+        "(payment=%s method=%s network=%s) — policy %s",
+        row.organization_id, row.amount_paise, row.currency, payment_id,
+        entity.get("method"), card.get("network"), policy,
+    )
+    if policy == billing.FOREIGN_CARD_POLICY_REFUND:
+        _refuse_foreign_card_payment(
+            db, row=row, entity=entity, payment_id=payment_id, mandate_id=mandate_id, sub=sub,
+        )
+        return "refused"
+    if policy == billing.FOREIGN_CARD_POLICY_REPRICE:
+        return "reprice"
+    return "apply"
+
+
+def _bar_org_from_inr(db: Session, organization_id: int, *, sub=None, mandate_id: str | None = None) -> None:
+    """Policy "reprice": the payment stands, and the org is never quoted or charged INR again
+    (billing.org_billing_country). An INR mandate is cancelled at the end of the period just
+    paid for, so the next renewal is a new checkout on the foreign ladder. Never raises."""
+    org = db.get(models.EnterpriseOrganization, int(organization_id))
+    if org is not None and org.inr_barred_at is None:
+        org.inr_barred_at = datetime.utcnow()
+    if not mandate_id:
+        return
+    try:
+        _razorpay_request("POST", f"/subscriptions/{mandate_id}/cancel", {"cancel_at_cycle_end": 1})
+    except Exception:
+        logger.exception(
+            "inr-card-rule: could not stop INR mandate %s for org %s — CANCEL IT AT CYCLE END BY HAND",
+            mandate_id, organization_id,
+        )
+    if sub is not None and (sub.razorpay_subscription_id or "") == mandate_id:
+        sub.cancel_at_period_end = True
+        sub.canceled_at = sub.canceled_at or datetime.utcnow()
+
+
+def _reprice_note(db: Session, organization, request: Request | None, *, recurring: bool = False) -> str:
+    """The sentence a buyer reads after "reprice" accepted their foreign card."""
+    currency = _resolve_charge_currency(None, organization, db=db, request=request)
+    note = (
+        "Your card was issued outside India, and rupee prices are for Indian payment methods, "
+        f"so this workspace is billed in {currency} from now on"
+    )
+    return note + ("; this plan won't renew in rupees." if recurring else ".")
+
+
 def _reconcile_plan_payment(db: Session, *, plan_row, entity: dict, order_id: str) -> dict:
     """Activate a plan whose browser callback never arrived (abandoned 3DS, closed tab).
 
@@ -8173,8 +8338,30 @@ def _reconcile_plan_payment(db: Session, *, plan_row, entity: dict, order_id: st
     if plan_row.status == "verified":
         return {"status": "ok"}
 
+    # D-011: a refused payment stays refused (a due refund is retried on each delivery), and
+    # a foreign card on a domestic-only order is decided BEFORE anything is captured.
+    payment_id = str(entity.get("id") or "").strip()
+    if plan_row.status in billing.FOREIGN_CARD_STATUSES:
+        if plan_row.status == billing.FOREIGN_CARD_REFUND_DUE:
+            _refuse_foreign_card_payment(db, row=plan_row, entity=entity, payment_id=payment_id)
+            db.commit()
+        return {"status": "refused", "reason": INR_FOREIGN_CARD_CODE}
+    rule = _inr_card_rule(db, row=plan_row, entity=entity, payment_id=payment_id)
+    if rule == "refused":
+        db.commit()
+        return {"status": "refused", "reason": INR_FOREIGN_CARD_CODE}
+    if _awaiting_capture(entity):
+        # payment.authorized. Only a manual-capture (domestic-only) order waits for us; any
+        # other order is auto-captured by Razorpay and reconciled on payment.captured.
+        if not plan_row.domestic_only:
+            return {"status": "ignored", "reason": "not_captured"}
+        # A failed capture raises (502), so Razorpay redelivers the event.
+        entity = _capture_authorized_payment(
+            entity, amount_minor=int(plan_row.amount_paise), currency=stored_currency,
+        )
+
     now = datetime.utcnow()
-    plan_row.razorpay_payment_id = str(entity.get("id") or "").strip() or None
+    plan_row.razorpay_payment_id = payment_id or None
     plan_row.status = "verified"
     plan_row.verified_at = now
     plan_row.error_message = None
@@ -8201,6 +8388,8 @@ def _reconcile_plan_payment(db: Session, *, plan_row, entity: dict, order_id: st
         base = base.replace(tzinfo=None)
     start = base if (base and base > now) else now
     sub.current_period_end = start + timedelta(days=period_days)
+    if rule == "reprice":
+        _bar_org_from_inr(db, plan_row.organization_id)
     db.commit()
 
     try:
@@ -8395,7 +8584,7 @@ def _handle_subscription_charged(db: Session, *, event: dict, payment_entity: di
         )
         return {"status": "superseded", "refund_required": True}
 
-    db.add(models.EnterpriseSubscriptionPayment(
+    charge_row = models.EnterpriseSubscriptionPayment(
         organization_id=org_id,
         created_by_user_id=(seed_row.created_by_user_id if seed_row else None),
         plan=plan_key,
@@ -8411,13 +8600,31 @@ def _handle_subscription_charged(db: Session, *, event: dict, payment_entity: di
         base_currency="INR",
         fx_rate_used=fx_rate,
         is_international=bool(entity.get("international")),
+        # Every charge on a mandate is sold on the terms of its first row (D-011).
+        domestic_only=bool(seed_row.domestic_only) if seed_row else False,
         # Each renewal needs its own unique "order" key; the payment id is unique per charge.
         razorpay_order_id=payment_id,
         razorpay_payment_id=payment_id,
         razorpay_subscription_id=subscription_id,
         status="verified",
         verified_at=datetime.utcnow(),
-    ))
+    )
+
+    # D-011: a mandate has no manual capture, so a foreign card on a domestic-only mandate is
+    # caught here, after capture — on its first charge (tab closed before verify) or on a
+    # renewal after the buyer changed the card. Refused: refunded, mandate cancelled, the
+    # period is not extended (the org lapses at the end of what it already paid for).
+    rule = _inr_card_rule(
+        db, row=charge_row, entity=entity, payment_id=payment_id,
+        mandate_id=subscription_id, sub=sub,
+    )
+    if rule == "refused":
+        charge_row.included_credits = 0
+        charge_row.verified_at = None
+        db.add(charge_row)
+        db.commit()
+        return {"status": "refused", "reason": INR_FOREIGN_CARD_CODE}
+    db.add(charge_row)
 
     now = datetime.utcnow()
     sub = billing.get_or_create_org_subscription(db, org_id, commit=False)
@@ -8441,6 +8648,8 @@ def _handle_subscription_charged(db: Session, *, event: dict, payment_entity: di
     # Stack on the period already bought so a charge arriving early never shortens it.
     start = base if (base and base > now) else now
     sub.current_period_end = start + timedelta(days=billing.PLAN_PERIOD_DAYS)
+    if rule == "reprice":
+        _bar_org_from_inr(db, org_id, sub=sub, mandate_id=subscription_id)
     db.commit()
 
     try:
@@ -8504,7 +8713,10 @@ async def enterprise_credits_webhook(request: Request, db: Session = Depends(get
     if event_name == "subscription.charged":
         return _handle_subscription_charged(db, event=event)
 
-    if event_name != "payment.captured":
+    # payment.authorized matters only for manual-capture (domestic-only, D-011) orders, which
+    # nothing else would ever capture once the buyer has closed the tab; for any other payment
+    # it is ignored below and payment.captured does the work.
+    if event_name not in {"payment.captured", "payment.authorized"}:
         return {"status": "ignored"}
 
     entity = (((event.get("payload") or {}).get("payment") or {}).get("entity")) or {}
@@ -8513,7 +8725,7 @@ async def enterprise_credits_webhook(request: Request, db: Session = Depends(get
         # A subscription's FIRST charge arrives as payment.captured with a subscription_id
         # and no order_id. Route it to the same renewal path so the mandate is recorded even
         # when the buyer abandoned the browser callback.
-        if str(entity.get("subscription_id") or "").strip():
+        if event_name == "payment.captured" and str(entity.get("subscription_id") or "").strip():
             return _handle_subscription_charged(db, event=event, payment_entity=entity)
         return {"status": "ignored"}
 
@@ -8556,8 +8768,32 @@ async def enterprise_credits_webhook(request: Request, db: Session = Depends(get
         )
         return {"status": "mismatch"}
 
+    # D-011, exactly as in _reconcile_plan_payment: refused stays refused, and a foreign card
+    # on a domestic-only order is decided before anything is captured.
+    payment_id = str(entity.get("id") or "").strip()
+    if payment_row.status in billing.FOREIGN_CARD_STATUSES:
+        if payment_row.status == billing.FOREIGN_CARD_REFUND_DUE:
+            _refuse_foreign_card_payment(db, row=payment_row, entity=entity, payment_id=payment_id)
+            db.commit()
+        return {"status": "refused", "reason": INR_FOREIGN_CARD_CODE}
+    rule = "apply"
     if payment_row.status != "verified":
-        payment_row.razorpay_payment_id = str(entity.get("id") or "").strip() or None
+        rule = _inr_card_rule(db, row=payment_row, entity=entity, payment_id=payment_id)
+        if rule == "refused":
+            db.commit()
+            return {"status": "refused", "reason": INR_FOREIGN_CARD_CODE}
+        if _awaiting_capture(entity):
+            if not payment_row.domestic_only:
+                return {"status": "ignored", "reason": "not_captured"}
+            # A failed capture raises (502), so Razorpay redelivers the event.
+            entity = _capture_authorized_payment(
+                entity, amount_minor=int(payment_row.amount_paise), currency=stored_currency,
+            )
+    elif _awaiting_capture(entity):
+        return {"status": "ok"}
+
+    if payment_row.status != "verified":
+        payment_row.razorpay_payment_id = payment_id or None
         base_minor, fx_rate = money.settled_inr_minor(entity)
         if base_minor is not None:
             payment_row.base_amount_paise = base_minor
@@ -8595,6 +8831,8 @@ async def enterprise_credits_webhook(request: Request, db: Session = Depends(get
                 reference_type="payment", reference_id=payment_row.id,
                 commit=False,
             )
+    if rule == "reprice":
+        _bar_org_from_inr(db, payment_row.organization_id)
     db.commit()
     return {"status": "ok"}
 
@@ -8983,11 +9221,11 @@ def _org_charge_currencies(organization, request: Request | None) -> list[str]:
     to each (an INR-region org: ["INR"]; elsewhere: every ladder currency except INR; country
     unknown: all of them). What a currency selector should offer, so a buyer can never pick
     a currency checkout would then refuse or silently replace."""
-    # The same country charge_currency_for_org decides by (billing.billing_country_for): the
+    # The same country charge_currency_for_org decides by (billing.org_billing_country): the
     # org's own — unless it claims the INR region while the request's known geo country is
-    # outside it — else the request's CDN geo country, else unknown (every launch currency,
-    # INR included, stays allowed).
-    country = billing.billing_country_for(getattr(organization, "country_code", None), request)
+    # outside it, or it is barred from INR — else the request's CDN geo country, else unknown
+    # (every launch currency, INR included, stays allowed).
+    country = billing.org_billing_country(organization, request)
     return [
         code for code in money.supported_charge_currencies()
         if billing.region_charge_currency(code, country) == code
@@ -9290,6 +9528,11 @@ def enterprise_billing_checkout(
             "message": "Online checkout is being enabled. Please contact sales to activate your plan.",
         }
 
+    # D-011: a rupee charge to an org billed in India is sold for Indian payment methods only.
+    # Stamped on the row, so every later check (verify, webhooks, each renewal of a mandate)
+    # judges the payment by the terms it was sold on, not by the org's settings at that time.
+    domestic_only = billing.org_domestic_only_charge(organization, plan_currency, request)
+
     notes = {
         "organization_id": str(organization.id),
         "plan": plan["key"],
@@ -9354,12 +9597,17 @@ def enterprise_billing_checkout(
             coupon_code=coupon_code,
             coupon_percent_off=coupon_percent,
             original_amount_paise=list_amount,
+            domestic_only=domestic_only,
             status="created",
         ))
         db.commit()
         return {
             "action": "checkout",
             "checkout_mode": "subscription",
+            # A mandate has no manual capture and Checkout documents no display config for
+            # it, so the rule is checked after the charge (and stated in the portal).
+            "domestic_only": domestic_only,
+            "payment_rule": billing.DOMESTIC_ONLY_RULE if domestic_only else None,
             "razorpay_key_id": os.getenv("RAZORPAY_KEY_ID", "").strip(),
             "subscription_id": subscription_id,
             "amount": amount,
@@ -9395,6 +9643,9 @@ def enterprise_billing_checkout(
         "currency": plan_currency,
         "receipt": receipt,
         "notes": notes,
+        # Manual capture for a domestic-only order: nothing is captured until the payment
+        # entity shows an Indian payment method (see _inr_card_rule).
+        **(billing.domestic_only_order_options() if domestic_only else {}),
     })
     order_id = str(order.get("id") or "").strip()
     if not order_id:
@@ -9420,6 +9671,7 @@ def enterprise_billing_checkout(
         currency=plan_currency,
         price_book_version=money.PRICE_BOOK_VERSION,
         razorpay_order_id=order_id,
+        domestic_only=domestic_only,
         status="created",
     ))
     db.commit()
@@ -9428,6 +9680,10 @@ def enterprise_billing_checkout(
         "action": "checkout",
         "checkout_mode": "order",
         "auto_renew": False,
+        "domestic_only": domestic_only,
+        "payment_rule": billing.DOMESTIC_ONLY_RULE if domestic_only else None,
+        # Passed to Razorpay Checkout as `config` (cosmetic: hides PayPal).
+        "checkout_config": billing.domestic_only_checkout_config() if domestic_only else None,
         "razorpay_key_id": os.getenv("RAZORPAY_KEY_ID", "").strip(),
         "order_id": order_id,
         # `amount` is the charged total — the Razorpay modal must open on this.
@@ -9541,6 +9797,10 @@ def enterprise_billing_verify(
             "message": "This payment has already been verified.",
             "subscription": _serialize_subscription_state(billing.build_subscription_state(db, organization.id, request=request)),
         }
+    # Refused under D-011 (a card issued outside India on a rupee price): a replay is told so
+    # again and changes nothing.
+    if payment_row.status in billing.FOREIGN_CARD_STATUSES:
+        return _foreign_card_refused_response("plan", payment_row)
 
     # THE TWO FLOWS SIGN DIFFERENT STRINGS, IN DIFFERENT ORDERS. A one-off order signs
     # "<order_id>|<payment_id>"; a recurring mandate signs "<payment_id>|<subscription_id>".
@@ -9579,6 +9839,14 @@ def enterprise_billing_verify(
         )
         .first()
     )
+    if already is not None and already.status in billing.FOREIGN_CARD_STATUSES:
+        # The renewal webhook got here first and refused this charge (D-011). The money is
+        # on its row; this seed only records that the checkout ended refused.
+        payment_row.status = billing.FOREIGN_CARD_REFUSED
+        payment_row.is_international = True
+        payment_row.error_message = f"Refused with the charge on payment row #{already.id}."
+        db.commit()
+        return _foreign_card_refused_response("plan", already)
     if already is not None:
         payment_row.status = "verified"
         payment_row.verified_at = payment_row.verified_at or datetime.utcnow()
@@ -9616,6 +9884,22 @@ def enterprise_billing_verify(
         _reject_plan_payment("Payment currency mismatch.")
     if not is_recurring and str(payment_data.get("order_id") or "") != payment_row.razorpay_order_id:
         _reject_plan_payment("Payment does not belong to this order.")
+    # D-011, before anything is captured: a card issued outside India on a domestic-only row
+    # is accepted ("review"), accepted with the org moved off INR ("reprice"), or refused
+    # ("refund": never captured, or refunded and its mandate cancelled).
+    rule = _inr_card_rule(
+        db, row=payment_row, entity=payment_data, payment_id=charge_id,
+        mandate_id=payment_row.razorpay_subscription_id or None,
+    )
+    if rule == "refused":
+        db.commit()
+        return _foreign_card_refused_response("plan", payment_row)
+    if payment_row.domestic_only and not is_recurring and _awaiting_capture(payment_data):
+        # A manual-capture order the rule has cleared. A failed capture is a 502 and leaves
+        # the row "created": the payment.authorized webhook can still capture it.
+        payment_data = _capture_authorized_payment(
+            payment_data, amount_minor=int(payment_row.amount_paise), currency=expected_currency,
+        )
     if not bool(payment_data.get("captured")):
         _reject_plan_payment("This payment has not been captured yet.")
 
@@ -9666,6 +9950,10 @@ def enterprise_billing_verify(
         base = base.replace(tzinfo=None)
     start = base if (base and base > now) else now
     sub.current_period_end = start + timedelta(days=period_days)
+    if rule == "reprice":
+        _bar_org_from_inr(
+            db, organization.id, sub=sub, mandate_id=payment_row.razorpay_subscription_id or None,
+        )
 
     db.commit()
 
@@ -9683,6 +9971,8 @@ def enterprise_billing_verify(
     message = f"Your {plan_label} plan is now active."
     if granted > 0:
         message += f" {granted:,} AI credits have been added to your wallet."
+    if rule == "reprice":
+        message += " " + _reprice_note(db, organization, request, recurring=is_recurring)
     return {
         "message": message,
         "credits_granted": granted,
@@ -9741,6 +10031,11 @@ def enterprise_credits_wallet(
         # second round-trip — limited to the currencies this org can actually be charged in.
         "packages": credits.packages_payload(org_currency),
         "charge_currencies": _org_charge_currencies(organization, request),
+        # D-011: shown in the top-up modal when the pack is priced in rupees.
+        "inr_payment_rule": (
+            billing.DOMESTIC_ONLY_RULE
+            if billing.org_domestic_only_charge(organization, "INR", request) else None
+        ),
         # Top-ups are refused (402) while AI is paused; the modal says so up front instead.
         "topup_allowed": bool(billing.ai_access_state(db, organization.id)["allowed"]),
         "checkout_enabled": _razorpay_enabled(),
@@ -10334,6 +10629,9 @@ def enterprise_credits_topup_checkout(
             "message": "Online top-up is being enabled. Please contact us to add credits.",
         }
 
+    # D-011: rupee credits for an org billed in India are sold for Indian payment methods
+    # only — a manual-capture order, captured once the payment shows an Indian method.
+    domestic_only = billing.org_domestic_only_charge(organization, currency, request)
     receipt = f"reln_cr_{organization.id}_{currency.lower()}_{secrets.token_hex(4)}"[:40]
     order = _razorpay_request("POST", "/orders", {
         "amount": amount,
@@ -10348,6 +10646,7 @@ def enterprise_credits_topup_checkout(
             "currency": currency,
             "price_book_version": money.PRICE_BOOK_VERSION,
         },
+        **(billing.domestic_only_order_options() if domestic_only else {}),
     })
     order_id = str(order.get("id") or "").strip()
     if not order_id:
@@ -10368,6 +10667,7 @@ def enterprise_credits_topup_checkout(
         currency=currency,
         price_book_version=money.PRICE_BOOK_VERSION,
         razorpay_order_id=order_id,
+        domestic_only=domestic_only,
         status="created",
     ))
     # Make the currency choice sticky so the next top-up doesn't re-guess from country.
@@ -10389,6 +10689,10 @@ def enterprise_credits_topup_checkout(
         "package": package["key"],
         "package_label": package["label"],
         "total_credits": int(package["credits"]) + int(package["bonus_credits"]),
+        "domestic_only": domestic_only,
+        "payment_rule": billing.DOMESTIC_ONLY_RULE if domestic_only else None,
+        # Passed to Razorpay Checkout as `config` (cosmetic: hides PayPal).
+        "checkout_config": billing.domestic_only_checkout_config() if domestic_only else None,
         "organization_name": organization.company_name,
         # International payments fail on placeholder contact data, so send the real
         # values we hold and omit rather than invent.
@@ -10414,6 +10718,8 @@ def enterprise_credits_topup_verify(
     payment_row = _verify_credit_payment_or_402(
         db=db, organization=organization, payload=payload, expected_kind="credits"
     )
+    if payment_row.status in billing.FOREIGN_CARD_STATUSES:
+        return _foreign_card_refused_response("credits", payment_row)
 
     total_credits = int(payment_row.credits) + int(payment_row.bonus_credits)
     # Idempotency: credit the wallet only once (skip if a ledger row already exists).
@@ -10438,8 +10744,11 @@ def enterprise_credits_topup_verify(
         )
     db.commit()
 
+    message = f"{total_credits} credits added to your wallet."
+    if payment_row.domestic_only and payment_row.is_international and organization.inr_barred_at is not None:
+        message += " " + _reprice_note(db, organization, request)
     return {
-        "message": f"{total_credits} credits added to your wallet.",
+        "message": message,
         "wallet": credits.wallet_state(
             db, organization.id,
             currency=_resolve_charge_currency(None, organization, db=db, request=request),
@@ -10635,6 +10944,9 @@ def _verify_credit_payment_or_402(
         payment_row.error_message = "Invalid payment signature."
         db.commit()
         raise HTTPException(status_code=400, detail="Invalid payment signature.")
+    # Refused under D-011: the caller answers with the refusal; nothing is credited.
+    if payment_row.status in billing.FOREIGN_CARD_STATUSES:
+        return payment_row
 
     # The signature proves only that "order_id|payment_id" came from Razorpay — it binds
     # neither the amount nor the currency, and says nothing about whether the money was
@@ -10652,8 +10964,6 @@ def _verify_credit_payment_or_402(
     expected_currency = money.normalize_currency(payment_row.currency, strict=False)
     if str(order_data.get("id") or "") != payment_row.razorpay_order_id:
         _reject("Razorpay order mismatch.")
-    if str(order_data.get("status", "")).lower() != "paid":
-        _reject("This payment has not completed yet.")
     if int(order_data.get("amount", 0) or 0) != int(payment_row.amount_paise):
         _reject("Payment amount mismatch.")
     if money.normalize_currency(order_data.get("currency"), strict=False) != expected_currency:
@@ -10664,6 +10974,26 @@ def _verify_credit_payment_or_402(
         _reject("Payment amount mismatch.")
     if money.normalize_currency(payment_data.get("currency"), strict=False) != expected_currency:
         _reject("Payment currency mismatch.")
+
+    # D-011, before anything is captured (see /billing/verify). A domestic-only order is
+    # manual-capture: its order reads "attempted" until we capture the cleared payment here.
+    rule = "apply"
+    captured_here = False
+    if payment_row.status != "verified":
+        rule = _inr_card_rule(
+            db, row=payment_row, entity=payment_data,
+            payment_id=payload.razorpay_payment_id.strip(),
+        )
+        if rule == "refused":
+            db.commit()
+            return payment_row
+        if payment_row.domestic_only and _awaiting_capture(payment_data):
+            payment_data = _capture_authorized_payment(
+                payment_data, amount_minor=int(payment_row.amount_paise), currency=expected_currency,
+            )
+            captured_here = bool(payment_data.get("captured"))
+    if not captured_here and str(order_data.get("status", "")).lower() != "paid":
+        _reject("This payment has not completed yet.")
     # Authorized-but-uncaptured still produces a valid checkout signature, and capture
     # failure is materially more common on international cards. Crediting a wallet here
     # would hand out credits for money that never arrives.
@@ -10683,6 +11013,8 @@ def _verify_credit_payment_or_402(
         payment_row.status = "verified"
         payment_row.verified_at = datetime.utcnow()
         payment_row.error_message = None
+    if rule == "reprice":
+        _bar_org_from_inr(db, organization.id)
     return payment_row
 
 

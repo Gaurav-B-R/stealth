@@ -767,3 +767,64 @@ test('price helpers read the server and never invent a default', () => {
   app.state.billingPlans = PLANS();
   assert.equal(app.planAllowanceSummary(), 'Starter, Team and Multi-branch include 150 / 450 / 1,200 AI credits every month.');
 });
+
+// ---------------------------------------------------------------------------
+// D-011: rupee prices are paid with Indian payment methods
+// ---------------------------------------------------------------------------
+
+const RULE = 'Rupee prices are paid with an Indian payment method: UPI, netbanking, or an India-issued card or wallet.';
+
+test('the rupee payment rule is one line under INR plans, and absent when the server sends none', async () => {
+  const app = setup({ routes: { 'GET /billing/subscription': billingPayload({ subscription: sub({ inr_payment_rule: RULE }) }) } });
+  await app.renderBilling();
+  assert.ok(content(app).includes(RULE));
+  const none = setup({ routes: { 'GET /billing/subscription': billingPayload() } });
+  await none.renderBilling();
+  assert.ok(!content(none).includes('Indian payment method'));
+  const barred = setup({ routes: { 'GET /billing/subscription': billingPayload({ subscription: sub({ inr_barred: true }) }) } });
+  await barred.renderBilling();
+  assert.ok(content(barred).includes('card issued outside India'));
+});
+
+test('checkout passes the server config to Razorpay, and a refused foreign card opens an in-app notice', async () => {
+  const refusal = "That card was issued outside India. " + RULE + " The payment wasn't taken. Nothing on your plan has changed.";
+  const app = setup({ routes: {
+    'GET /billing/subscription': billingPayload({ subscription: sub({ inr_payment_rule: RULE }) }),
+    'POST /billing/checkout': {
+      action: 'checkout', checkout_mode: 'order', order_id: 'order_1', amount: 149900, currency: 'INR',
+      razorpay_key_id: 'rzp_test', plan_label: 'Starter', billing_cycle: 'monthly', tax_paise: 0,
+      domestic_only: true, payment_rule: RULE,
+      checkout_config: { display: { hide: [{ method: 'wallet', wallets: ['paypal'] }] } },
+    },
+    'POST /billing/verify': () => jsonResponse({ detail: refusal, code: 'inr_foreign_card' }, 402),
+  } });
+  await app.renderBilling();
+  const toastsShown = [];
+  app.dom.get('toastWrap').appendChild = (el) => { toastsShown.push(el.innerHTML); return el; };
+  let opened;
+  app.context.Razorpay = class { constructor(opts) { opened = opts; } on() {} open() {} };
+  await app.checkout('starter', null);
+  assert.deepEqual(plain(opened.config), { display: { hide: [{ method: 'wallet', wallets: ['paypal'] }] } });
+  await opened.handler({ razorpay_order_id: 'order_1', razorpay_payment_id: 'pay_1', razorpay_signature: 'sig' });
+  await settle();
+  const modal = app.dom.get('modal').innerHTML;
+  assert.ok(modal.includes('Card issued outside India') && modal.includes('wasn&#39;t taken'), modal);
+  assert.ok(!toastsShown.some((t) => /verification failed/i.test(t)), toastsShown.join(' | '));
+
+  // Any other verify failure is still a toast.
+  const other = setup({ routes: {
+    'GET /billing/subscription': billingPayload(),
+    'POST /billing/checkout': { action: 'checkout', checkout_mode: 'order', order_id: 'order_2', amount: 149900, currency: 'INR', razorpay_key_id: 'rzp_test', plan_label: 'Starter', billing_cycle: 'monthly', tax_paise: 0 },
+    'POST /billing/verify': () => jsonResponse({ detail: 'Payment amount mismatch.' }, 400),
+  } });
+  await other.renderBilling();
+  const otherToasts = [];
+  other.dom.get('toastWrap').appendChild = (el) => { otherToasts.push(el.innerHTML); return el; };
+  let opened2;
+  other.context.Razorpay = class { constructor(opts) { opened2 = opts; } on() {} open() {} };
+  await other.checkout('starter', null);
+  assert.equal(opened2.config, undefined, 'no config for an order the server sent none for');
+  await opened2.handler({ razorpay_order_id: 'order_2', razorpay_payment_id: 'pay_2', razorpay_signature: 'sig' });
+  await settle();
+  assert.ok(otherToasts.some((t) => t.includes('Payment verification failed: Payment amount mismatch.')), otherToasts.join(' | '));
+});

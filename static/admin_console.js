@@ -5026,8 +5026,10 @@ function buildPlanPaymentsBlock(data) {
         if (p.status === 'verified') statusCls = 'verified';
         // "superseded" = charged on a mandate the org had already replaced: money taken for
         // nothing, to be refunded — red, like a failure, so it is not read as a normal row.
-        else if (p.status === 'failed' || p.status === 'superseded') statusCls = 'failed';
-        else if (p.status === 'refunded' || p.status === 'partially_refunded') statusCls = 'refunded';
+        // "foreign_card_refund_due" (D-011) = a rupee price paid with a foreign card whose
+        // automatic refund failed: refund it by hand, so it is red too.
+        else if (p.status === 'failed' || p.status === 'superseded' || p.status === 'foreign_card_refund_due') statusCls = 'failed';
+        else if (p.status === 'refunded' || p.status === 'partially_refunded' || p.status === 'foreign_card_refused') statusCls = 'refunded';
         const statusLabel = String(p.status || '').replace(/_/g, ' ');
         const offlineTag = p.is_offline ? ' <span class="account-coupon-tag">offline</span>' : '';
         const reference = p.reference ? `<div class="enterprise-meta">${escapeHtml(p.reference)}</div>` : '';

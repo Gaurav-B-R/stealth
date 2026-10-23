@@ -4021,6 +4021,21 @@ _PRICING_V2_FOLLOWUP_COLUMNS: dict[str, tuple[tuple[str, str], ...]] = {
     ),
 }
 
+# D-011 (2026-10-23): rupee prices are paid with Indian payment methods. `domestic_only` is
+# FALSE on every existing row, so mandates sold before the rule keep renewing exactly as they
+# were sold; `inr_barred_at` is set only under the "reprice" foreign-card policy.
+_INR_DOMESTIC_ONLY_COLUMNS: dict[str, tuple[tuple[str, str], ...]] = {
+    "enterprise_subscription_payments": (
+        ("domestic_only", "BOOLEAN NOT NULL DEFAULT {bool_false}"),
+    ),
+    "enterprise_credit_payments": (
+        ("domestic_only", "BOOLEAN NOT NULL DEFAULT {bool_false}"),
+    ),
+    "enterprise_organizations": (
+        ("inr_barred_at", "{ts}"),
+    ),
+}
+
 # Same names create_all() derives from `index=True` on the models, so a table built either
 # way ends up with exactly one copy of each index.
 _PRICING_V2_INDEXES: tuple[tuple[str, str], ...] = (
@@ -4051,7 +4066,11 @@ def ensure_enterprise_pricing_v2_columns():
         "bool_false": "0" if is_sqlite else "FALSE",
     }
     with engine.begin() as conn:
-        for table, columns in (*_PRICING_V2_COLUMNS.items(), *_PRICING_V2_FOLLOWUP_COLUMNS.items()):
+        for table, columns in (
+            *_PRICING_V2_COLUMNS.items(),
+            *_PRICING_V2_FOLLOWUP_COLUMNS.items(),
+            *_INR_DOMESTIC_ONLY_COLUMNS.items(),
+        ):
             if not _table_exists(conn, table):
                 continue
             existing = _get_table_columns(conn, table)
