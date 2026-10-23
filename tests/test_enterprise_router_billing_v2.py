@@ -20,6 +20,7 @@ _razorpay_request (nothing leaves the process).
 
 import hashlib
 import hmac
+import json
 from datetime import datetime, timedelta
 from decimal import Decimal
 from types import SimpleNamespace
@@ -1361,7 +1362,7 @@ def test_per_branch_reporting_is_a_team_feature(ctx):
 def test_public_plans_is_anonymous_cacheable_and_rate_limited(ctx):
     anon = TestClient(ctx.client.app)
     ctx.client.app.dependency_overrides.pop(get_current_active_user)
-    res = anon.get("/api/enterprise/public/plans")
+    res = anon.get("/api/enterprise/public/plans", headers={"cf-ipcountry": "IN"})
     assert res.status_code == 200, res.text
     assert res.headers["cache-control"] == "public, max-age=300"
     assert "CF-IPCountry" in res.headers["vary"]
@@ -1383,6 +1384,11 @@ def test_public_plans_is_anonymous_cacheable_and_rate_limited(ctx):
     assert body["file_grace_days"] == billing.FILE_LIMIT_GRACE_DAYS
     assert body["actions"] == credits.actions_payload()
     assert body["packages"] == credits.packages_payload("INR")
+    # India's region is priced in INR only: no other ladder anywhere in the response.
+    assert body["currencies"] == ["INR"]
+    assert "all_currencies" not in body
+    for row in body["plans"] + body["packages"]:
+        assert {o["currency"] for o in row.get("price_options") or []} <= {"INR"}
 
 
 @pytest.mark.parametrize("geo,hint,currency,usd", [
@@ -1390,7 +1396,10 @@ def test_public_plans_is_anonymous_cacheable_and_rate_limited(ctx):
     ("IN", None, "INR", False),
     ("GB", "INR", "GBP", False),   # never INR outside the region
     ("US", "EUR", "EUR", False),   # a ladder currency hint outside the region is honoured
-    (None, "JPY", "INR", False),   # unsupported hint ignored, not a 400
+    ("IN", "USD", "INR", False),   # never the foreign ladder inside the region
+    (None, "JPY", "USD", False),   # unsupported hint ignored, not a 400
+    (None, "INR", "USD", False),   # an unknown country is never quoted the INR ladder
+    (None, None, "USD", False),
 ])
 def test_public_plans_region_rule(ctx, geo, hint, currency, usd):
     headers = {"cf-ipcountry": geo} if geo else {}
@@ -1403,10 +1412,17 @@ def test_public_plans_region_rule(ctx, geo, hint, currency, usd):
     assert all((p["usd_estimate"] is not None) is usd for p in paid)
     if hint == "JPY":
         assert body["requested_currency_supported"] is False
-    if geo == "NP":
+    if geo in ("NP", "IN"):
         assert body["currencies"] == ["INR"]
-    if geo == "GB":
+    else:
         assert "INR" not in body["currencies"]
+    # One region's prices only, anywhere in the response — not even unrendered in a ladder.
+    for row in body["plans"] + body["packages"]:
+        assert {o["currency"] for o in row.get("price_options") or []} <= set(body["currencies"])
+    if currency != "INR":
+        assert "₹" not in json.dumps(body, ensure_ascii=False)
+        assert all("price_inr" not in a and "price_display" not in a for a in body["actions"])
+        assert all("value_inr" not in p for p in body["packages"])
 
 
 def test_public_plans_reports_tax_zero_without_inventing_gst(ctx, monkeypatch):

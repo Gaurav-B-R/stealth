@@ -218,7 +218,7 @@ The 2026-10-22 B2B pricing model ([decision D-009](decisions.md#d-009-enterprise
    pro = g.extract_text_from_document(data, "sample.pdf", "application/pdf", model_candidates=["gemini-3.1-pro-preview"])
    ```
    Check names, dates of birth, document numbers, expiry dates, amounts and balances, institution names and grades against the original. If Flash-Lite misses facts that matter, pin a stronger chain with `ENTERPRISE_READ_MODEL_CANDIDATES` and re-check the margin. These calls are billed (usage source `enterprise_document_read`).
-8. **After deploy:** `GET /api/enterprise/public/plans?currency=INR` returns the new prices, `tax.note` is `"+ GST"` only when GST is above 0, and `yearly_enabled` matches the flag; the for-enterprise marketing page and the homepage contain no literal `{{ENT_` text; the admin console's enterprise account shows Billing controls (offline payment, credits, limits & trial).
+8. **After deploy:** `GET /api/enterprise/public/plans` from India (or with `cf-ipcountry: IN`) returns the new INR prices, and from anywhere else never any INR price, `tax.note` is `"+ GST"` only when GST is above 0, and `yearly_enabled` matches the flag; the for-enterprise marketing page and the homepage contain no literal `{{ENT_` text; the admin console's enterprise account shows Billing controls (offline payment, credits, limits & trial).
 
 ### Environment variables added or changed by pricing v2
 
@@ -286,6 +286,8 @@ Public price list (`GET /api/enterprise/public/plans`):
 | --- | --- | --- |
 | `ENTERPRISE_PUBLIC_PLANS_RATE_LIMIT` / `ENTERPRISE_PUBLIC_PLANS_RATE_WINDOW` | 60 / 60 s | Per-IP rate limit. |
 | `ENTERPRISE_PUBLIC_PLANS_MAX_AGE` | 300 | `Cache-Control: public, max-age` in seconds (the path is exempt from the global `/api/` no-store rewrite in `app/main.py`). |
+
+Each visitor is quoted one region's prices: INR from the INR region (`ENTERPRISE_INR_REGION_COUNTRIES`), the local ladder currency or USD from anywhere else. The geo country comes from the CDN header (`CF-IPCountry` behind Cloudflare). Locally there is no such header, so pages show USD; send `cf-ipcountry: IN` (or `x-country-code: IN`) to see the INR version, e.g. `curl -H 'cf-ipcountry: IN' http://127.0.0.1:8097/for-enterprise`.
 
 Admin console typo guards (`app/routers/admin.py`):
 

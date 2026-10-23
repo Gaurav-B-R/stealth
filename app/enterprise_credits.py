@@ -2268,16 +2268,21 @@ def package_price_minor(package_key: str, currency: str) -> int:
     return money.price_minor(f"credits_{package_key}", code)
 
 
-def packages_payload(currency: str | None = None) -> list[dict]:
+def packages_payload(currency: str | None = None, *, currencies=None) -> list[dict]:
     """Top-up packages priced in `currency` (defaults to INR).
 
     `amount_paise` is in the MINOR UNIT of `currency` — the legacy field name is kept so
     the deployed SPA keeps working, but it is cents for a USD quote, not paise.
+
+    `price_options` carries only the currencies in `currencies` (the caller's region rule),
+    and only `currency` itself when none are given — one region's payload never lists
+    another region's prices (see billing.public_price_currencies).
     """
     try:
         code = money.normalize_currency(currency or CURRENCY, strict=True)
     except money.UnsupportedCurrency:
         code = money.DEFAULT_CURRENCY
+    allowed = {str(c).strip().upper() for c in currencies} if currencies else {code}
     payload = []
     for key in PACKAGE_ORDER:
         pkg = PACKAGES[key]
@@ -2298,7 +2303,9 @@ def packages_payload(currency: str | None = None) -> list[dict]:
             "value_inr": paise_to_rupees(credits_to_paise(total)),
             "is_popular": pkg["is_popular"],
             "currency": code,
-            "price_options": money.price_options(f"credits_{key}"),
+            "price_options": [
+                o for o in money.price_options(f"credits_{key}") if o["currency"] in allowed
+            ],
         })
     return payload
 

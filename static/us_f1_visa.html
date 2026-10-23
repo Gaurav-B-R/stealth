@@ -136,7 +136,7 @@
       ]
     }
     </script>
-    <link rel="stylesheet" href="/static/styles.css?v=20260716a">
+    <link rel="stylesheet" href="/static/styles.css?v=20261022a">
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Sora:wght@600;700;800&display=swap" rel="stylesheet">
@@ -4046,11 +4046,41 @@
             <div class="pricing-page">
                 <div class="pricing-header">
                     <h1>Pricing</h1>
-                    <p>Simple plans for every stage of your study-abroad journey.</p>
+                    <p id="pricingSubtitle">Simple plans for every stage of your study-abroad journey.</p>
+                    <!-- Who the plans are for. Students see Free + the Visa Success Pass; teams see
+                         the Enterprise tiers. app.js setPricingAudience() flips the panels and keeps
+                         /pricing?for=enterprise linkable. -->
+                    <div class="pricing-audience" id="pricingAudienceToggle" role="tablist"
+                        aria-label="Show plans for" data-active="students"
+                        onkeydown="handlePricingAudienceKeydown(event)">
+                        <span class="pricing-audience-thumb" aria-hidden="true"></span>
+                        <button type="button" role="tab" id="pricingAudienceStudents"
+                            class="pricing-audience-option is-active" data-pricing-audience="students"
+                            aria-selected="true" aria-controls="pricingStudentsPanel"
+                            onclick="setPricingAudience('students')">
+                            <svg viewBox="0 0 24 24" width="17" height="17" aria-hidden="true" fill="none"
+                                stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round">
+                                <path d="M22 10 12 5 2 10l10 5 10-5Z"/><path d="M6 12v5c3 2 9 2 12 0v-5"/>
+                            </svg>
+                            <span>For students</span>
+                        </button>
+                        <button type="button" role="tab" id="pricingAudienceEnterprise"
+                            class="pricing-audience-option" data-pricing-audience="enterprise"
+                            aria-selected="false" aria-controls="pricingEnterprisePanel" tabindex="-1"
+                            onclick="setPricingAudience('enterprise')">
+                            <svg viewBox="0 0 24 24" width="17" height="17" aria-hidden="true" fill="none"
+                                stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round">
+                                <path d="M4 21V5a1 1 0 0 1 1-1h9a1 1 0 0 1 1 1v16"/><path d="M15 9h4a1 1 0 0 1 1 1v11"/>
+                                <path d="M8 8h3M8 12h3M8 16h3M3 21h18"/>
+                            </svg>
+                            <span>Enterprise</span>
+                        </button>
+                    </div>
                     <!-- Currency, not country: each currency has its own fixed price in the
                          price book, and the options are filled in from that ladder so this
-                         list can never offer a currency we would refuse to charge. -->
-                    <div class="pricing-controls">
+                         list can never offer a currency we would refuse to charge. Students
+                         only: Enterprise prices are one region's per visitor (no selector). -->
+                    <div class="pricing-controls" data-pricing-only="students">
                         <label for="pricingCurrencySelect">Currency</label>
                         <select id="pricingCurrencySelect" onchange="handlePricingCurrencyChange(this.value)"></select>
                         <div id="pricingCurrencyHint" class="pricing-currency-hint">Each currency has its own fixed
@@ -4058,7 +4088,9 @@
                     </div>
                 </div>
 
-                <div class="pricing-grid">
+                <div id="pricingStudentsPanel" class="pricing-panel" role="tabpanel"
+                    aria-labelledby="pricingAudienceStudents">
+                <div class="pricing-grid pricing-grid-students">
                     <div class="pricing-card pricing-card-free">
                         <div class="pricing-card-head">
                             <h2>Free</h2>
@@ -4104,40 +4136,115 @@
                         </ul>
                         <button type="button" id="pricingPassButton" class="btn btn-primary" onclick="handleUpgradeToPro('pricing')">Get the Visa Success Pass</button>
                     </div>
+                </div>
+                <button type="button" class="pricing-audience-nudge"
+                    onclick="setPricingAudience('enterprise', { focus: true, scroll: true })">
+                    <span>Running a visa consultancy or study-abroad team?</span>
+                    <b>See Enterprise plans →</b>
+                </button>
+                </div>
 
-                    <!-- Server-rendered from the live price book (app/enterprise_public_pricing.py fills the
-                         ENT_ price tokens), so the no-JS view is the real INR card, its tax note included only
-                         while GST is charged. app.js (refreshEnterprisePricingCard) then re-renders it from
-                         GET /api/enterprise/public/plans in the currency the server will actually charge this
-                         visitor — never a price of its own. data-tax-note is the INR tax note, for the
-                         offline fallback only. -->
-                    <div class="pricing-card pricing-card-enterprise" id="pricingEnterpriseCard" data-tax-note="{{ENT_TAX_NOTE}}">
-                        <div class="pricing-badge pricing-badge-enterprise">For teams</div>
-                        <div class="pricing-card-head">
-                            <h2>Enterprise</h2>
-                            <p>For visa consultancies, universities &amp; study-abroad teams</p>
-                        </div>
-                        <div id="pricingEnterpriseTrial" class="pricing-plan-meta pricing-plan-meta-enterprise">{{ENT_TRIAL_LABEL}} · no card required</div>
-                        <div class="pricing-plan-savings pricing-plan-savings-enterprise">Plans sized by open student files — every AI feature and monthly AI credits included.</div>
-                        <div id="pricingEnterprisePrice" class="pricing-price pricing-price-enterprise">{{ENT_STARTER_PRICE_INR}}<span>&nbsp;/month{{ENT_TAX_SUFFIX}}</span></div>
-                        <div id="pricingEnterpriseNote" class="pricing-billing-note">{{ENT_STARTER_YEARLY_NOTE}}</div>
-                        <ul class="pricing-features">
-                            <li data-enterprise-plan="starter">{{ENT_STARTER_LABEL}} <span id="pricingEnterpriseTierStarter">{{ENT_STARTER_PRICE_INR}}</span>/mo — {{ENT_STARTER_SEATS}} staff, {{ENT_STARTER_OPEN_FILES}} open files, {{ENT_STARTER_CREDITS}} AI credits/mo</li>
-                            <li data-enterprise-plan="growth">{{ENT_TEAM_LABEL}} <span id="pricingEnterpriseTierGrowth">{{ENT_TEAM_PRICE_INR}}</span>/mo — {{ENT_TEAM_SEATS}} staff, {{ENT_TEAM_OPEN_FILES}} open files, {{ENT_TEAM_CREDITS}} AI credits/mo</li>
-                            <li data-enterprise-plan="scale">{{ENT_MULTI_BRANCH_LABEL}} <span id="pricingEnterpriseTierScale">{{ENT_MULTI_BRANCH_PRICE_INR}}</span>/mo — {{ENT_MULTI_BRANCH_SEATS}} staff, {{ENT_MULTI_BRANCH_OPEN_FILES}} open files, {{ENT_MULTI_BRANCH_CREDITS}} AI credits/mo</li>
-                            <li>Client CRM with every AI feature — document checks, SOP &amp; LOR drafts, mock interviews</li>
-                            <li>AI document reading included every month</li>
-                            <li id="pricingEnterpriseTopupRow">Credit top-ups from <span id="pricingEnterpriseTopupFrom">{{ENT_TOPUP_FROM_INR}}</span></li>
-                            <li>15 destinations — from the US &amp; UK to Singapore &amp; Sweden</li>
-                        </ul>
-                        <a href="/enterprise/demo" class="btn btn-primary">Book a demo</a>
-                        <a href="/for-enterprise" class="pricing-enterprise-link">Explore Rilono Enterprise →</a>
+                <!-- Enterprise plans. Server-rendered from the live price book (app/enterprise_public_pricing.py
+                     fills the ENT_ price tokens) in THIS visitor's region currency — INR from India's billing
+                     region, the local ladder currency or USD elsewhere — so the no-JS view is the real price
+                     list, and no visitor is shown another region's prices. app.js (refreshEnterprisePricingCard)
+                     re-renders every [data-enterprise-plan] card from GET /api/enterprise/public/plans, which
+                     applies the same region rule — never a price of its own. -->
+                <div id="pricingEnterprisePanel" class="pricing-panel" role="tabpanel"
+                    aria-labelledby="pricingAudienceEnterprise" hidden>
+                <div class="pricing-ent" id="pricingEnterpriseCard">
+                    <div class="pricing-ent-intro">
+                        <div id="pricingEnterpriseTrial" class="pricing-ent-trial">{{ENT_TRIAL_LABEL}} · no card required</div>
+                        <!-- The trial is its own small workspace, not a trial of the tier a visitor clicks, so its
+                             limits are stated here (trial_facts via the ENT_TRIAL_ tokens; currency-independent). -->
+                        <p class="pricing-ent-trial-detail">Every workspace starts on the trial: {{ENT_TRIAL_SEATS}} staff,
+                            {{ENT_TRIAL_OPEN_FILES}} open student files and {{ENT_TRIAL_CREDITS_NOTE}}. Pick a plan whenever you&rsquo;re ready.</p>
+                        <p class="pricing-ent-lede">Every plan includes every AI feature. Plans differ by staff, open student
+                            files and the AI credits included each month.</p>
                     </div>
+
+                    <div class="pricing-ent-grid">
+                        <article class="pricing-card pricing-ent-card" data-enterprise-plan="starter">
+                            <div class="pricing-card-head">
+                                <h2 data-ent-field="label">{{ENT_STARTER_LABEL}}</h2>
+                                <p data-ent-field="purpose">{{ENT_STARTER_PURPOSE}}</p>
+                            </div>
+                            <div class="pricing-price" data-ent-field="price">{{ENT_STARTER_PRICE}}<span>&nbsp;/month{{ENT_TAX_SUFFIX}}</span></div>
+                            <div class="pricing-billing-note" data-ent-field="note">{{ENT_STARTER_YEARLY_NOTE}}</div>
+                            <dl class="pricing-ent-specs">
+                                <div><dt>Staff seats</dt><dd data-ent-field="seats">{{ENT_STARTER_SEATS}}</dd></div>
+                                <div><dt>Open student files</dt><dd data-ent-field="files">{{ENT_STARTER_OPEN_FILES}}</dd></div>
+                                <div><dt>AI credits / month</dt><dd data-ent-field="credits">{{ENT_STARTER_CREDITS}}</dd></div>
+                                <div><dt>AI document reads / month</dt><dd data-ent-field="reads">{{ENT_STARTER_READS}}</dd></div>
+                            </dl>
+                            <ul class="pricing-features">
+                                <li>Every AI feature — document checks, SOP &amp; LOR studio, mock interviews, Deep Scan</li>
+                                <li>One office with the built-in roles</li>
+                            </ul>
+                            <a href="https://enterprise.rilono.com/enterprise" class="btn pricing-ent-cta">Start with a free trial</a>
+                        </article>
+
+                        <article class="pricing-card pricing-ent-card is-featured" data-enterprise-plan="growth">
+                            <div class="pricing-badge pricing-badge-enterprise">Most popular</div>
+                            <div class="pricing-card-head">
+                                <h2 data-ent-field="label">{{ENT_TEAM_LABEL}}</h2>
+                                <p data-ent-field="purpose">{{ENT_TEAM_PURPOSE}}</p>
+                            </div>
+                            <div class="pricing-price" data-ent-field="price">{{ENT_TEAM_PRICE}}<span>&nbsp;/month{{ENT_TAX_SUFFIX}}</span></div>
+                            <div class="pricing-billing-note" data-ent-field="note">{{ENT_TEAM_YEARLY_NOTE}}</div>
+                            <dl class="pricing-ent-specs">
+                                <div><dt>Staff seats</dt><dd data-ent-field="seats">{{ENT_TEAM_SEATS}}</dd></div>
+                                <div><dt>Open student files</dt><dd data-ent-field="files">{{ENT_TEAM_OPEN_FILES}}</dd></div>
+                                <div><dt>AI credits / month</dt><dd data-ent-field="credits">{{ENT_TEAM_CREDITS}}</dd></div>
+                                <div><dt>AI document reads / month</dt><dd data-ent-field="reads">{{ENT_TEAM_READS}}</dd></div>
+                            </dl>
+                            <ul class="pricing-features">
+                                <li>Everything in {{ENT_STARTER_LABEL}}</li>
+                                <li>Multiple offices, custom roles &amp; per-branch reporting</li>
+                            </ul>
+                            <a href="https://enterprise.rilono.com/enterprise" class="btn pricing-ent-cta">Start with a free trial</a>
+                        </article>
+
+                        <article class="pricing-card pricing-ent-card" data-enterprise-plan="scale">
+                            <div class="pricing-card-head">
+                                <h2 data-ent-field="label">{{ENT_MULTI_BRANCH_LABEL}}</h2>
+                                <p data-ent-field="purpose">{{ENT_MULTI_BRANCH_PURPOSE}}</p>
+                            </div>
+                            <div class="pricing-price" data-ent-field="price">{{ENT_MULTI_BRANCH_PRICE}}<span>&nbsp;/month{{ENT_TAX_SUFFIX}}</span></div>
+                            <div class="pricing-billing-note" data-ent-field="note">{{ENT_MULTI_BRANCH_YEARLY_NOTE}}</div>
+                            <dl class="pricing-ent-specs">
+                                <div><dt>Staff seats</dt><dd data-ent-field="seats">{{ENT_MULTI_BRANCH_SEATS}}</dd></div>
+                                <div><dt>Open student files</dt><dd data-ent-field="files">{{ENT_MULTI_BRANCH_OPEN_FILES}}</dd></div>
+                                <div><dt>AI credits / month</dt><dd data-ent-field="credits">{{ENT_MULTI_BRANCH_CREDITS}}</dd></div>
+                                <div><dt>AI document reads / month</dt><dd data-ent-field="reads">{{ENT_MULTI_BRANCH_READS}}</dd></div>
+                            </dl>
+                            <ul class="pricing-features">
+                                <li>Everything in {{ENT_TEAM_LABEL}}</li>
+                                <li>Over {{ENT_MULTI_BRANCH_OPEN_FILES}} files, add Branch Packs: +{{ENT_BRANCH_PACK_FILES}} files &amp; +{{ENT_BRANCH_PACK_SEATS}} staff each</li>
+                            </ul>
+                            <a href="https://enterprise.rilono.com/enterprise" class="btn pricing-ent-cta">Start with a free trial</a>
+                        </article>
+                    </div>
+
+                    <div class="pricing-ent-foot">
+                        <ul class="pricing-ent-included" aria-label="Included on every plan">
+                            <li>Client CRM with every AI feature</li>
+                            <li>AI document reading every month</li>
+                            <li id="pricingEnterpriseTopupRow">Credit top-ups from <span id="pricingEnterpriseTopupFrom">{{ENT_TOPUP_FROM}}</span></li>
+                            <li>15 destinations — US &amp; UK to Singapore &amp; Sweden</li>
+                        </ul>
+                        <div class="pricing-ent-actions">
+                            <a href="/enterprise/demo" class="btn pricing-ent-demo">Book a demo</a>
+                            <a href="/for-enterprise" class="pricing-enterprise-link">Explore Rilono Enterprise →</a>
+                        </div>
+                    </div>
+                </div>
                 </div>
                 <!-- "Exactly the amount shown" stays true only while no tax is added on top of a shown price:
                      the suffix (GST wording for Enterprise INR plans) is empty at a 0% rate. -->
-                <p class="pricing-disclaimer">Every currency has its own price — nothing is converted at a daily
-                    exchange rate. You are charged exactly the amount shown, in the currency shown{{ENT_TAX_DISCLAIMER_SUFFIX}}.
+                <p class="pricing-disclaimer"><span data-pricing-only="students">Every currency has its own price —
+                    nothing is converted at a daily exchange rate. </span>You are charged exactly the amount shown,
+                    in the currency shown{{ENT_TAX_DISCLAIMER_SUFFIX}}.
                 </p>
             </div>
         </div>
@@ -6929,7 +7036,7 @@
              looks for #pricingCountrySelect (gone), so the currency selector stays empty,
              the pass price never renders, and the checkout modal has no currency control
              while the server now prices per currency. -->
-        <script src="/static/app.js?v=20261022a"></script>
+        <script src="/static/app.js?v=20261022b"></script>
         <script>
         (function() {
             var toggle = document.getElementById('dashSidebarToggle');

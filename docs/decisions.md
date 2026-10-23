@@ -143,6 +143,26 @@ Status legend:
   - The cheap-model rates in the cost catalog come from public price lists and are reported as `partial` until they are checked against a Google invoice ([ai-cost-accounting.md](ai-cost-accounting.md)).
   - Assistant message counts derived from historical credit debits must use the rate in force when each debit was written: 1 credit per 5 messages before this change.
 
+## D-010 Enterprise Prices: One Region Per Visitor
+
+- Status: Accepted
+- Recorded: 2026-10-23
+- Context: Since D-009 the INR plan prices are less than half the foreign ladder (₹1,499 against $39 / £29 / A$59), while the foreign ladders are near-parity with each other. Checkout already refused INR outside the INR region, but the public surfaces still showed it: `/for-enterprise` rendered every plan in INR with an "International $39 / £29 / A$59" line underneath for every visitor, the other marketing pages and their JSON-LD quoted INR, `app.js` shipped a client-side ladder with every currency's plan prices, the public and portal APIs returned the full `price_options` ladder (INR included) to everyone, and the assistant's help quoted INR to every workspace.
+- Decision (owner-approved): show each visitor only their own region's prices, the way regionally priced SaaS does (Canva, Microsoft 365, Spotify). The protection is enforcement at checkout; the display rule stops advertising the gap.
+  - **Region currency.** `billing.public_price_currency(request)`: INR from the INR region; elsewhere the visitor's ladder currency, else USD; an unknown country (Tor, an unlocatable IP, no CDN) gets USD. Checkout's own rule (`charge_currency_for_org`) is unchanged.
+  - **Pages.** `{{ENT_*}}` money tokens are currency-neutral (`ENT_STARTER_PRICE`, `ENT_FROM_PRICE`, `ENT_TOPUP_PACKS`, `ENT_CURRENCY` …) and rendered per request. Per-currency, `_INR` and "International" tokens are gone, so a page can't name another region's price.
+  - **Search snippets name no price.** JSON-LD answers and meta descriptions describe plans by limits only. Google crawls from the US, so any price there would be one currency for every searcher.
+  - **APIs and JS.** `price_options` ladders only list the caller's region (public: the visitor's; portal: the org's `charge_currencies`; default: the card's own currency). `app.js` holds no Enterprise price and sends no currency hint. The `/pricing` currency selector is students-only.
+  - **Assistant.** Help topics and `get_credit_pricing` quote the workspace's billing currency; with none known, no price.
+- Alternatives rejected:
+  - *One global USD price.* Rejected: the pipeline is mostly small Indian offices, for whom $39 is out of reach.
+  - *Keep the selector on Enterprise but drop INR from it.* Rejected by the owner: hiding it is simpler, and the foreign ladders being near-parity means there is nothing for a visitor to choose.
+  - *Unknown country quoted INR* (checkout's domestic default). Rejected for display: behind Cloudflare an unknown country is not an Indian office.
+- Consequences:
+  - Local development shows USD unless a geo header is sent (see [runbook.md](runbook.md)).
+  - The price is still discoverable through a VPN; enforcement stays at checkout (`INR_REQUIRE_GEO_MATCH`, the owner-locked company country). Accepting INR only through Indian payment methods would be a stronger fence.
+  - The student Visa Success Pass keeps its currency selector: its ladder is near-parity by design.
+
 ## D-011 Rupee Prices Are Paid With Indian Payment Methods
 
 - Status: Accepted. The owner chose `refund` on 2026-10-23, and it is the default.

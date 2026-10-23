@@ -6,16 +6,24 @@ blog guide, the /pricing card in us_f1_visa.html, the enterprise login page …)
 their prices, limits and credit costs as hand-typed HTML. Every re-price then needed a sweep
 of a dozen files, and the 2026-10-22 re-cut found pages still quoting the 2026-08 catalog
 (₹2,999 / 10 users / 1,000 credits) months after checkout had moved on. So the pages now
-carry TOKENS — `{{ENT_STARTER_PRICE_INR}}`, `{{ENT_TEAM_SEATS}}`, `{{ENT_TAX_SUFFIX}}` … —
+carry TOKENS — `{{ENT_STARTER_PRICE}}`, `{{ENT_TEAM_SEATS}}`, `{{ENT_TAX_SUFFIX}}` … —
 and app/main.py replaces them at serve time from the SAME code checkout charges from:
 
-    billing.public_plans_payload("INR")   plan cards (app/money.py PRICE_BOOK + billing.PLANS)
+    billing.public_plans_payload(code)    plan cards (app/money.py PRICE_BOOK + billing.PLANS)
     billing.trial_facts()                  the free trial
     billing.branch_pack_facts()            Branch Packs
     credits.actions_payload()              AI action prices ("4 credits per 15 pages")
-    credits.packages_payload("INR")        top-up packs
-    money.tax_note("INR")                  "+ GST" — or "" while ENTERPRISE_GST_PERCENT=0
+    credits.packages_payload(code)         top-up packs
+    money.tax_note(code)                   "+ GST" — or "" while ENTERPRISE_GST_PERCENT=0
     billing.yearly_enabled()               whether "2 months free" may be promoted at all
+
+ONE REGION PER VISITOR. `code` is the visitor's own currency, billing.public_price_currency
+(request): INR from India's billing region, the visitor's ladder currency (else USD) from
+anywhere else. The INR plan prices are less than half the foreign ladder, so a page shows
+exactly one region's prices and never the other's: there are no per-currency or
+"International" tokens, and a page cannot name a price in a currency the visitor would not
+be billed in. Search-engine copy (JSON-LD answers, meta descriptions) states no price at all
+— a crawler's location would otherwise decide what every searcher is quoted.
 
 Server-side (not a JS fetch) for the same reason as the <!--@partial:--> blocks: the prices
 are in the initial HTML, so crawlers, link previews and no-JS visitors see the real numbers.
@@ -78,11 +86,6 @@ PLAN_TOKEN_PREFIX = {
     "scale": "MULTI_BRANCH",
 }
 
-# Which foreign prices the "International" line on a card quotes. A presentation choice (the
-# three ladders most consultancies outside India recognise), not a price — every amount
-# still comes from the price book.
-INTL_PREVIEW_CURRENCIES = ("USD", "GBP", "AUD")
-
 # Characters a token value may never contain — see the module docstring.
 UNSAFE_VALUE_CHARS = frozenset('"<>&\\\n\r')
 
@@ -106,36 +109,40 @@ def _join_words(items: list[str], conj: str = "and") -> str:
     return ", ".join(items[:-1]) + f" {conj} " + items[-1]
 
 
-def _plan_cards() -> list[dict]:
-    """The INR plan cards, from the same function the public API and checkout use.
+def _currency(currency: Optional[str]) -> str:
+    code = (currency or money.DEFAULT_CURRENCY).strip().upper()
+    return code if money.is_chargeable(code) else money.DEFAULT_CURRENCY
+
+
+def _plan_cards(code: str) -> list[dict]:
+    """The plan cards in `code`, from the same function the public API and checkout use.
 
     billing.public_plans_payload returns [] under the ENTERPRISE_FREE kill-switch (nothing is
     for sale). The marketing pages still need numbers to render — a page with holes is worse
     than a list price — so the same card fields are rebuilt from the catalog in that case.
     """
-    cards = billing.public_plans_payload("INR")
+    cards = billing.public_plans_payload(code)
     if cards:
         return cards
     rebuilt = []
     for key in billing.PLAN_ORDER:
         plan = billing.PLANS[key]
-        monthly = billing.plan_price_minor(key, "INR")
-        yearly = billing.plan_price_minor(key, "INR", "yearly") if monthly > 0 else 0
+        monthly = billing.plan_price_minor(key, code)
+        yearly = billing.plan_price_minor(key, code, "yearly") if monthly > 0 else 0
         rebuilt.append({
             "key": key,
             "label": plan["label"],
             "purpose": plan["purpose"],
             "monthly_minor": monthly,
-            "monthly_display": money.format_money(monthly, "INR"),
+            "monthly_display": money.format_money(monthly, code),
             "yearly_minor": yearly,
-            "yearly_display": money.format_money(yearly, "INR") if yearly else None,
+            "yearly_display": money.format_money(yearly, code) if yearly else None,
             "yearly_months_free": max(0, 12 - int(money.YEARLY_PRICE_MONTHS)) if yearly else 0,
             "max_seats": plan["max_seats"],
             "max_open_files": plan["max_clients"],
             "included_credits": plan["included_credits"],
             "max_reads": plan["max_reads"],
             "files_note": "",
-            "price_options": money.price_options(plan["price_product"]) if plan.get("price_product") else [],
             "is_free": monthly <= 0,
         })
     return rebuilt
@@ -146,12 +153,14 @@ def _action(actions: dict, key: str) -> dict:
     return actions[key]
 
 
-def build_tokens() -> dict[str, str]:
-    """Every `{{ENT_*}}` value, as plain text. See the module docstring for the rules."""
-    tokens: dict[str, str] = {}
-    cards = _plan_cards()
+def build_tokens(currency: Optional[str] = None) -> dict[str, str]:
+    """Every `{{ENT_*}}` value for a visitor billed in `currency` (INR when omitted), as plain
+    text. See the module docstring for the rules."""
+    code = _currency(currency)
+    tokens: dict[str, str] = {"ENT_CURRENCY": code}
+    cards = _plan_cards(code)
     yearly_on = billing.yearly_enabled()
-    tax_note = money.tax_note("INR")          # "+ GST" or "" — the ONE source of that wording
+    tax_note = money.tax_note(code)           # "+ GST" or "" — the ONE source of that wording
     tax_on = bool(tax_note)
 
     # --- Paid plans ------------------------------------------------------------------------
@@ -160,29 +169,22 @@ def build_tokens() -> dict[str, str]:
         p = PLAN_TOKEN_PREFIX[card["key"]]
         tokens[f"ENT_{p}_LABEL"] = card["label"]
         tokens[f"ENT_{p}_PURPOSE"] = card.get("purpose") or ""
-        tokens[f"ENT_{p}_PRICE_INR"] = card["monthly_display"]
+        tokens[f"ENT_{p}_PRICE"] = card["monthly_display"]
         tokens[f"ENT_{p}_SEATS"] = _n(card["max_seats"])
         tokens[f"ENT_{p}_OPEN_FILES"] = _n(card["max_open_files"])
         tokens[f"ENT_{p}_CREDITS"] = _n(card["included_credits"])
         tokens[f"ENT_{p}_READS"] = _n(card["max_reads"])
         # The yearly PRICE is a fact even while yearly is not sold; the NOTE (the thing that
         # promotes it) is empty until it can actually be bought.
-        tokens[f"ENT_{p}_YEARLY_PRICE_INR"] = card.get("yearly_display") or ""
+        tokens[f"ENT_{p}_YEARLY_PRICE"] = card.get("yearly_display") or ""
         months_free = int(card.get("yearly_months_free") or 0)
         tokens[f"ENT_{p}_YEARLY_NOTE"] = (
             f"or {card['yearly_display']} a year ({months_free} months free)"
             if yearly_on and card.get("yearly_display") and months_free > 0 else ""
         )
-        options = {o["currency"]: o["display"] for o in card.get("price_options") or []}
-        for code in money.supported_charge_currencies():
-            if code in options:
-                tokens[f"ENT_{p}_PRICE_{code}"] = options[code]
-        tokens[f"ENT_{p}_INTL_PRICES"] = " / ".join(
-            options[c] for c in INTL_PREVIEW_CURRENCIES if c in options
-        )
 
     cheapest = min((c for c in paid if c["monthly_minor"] > 0), key=lambda c: c["monthly_minor"], default=None)
-    tokens["ENT_FROM_PRICE_INR"] = cheapest["monthly_display"] if cheapest else ""
+    tokens["ENT_FROM_PRICE"] = cheapest["monthly_display"] if cheapest else ""
     tokens["ENT_FILES_NOTE"] = next((c.get("files_note") for c in cards if c.get("files_note")), "")
 
     # --- Trial -----------------------------------------------------------------------------
@@ -210,18 +212,15 @@ def build_tokens() -> dict[str, str]:
     tokens["ENT_TAX_NOTE"] = tax_note
     # Leading space so "₹1,499/month{{ENT_TAX_SUFFIX}}" reads right with and without tax.
     tokens["ENT_TAX_SUFFIX"] = f" {tax_note}" if tax_on else ""
-    others = [c for c in money.supported_charge_currencies() if c != "INR"]
-    tokens["ENT_CURRENCIES_OTHER"] = _join_words(others, "or")
     tokens["ENT_TAX_SENTENCE"] = (
-        f"Prices exclude {money.tax_label_for('INR')}, which is added at checkout for INR billing; "
-        "other currencies are billed tax-free."
+        f"Prices exclude {money.tax_label_for(code)}, which is added at checkout."
         if tax_on else "No tax is added at checkout — you pay the price shown."
     )
     # Appended to "You are charged exactly the amount shown, in the currency shown" on the
     # /pricing page, which is only literally true for an Enterprise INR price while no tax
     # is added on top of it.
     tokens["ENT_TAX_DISCLAIMER_SUFFIX"] = (
-        f", plus {money.tax_label_for('INR')} where an Enterprise price says {tax_note}" if tax_on else ""
+        f", plus {money.tax_label_for(code)} where an Enterprise price says {tax_note}" if tax_on else ""
     )
 
     # --- Yearly ----------------------------------------------------------------------------
@@ -261,11 +260,10 @@ def build_tokens() -> dict[str, str]:
     link = _action_tokens("COPILOT_LINK", "copilot_client")
     tokens["ENT_COPILOT_LINK_MESSAGES"] = _n(link.get("messages_included"))
     tokens["ENT_COPILOT_LINK_DAYS"] = _n(link.get("valid_days"))
-    tokens["ENT_CREDIT_VALUE_INR"] = money.format_money(credits.PAISE_PER_CREDIT, "INR")
 
     # --- Top-up packs ----------------------------------------------------------------------
-    packs = credits.packages_payload("INR")
-    tokens["ENT_TOPUP_FROM_INR"] = (
+    packs = credits.packages_payload(code)
+    tokens["ENT_TOPUP_FROM"] = (
         min(packs, key=lambda p: p["amount_minor"])["amount_display"] if packs else ""
     )
     pack_bits = [
@@ -273,7 +271,7 @@ def build_tokens() -> dict[str, str]:
         else f"{p['amount_display']} for {_n(p['total_credits'])}"
         for i, p in enumerate(packs)
     ]
-    tokens["ENT_TOPUP_PACKS_INR"] = _join_words(pack_bits, "and")
+    tokens["ENT_TOPUP_PACKS"] = _join_words(pack_bits, "and")
 
     # --- Branch Packs and open files ---------------------------------------------------------
     pack = billing.branch_pack_facts()
@@ -286,9 +284,9 @@ def build_tokens() -> dict[str, str]:
     return tokens
 
 
-def build_flags() -> dict[str, bool]:
-    """The conditions `{{ENT_IF_FLAG}}` blocks test."""
-    tax_on = money.tax_applies("INR")
+def build_flags(currency: Optional[str] = None) -> dict[str, bool]:
+    """The conditions `{{ENT_IF_FLAG}}` blocks test, for a visitor billed in `currency`."""
+    tax_on = money.tax_applies(_currency(currency))
     return {
         "YEARLY": billing.yearly_enabled() and int(money.YEARLY_PRICE_MONTHS) < 12,
         "TAX": tax_on,
@@ -315,19 +313,21 @@ def tokens_in(page_html: str) -> set[str]:
 def render(
     page_html: str,
     *,
+    currency: Optional[str] = None,
     strict: bool = False,
     tokens: Optional[dict[str, str]] = None,
     flags: Optional[dict[str, bool]] = None,
 ) -> str:
-    """Expand every Enterprise price block and token in `page_html`.
+    """Expand every Enterprise price block and token in `page_html`, priced in `currency` —
+    the visitor's own (billing.public_price_currency); INR when omitted.
 
     `strict=True` raises UnknownPriceToken for an unknown flag or token, or a block left
     unclosed — the test suite renders every static page that way. Otherwise the offending
     markup is left in place and logged (see the module docstring for why not "")."""
     if "{{ENT_" not in page_html:
         return page_html
-    values = build_tokens() if tokens is None else tokens
-    conditions = build_flags() if flags is None else flags
+    values = build_tokens(currency) if tokens is None else tokens
+    conditions = build_flags(currency) if flags is None else flags
     problems: list[str] = []
 
     def _block(match: re.Match) -> str:

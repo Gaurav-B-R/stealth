@@ -24,7 +24,7 @@ Content is merged from two sources at render time:
 
 Since the 2026-10-22 pricing model, every number a customer pays or is limited by lives in a
 generated block — the hand-written guide must not restate one (the drift tests scan its raw
-text for that). Three rules shape the generators:
+text for that). Four rules shape the generators:
 
   * "+ GST" is printed only when money.tax_note says tax applies. ENTERPRISE_GST_PERCENT=0
     is a live configuration (the owner deferred GST registration); at 0 the help must not
@@ -36,6 +36,10 @@ text for that). Three rules shape the generators:
   * Prices come from the registries' own labels (credits.actions_payload()["price_label"],
     e.g. "4 credits per 15 pages"), never a bare `credits` number — a per-block or per-bundle
     price read as a flat price under-quotes a long PDF by 10x.
+  * Money is quoted in the asking workspace's OWN billing currency only (render_topic's
+    `currency`, which the caller takes from billing.charge_currency_for_org). The INR plan
+    prices are less than half the foreign ladder, so a US workspace's assistant must never
+    know — let alone quote — the rupee price. With no currency, no price is stated.
 
 Everything here is product documentation, not org data: no DB session, no tenant state,
 safe to hand to any signed-in member regardless of capabilities.
@@ -119,14 +123,15 @@ def _percent(value) -> str:
     return text.rstrip("0").rstrip(".") if "." in text else text
 
 
-def _inr(minor: int) -> str:
-    return _money_mod().format_money(int(minor or 0), "INR")
+def _price(minor: int, currency: str) -> str:
+    return _money_mod().format_money(int(minor or 0), currency)
 
 
-def _with_tax_note(text: str) -> str:
-    """Append money.tax_note('INR') ("+ GST") — and nothing at a 0% rate. The ONLY way a plan
-    price is printed here, so ENTERPRISE_GST_PERCENT=0 removes "+ GST" from every answer."""
-    note = _money_mod().tax_note("INR")
+def _with_tax_note(text: str, currency: str) -> str:
+    """Append money.tax_note(currency) ("+ GST") — and nothing at a 0% rate or outside INR. The
+    ONLY way a plan price is printed here, so ENTERPRISE_GST_PERCENT=0 removes "+ GST" from
+    every answer."""
+    note = _money_mod().tax_note(currency)
     return f"{text} {note}" if note else text
 
 
@@ -238,7 +243,7 @@ def _record_scopes_block() -> str:
     return "\n".join(lines)
 
 
-def _plan_line(key: str, plan: dict) -> str:
+def _plan_line(key: str, plan: dict, currency: Optional[str]) -> str:
     billing = _billing_mod()
     is_trial = key == billing.SANDBOX_PLAN or not plan.get("price_product")
     if is_trial:
@@ -254,14 +259,17 @@ def _plan_line(key: str, plan: dict) -> str:
             if _tier_has_all_features(plan) else ""
         )
     else:
-        try:
-            price_minor = billing.plan_price_minor(key, "INR")
-        except Exception:
-            price_minor = 0
-        # INR anchor price. The KB renders identically for every org (see the module rule),
-        # so it quotes the INR list price rather than any per-org currency; the currency
-        # line below covers the rest.
-        price = _with_tax_note(f"{_inr(price_minor)}/month")
+        # The asking workspace's OWN billing currency only. The INR and foreign ladders are
+        # not near-parity, so the help never quotes one region the other's prices; with no
+        # currency known it quotes none and points at the screen that has it.
+        if currency:
+            try:
+                price_minor = billing.plan_price_minor(key, currency)
+            except Exception:
+                price_minor = 0
+            price = _with_tax_note(f"{_price(price_minor, currency)}/month", currency)
+        else:
+            price = "price shown on Plans & Billing"
         recur = "every month" if plan.get("credits_recur") else "one-time"
         credits_part = f"{plan.get('included_credits', 0):,} AI credits {recur}"
         reads_part = f"{_n(plan.get('max_reads', 0))} AI document reads {recur}"
@@ -282,9 +290,10 @@ def _plan_line(key: str, plan: dict) -> str:
     return " ".join(parts)
 
 
-def _plans_block() -> str:
-    """Current plans with live limits and prices (env overrides included), plus the billing
-    rules a buyer asks about: cycle, currency, tax, plan changes, Branch Packs, coupons."""
+def _plans_block(currency: Optional[str] = None) -> str:
+    """Current plans with live limits and prices (env overrides included) in `currency` — the
+    asking workspace's billing currency, never another region's — plus the billing rules a
+    buyer asks about: cycle, currency, tax, plan changes, Branch Packs, coupons."""
     billing = _billing_mod()
     money = _money_mod()
     lines: list[str] = []
@@ -296,7 +305,7 @@ def _plans_block() -> str:
     for key in billing.PLAN_ORDER:
         plan = billing.PLANS.get(key) or {}
         if plan:
-            lines.append(_plan_line(key, plan))
+            lines.append(_plan_line(key, plan, currency))
     lines.append(
         "\"Open student files\" are clients in an open stage — finished and paused files "
         "don't count (see the clients topic). Every plan includes every AI feature."
@@ -306,14 +315,17 @@ def _plans_block() -> str:
     if billing.yearly_enabled():
         months = int(money.YEARLY_PRICE_MONTHS)
         free = max(0, 12 - months)
-        examples = _join([
-            f"{billing.PLANS[k]['label']} {_inr(billing.plan_price_minor(k, 'INR', 'yearly'))}"
-            for k in billing.PLAN_ORDER if k in billing.PAID_PLAN_KEYS
-        ])
+        examples = (
+            ": " + _with_tax_note(_join([
+                f"{billing.PLANS[k]['label']} {_price(billing.plan_price_minor(k, currency, 'yearly'), currency)}"
+                for k in billing.PLAN_ORDER if k in billing.PAID_PLAN_KEYS
+            ]) + " a year", currency)
+            if currency else ""
+        )
         free_note = f" — {free} months free" if free else ""
         lines.append(
             f"Plans are billed monthly or yearly. Yearly costs {months} months' price for 12 "
-            f"months{free_note}: " + _with_tax_note(f"{examples} a year") + ". Choose "
+            f"months{free_note}" + examples + ". Choose "
             f"\"Yearly\" on Plans & Billing; it is paid once for {billing.YEARLY_PERIOD_DAYS} "
             "days and doesn't renew automatically. Credits and reads still arrive every "
             f"{billing.PLAN_PERIOD_DAYS} days, as on a monthly plan."
@@ -339,7 +351,8 @@ def _plans_block() -> str:
         if billing.INR_REQUIRE_GEO_MATCH else ""
     )
     lines.append(
-        "Prices above are the INR list prices. " + region_text + " Workspaces in any other "
+        (f"Prices above are in {currency}, this workspace's billing currency. " if currency else "")
+        + region_text + " Workspaces in any other "
         "country are billed at fixed prices in " + _join(others) + " — their own currency "
         "where it's on that list, otherwise USD — and can't be billed in INR. The country is "
         "the workspace's company location (Settings), or where you are browsing from if none "
@@ -618,21 +631,25 @@ def _team_features_block() -> str:
     return "\n".join(lines)
 
 
-def _credit_pricing_block() -> str:
+def _credit_pricing_block(currency: Optional[str] = None) -> str:
     """What each AI action costs, straight from the wallet's own price list (the same
-    `price_label` the Credits screen shows), plus packs, free allowances and the top-up rule."""
+    `price_label` the Credits screen shows), plus packs (in `currency`, the workspace's billing
+    currency — no prices when unknown), free allowances and the top-up rule."""
     billing = _billing_mod()
     credits = _credits_mod()
     lines: list[str] = []
     for action in credits.actions_payload():
         lines.append(f"- **{action['label']}** — {action['price_label']}. {action['description']}")
     lines.append("")
-    lines.append("Credit top-up packs (bought under Credits; INR prices shown, other currencies have their own fixed prices):")
-    for pack in credits.packages_payload("INR"):
+    lines.append(
+        f"Credit top-up packs (bought under Credits; prices in {currency}):" if currency
+        else "Credit top-up packs (bought under Credits, which shows each pack's price):"
+    )
+    for pack in credits.packages_payload(currency or None):
         bonus = f" (includes {_n(pack['bonus_credits'])} bonus)" if pack.get("bonus_credits") else ""
+        price = f"{pack['amount_display']} for " if currency else ""
         lines.append(
-            f"- **{pack['label']}** — {pack['amount_display']} for {_n(pack['total_credits'])} "
-            f"credits{bonus}."
+            f"- **{pack['label']}** — {price}{_n(pack['total_credits'])} credits{bonus}."
         )
     lines.append("")
     copilot = _action(credits.COPILOT_ACTION_KEY)
@@ -652,10 +669,9 @@ def _credit_pricing_block() -> str:
             f"{credits.INTERVIEW_FREE_STAFF_PREVIEWS} free staff mock-interview previews per "
             "workspace"
         )
-    lines.append(
-        f"1 credit = {credits.format_inr(credits.PAISE_PER_CREDIT)}. Free before anything is "
-        "charged: " + _join(free) + "."
-    )
+    # A credit's value is defined in rupees; only a rupee-billed workspace is told it.
+    value = f"1 credit = {credits.format_inr(credits.PAISE_PER_CREDIT)}. " if currency == "INR" else ""
+    lines.append(value + "Free before anything is charged: " + _join(free) + ".")
     if credits.DEEP_SCAN_FREE_SCANS_PER_CLIENT <= 0:
         lines.append("Every Deep Scan is charged — there are no free scans.")
     lines.append(
@@ -731,18 +747,20 @@ def _workspace_limits_block() -> str:
     )
 
 
+# Each generator takes the asking workspace's billing currency (None when unknown). Only the
+# priced blocks use it: a workspace is quoted its own region's prices and never the other's.
 _GENERATORS = {
-    "CAPABILITY_MATRIX": _capability_matrix_block,
-    "ROLE_PRESETS": _role_presets_block,
-    "RECORD_SCOPES": _record_scopes_block,
+    "CAPABILITY_MATRIX": lambda currency: _capability_matrix_block(),
+    "ROLE_PRESETS": lambda currency: _role_presets_block(),
+    "RECORD_SCOPES": lambda currency: _record_scopes_block(),
     "PLANS": _plans_block,
-    "TRIAL_AND_AI_PAUSE": _trial_and_ai_pause_block,
-    "OPEN_FILES": _open_files_block,
-    "AI_READS": _reads_block,
-    "TEAM_FEATURES": _team_features_block,
+    "TRIAL_AND_AI_PAUSE": lambda currency: _trial_and_ai_pause_block(),
+    "OPEN_FILES": lambda currency: _open_files_block(),
+    "AI_READS": lambda currency: _reads_block(),
+    "TEAM_FEATURES": lambda currency: _team_features_block(),
     "CREDIT_PRICING": _credit_pricing_block,
-    "CLIENT_LINK_TERMS": _client_link_terms_block,
-    "WORKSPACE_LIMITS": _workspace_limits_block,
+    "CLIENT_LINK_TERMS": lambda currency: _client_link_terms_block(),
+    "WORKSPACE_LIMITS": lambda currency: _workspace_limits_block(),
 }
 
 
@@ -781,14 +799,14 @@ def _topics() -> dict[str, dict]:
     return _cache["topics"]
 
 
-def _expand(body: str) -> str:
+def _expand(body: str, currency: Optional[str] = None) -> str:
     def _sub(m: re.Match) -> str:
         gen = _GENERATORS.get(m.group("name"))
         if gen is None:
             logger.warning("Enterprise help guide uses unknown placeholder %s", m.group(0))
             return ""
         try:
-            return gen()
+            return gen(currency)
         except Exception:
             # A broken generator must degrade to a gap in the help text, never a 500 in
             # the assistant turn.
@@ -814,21 +832,22 @@ def topics_index() -> list[dict]:
     return out
 
 
-def render_topic(key: str) -> Optional[dict]:
-    """One topic with its generated blocks expanded, bounded for a tool result."""
+def render_topic(key: str, currency: Optional[str] = None) -> Optional[dict]:
+    """One topic with its generated blocks expanded, bounded for a tool result. Prices are in
+    `currency`, the asking workspace's billing currency; with none, no price is stated."""
     topic = _topics().get(str(key or "").strip().lower())
     if not topic:
         return None
-    content = _expand(topic["body"])
+    content = _expand(topic["body"], currency)
     if len(content) > TOPIC_CHAR_CAP:
         content = content[:TOPIC_CHAR_CAP] + "\n[…truncated — ask about a more specific part of this topic…]"
     return {"key": topic["key"], "title": topic["title"], "content": content}
 
 
-def full_guide_text() -> str:
-    """Every topic rendered — for the drift tests, not for prompts."""
+def full_guide_text(currency: Optional[str] = "INR") -> str:
+    """Every topic rendered (priced in `currency`) — for the drift tests, not for prompts."""
     return "\n\n".join(
-        f"## {t['title']}\n{_expand(t['body'])}" for t in _topics().values()
+        f"## {t['title']}\n{_expand(t['body'], currency)}" for t in _topics().values()
     )
 
 

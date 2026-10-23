@@ -231,6 +231,13 @@ app.add_middleware(
 )
 
 
+# The CDN geo headers a visitor's price region is read from (routers/pricing.py), in the
+# spelling GET /api/enterprise/public/plans already uses for its own Vary.
+_REGION_VARY_HEADERS = (
+    "CF-IPCountry", "X-Vercel-IP-Country", "X-AppEngine-Country", "X-Country-Code", "Fastly-Geo-Country",
+)
+
+
 @app.middleware("http")
 async def add_security_headers(request: Request, call_next):
     response = await call_next(request)
@@ -256,6 +263,15 @@ async def add_security_headers(request: Request, call_next):
         }
         existing_vary.update({"Cookie", "Authorization"})
         response.headers["Vary"] = ", ".join(sorted(existing_vary, key=str.lower))
+
+    # A page whose Enterprise prices were written in the visitor's region currency
+    # (_render_static_page) is a different page per region: no shared cache may store it,
+    # and anything that does cache it must key on the CDN geo headers that decided it.
+    if getattr(request.state, "priced_by_region", False):
+        response.headers["Cache-Control"] = "private, no-cache"
+        vary = {item.strip() for item in response.headers.get("Vary", "").split(",") if item.strip()}
+        vary.update(_REGION_VARY_HEADERS)
+        response.headers["Vary"] = ", ".join(sorted(vary, key=str.lower))
 
     response.headers.setdefault("X-Content-Type-Options", "nosniff")
     response.headers.setdefault("X-Frame-Options", "DENY")
@@ -427,7 +443,7 @@ class _StaticFilesWithRenderedPages(StaticFiles):
     The marketing pages carry server-side placeholders — <!--@partial:…--> blocks and
     {{ENT_…}} Enterprise price tokens — that only the page routes expand. Their raw files
     are also reachable at /static/<name>.html, and served verbatim there a visitor (or a
-    crawler that found the URL) would read "{{ENT_STARTER_PRICE_INR}}" where a price should
+    crawler that found the URL) would read "{{ENT_STARTER_PRICE}}" where a price should
     be. Every other file type is served exactly as before.
 
     The rendered response deliberately carries no ETag/Last-Modified: those describe the
@@ -443,7 +459,7 @@ class _StaticFilesWithRenderedPages(StaticFiles):
             and str(file_path or "").lower().endswith(".html")
         ):
             with open(file_path, "r", encoding="utf-8") as handle:
-                return HTMLResponse(_render_static_page(handle.read()))
+                return HTMLResponse(_render_static_page(handle.read(), Request(scope)))
         return response
 
 
@@ -465,7 +481,7 @@ async def read_root(request: Request):
 
     # Through the page renderer, not FileResponse: the homepage's Enterprise band quotes the
     # live plan price ({{ENT_…}} tokens), so the bytes on disk are not the bytes to serve.
-    page = _read_static_html("index.html")
+    page = _read_static_html("index.html", request)
     if page is not None:
         return HTMLResponse(page)
     return {"message": "Rilono API", "docs": "/docs"}
@@ -486,19 +502,19 @@ async def read_admin_console_slash():
 
 
 @app.get("/for-enterprise")
-async def read_for_enterprise():
+async def read_for_enterprise(request: Request):
     """Serve the enterprise marketing / landing page."""
     # Read through the helper rather than FileResponse: the page composes a shared
     # <!--@partial:--> block, so the bytes on disk are not the bytes to serve.
-    page = _read_static_html("for_enterprise.html")
+    page = _read_static_html("for_enterprise.html", request)
     if page is None:
         raise HTTPException(status_code=404, detail="Not found")
     return HTMLResponse(page)
 
 
 @app.get("/for-enterprise/")
-async def read_for_enterprise_slash():
-    return await read_for_enterprise()
+async def read_for_enterprise_slash(request: Request):
+    return await read_for_enterprise(request)
 
 
 @app.get("/careers")
@@ -554,9 +570,9 @@ async def read_careers_role(slug: str):
 @app.get("/enterprise/contact/")
 @app.get("/book-a-demo")
 @app.get("/book-a-demo/")
-async def read_enterprise_demo():
+async def read_enterprise_demo(request: Request):
     """Serve the enterprise 'book a demo' / contact-sales landing page."""
-    page = _read_static_html("enterprise_demo.html")
+    page = _read_static_html("enterprise_demo.html", request)
     if page is None:
         raise HTTPException(status_code=404, detail="Not found")
     return HTMLResponse(page)
@@ -784,32 +800,42 @@ def _render_partials(page_html: str) -> str:
     return _PARTIAL_TOKEN.sub(_expand, page_html)
 
 
-def _render_static_page(page_html: str) -> str:
+def _render_static_page(page_html: str, request: Request | None = None) -> str:
     """Expand a static page's server-side placeholders: partials first (a partial may itself
     carry price tokens), then the {{ENT_…}} Enterprise price tokens.
 
     Prices come from app/enterprise_public_pricing.py — the same catalog checkout charges
-    from — so a re-price never needs an HTML sweep. A failure there must cost the price
-    lines, never the page: the homepage and every blog article go through here, so the
-    page is served with its tokens unexpanded (and the error logged) rather than as a 500."""
+    from — so a re-price never needs an HTML sweep. They are written in the visitor's OWN
+    region's currency (billing.public_price_currency: INR from India's billing region, the
+    local ladder currency or USD elsewhere), so a page never shows one region the other's
+    prices. Without a `request` the visitor is unknown and quoted USD — a route that forgets
+    to pass it shows dollars to India, a visible bug, rather than rupees to the world.
+
+    A failure there must cost the price lines, never the page: the homepage and every blog
+    article go through here, so the page is served with its tokens unexpanded (and the
+    error logged) rather than as a 500."""
     page_html = _render_partials(page_html)
     if "{{ENT_" not in page_html:
         return page_html
     try:
-        from app import enterprise_public_pricing
+        from app import enterprise_billing, enterprise_public_pricing
 
-        return enterprise_public_pricing.render(page_html)
+        currency = enterprise_billing.public_price_currency(request)
+        if request is not None:
+            # add_security_headers then marks the response as varying by region.
+            request.state.priced_by_region = True
+        return enterprise_public_pricing.render(page_html, currency=currency)
     except Exception:
         logger.exception("Enterprise price tokens failed to render; serving the page unexpanded")
         return page_html
 
 
-def _read_static_html(name: str) -> str | None:
+def _read_static_html(name: str, request: Request | None = None) -> str | None:
     path = os.path.join(os.path.dirname(__file__), "..", "static", name)
     if not os.path.exists(path):
         return None
     with open(path, "r", encoding="utf-8") as handle:
-        return _render_static_page(handle.read())
+        return _render_static_page(handle.read(), request)
 
 
 def _apply_seo_meta(
@@ -875,7 +901,7 @@ def _serve_us_f1_spa(request: Request) -> HTMLResponse:
     """Serve us_f1_visa.html with the correct per-route SEO metadata."""
     normalized = (request.url.path or "/").rstrip("/") or "/us-f1-visa"
     meta = _SPA_ROUTE_META.get(normalized, _SPA_ROUTE_META["/us-f1-visa"])
-    page = _read_static_html("us_f1_visa.html")
+    page = _read_static_html("us_f1_visa.html", request)
     if page is None:
         raise HTTPException(status_code=404, detail="Not found")
     return HTMLResponse(_apply_seo_meta(page, **meta))
@@ -988,9 +1014,9 @@ async def read_blog_index():
 
 @app.get("/blog/how-to-use-rilono-ai-copilot")
 @app.get("/blog/how-to-use-rilono-ai-copilot/")
-async def read_copilot_blog():
+async def read_copilot_blog(request: Request):
     """Serve the Rilono Copilot how-to guide (static blog article; carries its own SEO meta)."""
-    page = _read_static_html("blog-copilot-guide.html")
+    page = _read_static_html("blog-copilot-guide.html", request)
     if page is None:
         raise HTTPException(status_code=404, detail="Not found")
     return HTMLResponse(page)
@@ -1168,38 +1194,38 @@ async def read_sop_australia_blog():
 
 @app.get("/blog/student-visa-crm-for-consultancies")
 @app.get("/blog/student-visa-crm-for-consultancies/")
-async def read_enterprise_blog():
+async def read_enterprise_blog(request: Request):
     """Serve the Rilono Enterprise (B2B) guide for consultancies (static blog; own SEO meta)."""
-    page = _read_static_html("blog-enterprise-visa-management-guide.html")
+    page = _read_static_html("blog-enterprise-visa-management-guide.html", request)
     if page is None:
         raise HTTPException(status_code=404, detail="Not found")
     return HTMLResponse(page)
 
 
 @app.get("/enterprise")
-async def read_enterprise():
+async def read_enterprise(request: Request):
     """Serve the standalone enterprise dashboard page."""
     # Rendered, not FileResponse: the sign-in/sign-up panel quotes the trial and the entry
     # plan price through {{ENT_…}} tokens.
-    page = _read_static_html("enterprise.html")
+    page = _read_static_html("enterprise.html", request)
     if page is None:
         raise HTTPException(status_code=404, detail="Not found")
     return HTMLResponse(page)
 
 
 @app.get("/enterprise/")
-async def read_enterprise_slash():
-    return await read_enterprise()
+async def read_enterprise_slash(request: Request):
+    return await read_enterprise(request)
 
 
 @app.get("/enterprise/{sub_path:path}")
-async def read_enterprise_spa(sub_path: str):
+async def read_enterprise_spa(sub_path: str, request: Request):
     """Serve the enterprise SPA for any in-app route (e.g. /enterprise/settings,
     /enterprise/clients, /enterprise/clients/42) so refresh, deep-links, bookmarks and
     browser back/forward work. Marketing sub-paths (/enterprise/demo, /enterprise/contact)
     have their own routes registered earlier and never reach here. Without this, these
     paths fell through to the SPA catch-all and wrongly served the marketing index.html."""
-    return await read_enterprise()
+    return await read_enterprise(request)
 
 
 @app.get("/visa-pass")
@@ -1304,7 +1330,7 @@ def app_meta():
 # Catch-all route for client-side routing
 # This must be last to allow API routes to work
 @app.get("/{full_path:path}")
-async def serve_spa(full_path: str):
+async def serve_spa(full_path: str, request: Request):
     """Serve index.html for all non-API routes to support client-side routing"""
     # Marketplace has been removed from the product; block old deep links explicitly.
     if full_path == "marketplace" or full_path.startswith("marketplace/"):
@@ -1320,7 +1346,7 @@ async def serve_spa(full_path: str):
         return {"detail": "Not found"}
 
     # Rendered like read_root: index.html carries {{ENT_…}} price tokens.
-    page = _read_static_html("index.html")
+    page = _read_static_html("index.html", request)
     if page is not None:
         return HTMLResponse(page)
     return {"message": "Rilono API", "docs": "/docs"}

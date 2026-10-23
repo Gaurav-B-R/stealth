@@ -1756,7 +1756,7 @@
                 "name": "What does Rilono Enterprise cost?",
                 "acceptedAnswer": {
                     "@type": "Answer",
-                    "text": "Every plan gets every AI feature; plans differ by open student files, staff and the AI credits included each month. {{ENT_STARTER_LABEL}} is {{ENT_STARTER_PRICE_INR}}/month for {{ENT_STARTER_OPEN_FILES}} open files, {{ENT_STARTER_SEATS}} staff and {{ENT_STARTER_CREDITS}} AI credits a month. {{ENT_TEAM_LABEL}} is {{ENT_TEAM_PRICE_INR}}/month for {{ENT_TEAM_OPEN_FILES}} open files, {{ENT_TEAM_SEATS}} staff and {{ENT_TEAM_CREDITS}} credits, and adds multiple offices, custom roles and per-branch reporting. {{ENT_MULTI_BRANCH_LABEL}} is {{ENT_MULTI_BRANCH_PRICE_INR}}/month for {{ENT_MULTI_BRANCH_OPEN_FILES}} open files, {{ENT_MULTI_BRANCH_SEATS}} staff and {{ENT_MULTI_BRANCH_CREDITS}} credits. {{ENT_TAX_SENTENCE}} International offices pay in {{ENT_CURRENCIES_OTHER}}.{{ENT_YEARLY_SENTENCE}} Every workspace starts on a {{ENT_TRIAL_LABEL}} with {{ENT_TRIAL_SEATS}} staff, {{ENT_TRIAL_OPEN_FILES}} open files and {{ENT_TRIAL_CREDITS_NOTE}} — no card needed."
+                    "text": "Every plan gets every AI feature; plans differ by open student files, staff and the AI credits included each month. {{ENT_STARTER_LABEL}} includes {{ENT_STARTER_OPEN_FILES}} open files, {{ENT_STARTER_SEATS}} staff and {{ENT_STARTER_CREDITS}} AI credits a month. {{ENT_TEAM_LABEL}} includes {{ENT_TEAM_OPEN_FILES}} open files, {{ENT_TEAM_SEATS}} staff and {{ENT_TEAM_CREDITS}} credits, and adds multiple offices, custom roles and per-branch reporting. {{ENT_MULTI_BRANCH_LABEL}} includes {{ENT_MULTI_BRANCH_OPEN_FILES}} open files, {{ENT_MULTI_BRANCH_SEATS}} staff and {{ENT_MULTI_BRANCH_CREDITS}} credits. Each plan is one flat monthly price for the whole team, shown on the pricing page in your local currency.{{ENT_YEARLY_SENTENCE}} Every workspace starts on a {{ENT_TRIAL_LABEL}} with {{ENT_TRIAL_SEATS}} staff, {{ENT_TRIAL_OPEN_FILES}} open files and {{ENT_TRIAL_CREDITS_NOTE}} — no card needed."
                 }
             },
             {
@@ -1764,7 +1764,7 @@
                 "name": "Are AI credits included in the plan or bought separately?",
                 "acceptedAnswer": {
                     "@type": "Answer",
-                    "text": "Both. Your plan grants its credit allowance to your wallet at the start of every billing period, and that is what normal use runs on. A document check is {{ENT_DOC_CHECK_PRICE}}, an SOP or LOR draft {{ENT_WRITING_PRICE}}, a mock visa interview {{ENT_INTERVIEW_PRICE}} and a Deep Scan file audit {{ENT_DEEP_SCAN_PRICE}}. If a busy month uses up the allowance, top up at any time: {{ENT_TOPUP_PACKS_INR}}. Unused plan credits do not carry into the next period; top-up credits you purchase never expire."
+                    "text": "Both. Your plan grants its credit allowance to your wallet at the start of every billing period, and that is what normal use runs on. A document check is {{ENT_DOC_CHECK_PRICE}}, an SOP or LOR draft {{ENT_WRITING_PRICE}}, a mock visa interview {{ENT_INTERVIEW_PRICE}} and a Deep Scan file audit {{ENT_DEEP_SCAN_PRICE}}. If a busy month uses up the allowance, top up at any time from the Credits screen. Unused plan credits do not carry into the next period; top-up credits you purchase never expire."
                 }
             },
             {
@@ -1910,7 +1910,7 @@
                 </div>
                 <a href="/blog">Blog</a>
                 <a href="/news">News</a>
-                <a href="/pricing">Pricing</a>
+                <a href="/pricing?for=enterprise">Pricing</a>
                 <a href="/about-us">About Us</a>
                 <a href="/for-enterprise">Enterprise</a>
                 <a href="/login">Login</a>
@@ -1925,7 +1925,7 @@
                 <div class="enterprise-hero-copy-block">
                     <div class="enterprise-eyebrow">
                         <span class="enterprise-eyebrow-dot"></span>
-                        For study-abroad consultancies &middot; plans from {{ENT_FROM_PRICE_INR}}/month{{ENT_TAX_SUFFIX}}, AI credits included
+                        For study-abroad consultancies &middot; plans from {{ENT_FROM_PRICE}}/month{{ENT_TAX_SUFFIX}}, AI credits included
                     </div>
                     <h1>
                         Run your study-abroad practice in one platform.
@@ -2278,7 +2278,7 @@
                     <h2>One flat monthly price. AI credits are included.</h2>
                     <p>
                         Every plan gets every AI feature. Plans differ by open student files, staff and the AI
-                        credits included each month. {{ENT_FILES_NOTE}} Busy month? Top up from {{ENT_TOPUP_FROM_INR}}.
+                        credits included each month. {{ENT_FILES_NOTE}} Busy month? Top up from {{ENT_TOPUP_FROM}}.
                     </p>
                 </div>
                 <div class="ent-price-grid">
@@ -2297,7 +2297,7 @@
                     </div>
                     <div class="ent-price-card">
                         <div class="ent-price-name">{{ENT_STARTER_LABEL}}</div>
-                        <div class="ent-price-amount">{{ENT_STARTER_PRICE_INR}} <span>/month</span></div>
+                        <div class="ent-price-amount">{{ENT_STARTER_PRICE}} <span>/month</span></div>
                         <div class="ent-price-gst">{{ENT_TAX_NOTE}}</div>
                         {{ENT_IF_YEARLY}}<div class="ent-price-yearly">{{ENT_STARTER_YEARLY_NOTE}}</div>{{ENT_END_IF_YEARLY}}
                         <div class="ent-price-specs">
@@ -2305,14 +2305,13 @@
                             <div><span>Open student files</span><b>{{ENT_STARTER_OPEN_FILES}}</b></div>
                             <div><span>AI credits / month</span><b>{{ENT_STARTER_CREDITS}}</b></div>
                             <div><span>AI document reading</span><b>{{ENT_STARTER_READS}} / month</b></div>
-                            <div><span>International</span><b>{{ENT_STARTER_INTL_PRICES}}</b></div>
                         </div>
                         <p class="ent-price-purpose">{{ENT_STARTER_PURPOSE}}. One office with the built-in roles.</p>
                     </div>
                     <div class="ent-price-card is-featured">
                         <div class="ent-price-tag">Most popular</div>
                         <div class="ent-price-name">{{ENT_TEAM_LABEL}}</div>
-                        <div class="ent-price-amount">{{ENT_TEAM_PRICE_INR}} <span>/month</span></div>
+                        <div class="ent-price-amount">{{ENT_TEAM_PRICE}} <span>/month</span></div>
                         <div class="ent-price-gst">{{ENT_TAX_NOTE}}</div>
                         {{ENT_IF_YEARLY}}<div class="ent-price-yearly">{{ENT_TEAM_YEARLY_NOTE}}</div>{{ENT_END_IF_YEARLY}}
                         <div class="ent-price-specs">
@@ -2320,13 +2319,12 @@
                             <div><span>Open student files</span><b>{{ENT_TEAM_OPEN_FILES}}</b></div>
                             <div><span>AI credits / month</span><b>{{ENT_TEAM_CREDITS}}</b></div>
                             <div><span>AI document reading</span><b>{{ENT_TEAM_READS}} / month</b></div>
-                            <div><span>International</span><b>{{ENT_TEAM_INTL_PRICES}}</b></div>
                         </div>
                         <p class="ent-price-purpose">{{ENT_TEAM_PURPOSE}}. Adds multiple offices, custom roles and per-branch reporting.</p>
                     </div>
                     <div class="ent-price-card">
                         <div class="ent-price-name">{{ENT_MULTI_BRANCH_LABEL}}</div>
-                        <div class="ent-price-amount">{{ENT_MULTI_BRANCH_PRICE_INR}} <span>/month</span></div>
+                        <div class="ent-price-amount">{{ENT_MULTI_BRANCH_PRICE}} <span>/month</span></div>
                         <div class="ent-price-gst">{{ENT_TAX_NOTE}}</div>
                         {{ENT_IF_YEARLY}}<div class="ent-price-yearly">{{ENT_MULTI_BRANCH_YEARLY_NOTE}}</div>{{ENT_END_IF_YEARLY}}
                         <div class="ent-price-specs">
@@ -2334,7 +2332,6 @@
                             <div><span>Open student files</span><b>{{ENT_MULTI_BRANCH_OPEN_FILES}}</b></div>
                             <div><span>AI credits / month</span><b>{{ENT_MULTI_BRANCH_CREDITS}}</b></div>
                             <div><span>AI document reading</span><b>{{ENT_MULTI_BRANCH_READS}} / month</b></div>
-                            <div><span>International</span><b>{{ENT_MULTI_BRANCH_INTL_PRICES}}</b></div>
                         </div>
                         <p class="ent-price-purpose">{{ENT_MULTI_BRANCH_PURPOSE}}. Everything in {{ENT_TEAM_LABEL}}. Over {{ENT_MULTI_BRANCH_OPEN_FILES}} files, add Branch Packs by invoice: +{{ENT_BRANCH_PACK_FILES}} files, +{{ENT_BRANCH_PACK_SEATS}} staff and +{{ENT_BRANCH_PACK_CREDITS}} credits a month each.</p>
                     </div>
@@ -2353,8 +2350,8 @@
                 <p class="ent-price-foot">
                     AI document reading: every upload is read by Rilono AI from your plan&rsquo;s monthly reading
                     allowance (one read per {{ENT_READ_PAGES}} pages). Plan credits and reads refresh each month and
-                    don&rsquo;t carry over; top-up credits ({{ENT_TOPUP_PACKS_INR}}) never expire. Billed monthly in INR,
-                    or in {{ENT_CURRENCIES_OTHER}} depending on where your office is. {{ENT_TAX_SENTENCE}}{{ENT_YEARLY_SENTENCE}}
+                    don&rsquo;t carry over; top-up credits ({{ENT_TOPUP_PACKS}}) never expire. Billed monthly in {{ENT_CURRENCY}}.
+                    {{ENT_TAX_SENTENCE}}{{ENT_YEARLY_SENTENCE}}
                     Catalog browsing is always free.
                 </p>
                 <div class="enterprise-actions" style="margin-top:1.6rem">
@@ -2377,11 +2374,11 @@
                 <div class="enterprise-faq">
                     <details open>
                         <summary>What does Rilono Enterprise cost? <span class="chev">+</span></summary>
-                        <div class="ans">Every plan gets every AI feature; plans differ by open student files, staff and the AI credits included each month. {{ENT_STARTER_LABEL}} is {{ENT_STARTER_PRICE_INR}}/month for {{ENT_STARTER_OPEN_FILES}} open files, {{ENT_STARTER_SEATS}} staff and {{ENT_STARTER_CREDITS}} AI credits a month. {{ENT_TEAM_LABEL}} is {{ENT_TEAM_PRICE_INR}}/month for {{ENT_TEAM_OPEN_FILES}} open files, {{ENT_TEAM_SEATS}} staff and {{ENT_TEAM_CREDITS}} credits, and adds multiple offices, custom roles and per-branch reporting. {{ENT_MULTI_BRANCH_LABEL}} is {{ENT_MULTI_BRANCH_PRICE_INR}}/month for {{ENT_MULTI_BRANCH_OPEN_FILES}} open files, {{ENT_MULTI_BRANCH_SEATS}} staff and {{ENT_MULTI_BRANCH_CREDITS}} credits. {{ENT_TAX_SENTENCE}} International offices pay in {{ENT_CURRENCIES_OTHER}}.{{ENT_YEARLY_SENTENCE}} Every workspace starts on a {{ENT_TRIAL_LABEL}} with {{ENT_TRIAL_SEATS}} staff, {{ENT_TRIAL_OPEN_FILES}} open files and {{ENT_TRIAL_CREDITS_NOTE}} — no card needed.</div>
+                        <div class="ans">Every plan gets every AI feature; plans differ by open student files, staff and the AI credits included each month. {{ENT_STARTER_LABEL}} is {{ENT_STARTER_PRICE}}/month for {{ENT_STARTER_OPEN_FILES}} open files, {{ENT_STARTER_SEATS}} staff and {{ENT_STARTER_CREDITS}} AI credits a month. {{ENT_TEAM_LABEL}} is {{ENT_TEAM_PRICE}}/month for {{ENT_TEAM_OPEN_FILES}} open files, {{ENT_TEAM_SEATS}} staff and {{ENT_TEAM_CREDITS}} credits, and adds multiple offices, custom roles and per-branch reporting. {{ENT_MULTI_BRANCH_LABEL}} is {{ENT_MULTI_BRANCH_PRICE}}/month for {{ENT_MULTI_BRANCH_OPEN_FILES}} open files, {{ENT_MULTI_BRANCH_SEATS}} staff and {{ENT_MULTI_BRANCH_CREDITS}} credits. {{ENT_TAX_SENTENCE}}{{ENT_YEARLY_SENTENCE}} Every workspace starts on a {{ENT_TRIAL_LABEL}} with {{ENT_TRIAL_SEATS}} staff, {{ENT_TRIAL_OPEN_FILES}} open files and {{ENT_TRIAL_CREDITS_NOTE}} — no card needed.</div>
                     </details>
                     <details>
                         <summary>Are AI credits included in the plan or bought separately? <span class="chev">+</span></summary>
-                        <div class="ans">Both. Your plan grants its credit allowance to your wallet at the start of every billing period, and that is what normal use runs on. A document check is {{ENT_DOC_CHECK_PRICE}}, an SOP or LOR draft {{ENT_WRITING_PRICE}}, a mock visa interview {{ENT_INTERVIEW_PRICE}} and a Deep Scan file audit {{ENT_DEEP_SCAN_PRICE}}. If a busy month uses up the allowance, top up at any time: {{ENT_TOPUP_PACKS_INR}}. Unused plan credits do not carry into the next period; top-up credits you purchase never expire.</div>
+                        <div class="ans">Both. Your plan grants its credit allowance to your wallet at the start of every billing period, and that is what normal use runs on. A document check is {{ENT_DOC_CHECK_PRICE}}, an SOP or LOR draft {{ENT_WRITING_PRICE}}, a mock visa interview {{ENT_INTERVIEW_PRICE}} and a Deep Scan file audit {{ENT_DEEP_SCAN_PRICE}}. If a busy month uses up the allowance, top up at any time: {{ENT_TOPUP_PACKS}}. Unused plan credits do not carry into the next period; top-up credits you purchase never expire.</div>
                     </details>
                     <details>
                         <summary>What counts as an open student file? <span class="chev">+</span></summary>

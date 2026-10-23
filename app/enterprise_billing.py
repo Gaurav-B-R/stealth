@@ -701,6 +701,53 @@ def request_geo_country(request) -> Optional[str]:
         return None
 
 
+# ---------------------------------------------------------------------------
+# Public (anonymous) price lists: one region's prices per visitor
+# ---------------------------------------------------------------------------
+#
+# The plan books are not near-parity: the INR column is less than half the foreign ladders
+# (see money.PRICE_BOOK), and the foreign ladders are near-parity with each other. So an
+# anonymous visitor is shown ONE region's prices — the region they are browsing from — and
+# never the other region's. A US consultancy never sees ₹1,499 beside its $39; an Indian one
+# never sees the dollar ladder. Everything public that states an Enterprise price (the
+# server-rendered marketing pages, GET /enterprise/public/plans, the /pricing card) goes
+# through these two functions.
+#
+# Unlike charge_currency_for_org, an UNKNOWN country here is quoted outside the INR region
+# (USD): behind the CDN that is a Tor exit or an unlocatable IP, not an Indian office, and a
+# price list is display-only — checkout still applies its own rule to the org.
+
+def public_price_currencies(request) -> list[str]:
+    """The currencies an anonymous visitor's price list may be written in: ["INR"] from the
+    INR region, otherwise every non-INR launch currency (all near-parity, so offering one
+    over another discloses nothing)."""
+    country = request_geo_country(request)
+    if country and country in INR_REGION_COUNTRIES:
+        return ["INR"]
+    return [c for c in money.supported_charge_currencies() if c != "INR"]
+
+
+def public_price_currency(request, hint: str | None = None) -> str:
+    """The one currency an anonymous visitor's price list is written in: `hint` when it is
+    one of public_price_currencies(request), else the visitor's own (INR in the INR region,
+    their country's ladder currency elsewhere, USD when the country is unknown)."""
+    allowed = public_price_currencies(request)
+    code = (hint or "").strip().upper()
+    if code in allowed:
+        return code
+    if allowed == ["INR"]:
+        return "INR"
+    country = request_geo_country(request)
+    return _ladder_currency_for_country(country) if country else "USD"
+
+
+def _price_options_in(product: str, currencies) -> list[dict]:
+    """money.price_options(product) limited to `currencies`. A price list must never carry
+    another region's ladder in its JSON, even unrendered — DevTools reads it all."""
+    allowed = {str(c).strip().upper() for c in (currencies or [])}
+    return [o for o in money.price_options(product) if o["currency"] in allowed]
+
+
 def billing_country_for(
     org_country: str | None, request=None, *, inr_barred: bool = False,
 ) -> Optional[str]:
@@ -1065,7 +1112,9 @@ def branch_pack_facts() -> dict:
     }
 
 
-def public_plans_payload(currency: str | None = None, *, usd_estimate: bool = False) -> list[dict]:
+def public_plans_payload(
+    currency: str | None = None, *, usd_estimate: bool = False, currencies=None,
+) -> list[dict]:
     """The tier cards, priced in `currency` (any launch currency; INR when omitted).
 
     Every price field is the EX-TAX subtotal, and `tax_*`/`total_*` carry what checkout
@@ -1080,6 +1129,11 @@ def public_plans_payload(currency: str | None = None, *, usd_estimate: bool = Fa
     `usd_estimate=True` adds a whole-dollar US$ estimate to INR cards (for the non-Indian
     members of the INR region; see charge_currency_for_org).
 
+    `price_options` (the per-currency ladder a selector picks from) carries only the
+    currencies in `currencies` — the caller's region rule — and only the card's own currency
+    when none are given. The INR and foreign ladders are not near-parity, so a payload must
+    never hand one region the other's prices.
+
     Returns [] while ENTERPRISE_FREE is on — with billing disabled there is nothing to
     sell, and a price list nobody can buy from is worse than no price list.
     """
@@ -1087,6 +1141,7 @@ def public_plans_payload(currency: str | None = None, *, usd_estimate: bool = Fa
         return []
     requested = (currency or CURRENCY or money.DEFAULT_CURRENCY).strip().upper()
     code = requested if money.is_chargeable(requested) else money.DEFAULT_CURRENCY
+    option_currencies = list(currencies) if currencies else [code]
     sell_yearly = yearly_enabled()
     files_note = f"{_not_open_stage_labels()} files don't count."
     payload = []
@@ -1169,7 +1224,10 @@ def public_plans_payload(currency: str | None = None, *, usd_estimate: bool = Fa
             "includes_branches": "branches" in TIER_FEATURES.get(plan["features_tier"], frozenset()),
             "is_popular": plan["is_popular"],
             "features": list(plan["features"]),
-            "price_options": money.price_options(plan["price_product"]) if plan.get("price_product") else [],
+            "price_options": (
+                _price_options_in(plan["price_product"], option_currencies)
+                if plan.get("price_product") else []
+            ),
             "trial_days": DEFAULT_TRIAL_DAYS if key == SANDBOX_PLAN else None,
             "demo_bonus_credits": TRIAL_DEMO_BONUS_CREDITS if key == SANDBOX_PLAN else 0,
         }

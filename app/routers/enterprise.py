@@ -9132,6 +9132,17 @@ ENTERPRISE_PUBLIC_PLANS_RATE_WINDOW = int(os.getenv("ENTERPRISE_PUBLIC_PLANS_RAT
 ENTERPRISE_PUBLIC_PLANS_MAX_AGE = int(os.getenv("ENTERPRISE_PUBLIC_PLANS_MAX_AGE", "300") or "300")
 
 
+# Rupee amounts a credit or pack is "worth" (credits are an INR unit of account). Fine for a
+# rupee-billed visitor; anyone else is shown no rupee figure at all.
+_PUBLIC_RUPEE_FIELDS = ("price_inr", "price_display", "value_inr")
+
+
+def _public_rupee_fields_only_for_inr(rows: list[dict], currency: str) -> list[dict]:
+    if currency == "INR":
+        return rows
+    return [{k: v for k, v in row.items() if k not in _PUBLIC_RUPEE_FIELDS} for row in rows]
+
+
 @router.get("/public/plans")
 def enterprise_public_plans(
     request: Request,
@@ -9143,24 +9154,24 @@ def enterprise_public_plans(
     the SAME numbers checkout charges, from the same code (app/money.py PRICE_BOOK +
     enterprise_billing.PLANS), so no page ever has to carry a price of its own.
 
-    `currency` is a display HINT. The visitor's currency region applies exactly as it would at
-    checkout (billing.charge_currency_for_org with no org: the CDN geo country decides): a
-    visitor in the INR region sees INR whatever they ask for (non-Indian members with a US$
-    estimate), a visitor elsewhere never sees INR, and an unknown country keeps INR available.
-    An unsupported hint is ignored rather than a 400 — a public page passing the browser's
-    locale currency must still render a price list.
+    One region's prices per visitor (billing.public_price_currency): a visitor in the INR
+    region sees INR whatever they ask for (non-Indian members with a US$ estimate); a visitor
+    anywhere else — or from an unknown country — sees their own ladder currency (else USD) and
+    never INR. Nothing in the response carries the other region's prices: `price_options` and
+    the packages' ladders are limited to `currencies`, this visitor's region.
+
+    `currency` is a display HINT, honoured only within that region (the foreign ladders are
+    near-parity, so one over another discloses nothing). Anything else — another region's
+    currency, an unsupported code — is ignored rather than a 400.
     """
     _enforce_rate_limit_or_429(
         request=request, scope="enterprise.public_plans",
         limit=ENTERPRISE_PUBLIC_PLANS_RATE_LIMIT, window_seconds=ENTERPRISE_PUBLIC_PLANS_RATE_WINDOW,
     )
     hint = (currency or "").strip().upper()[:3] or None
-    try:
-        code = billing.charge_currency_for_org(db, None, hint, request=request)
-        hint_supported = True
-    except HTTPException:
-        code = billing.charge_currency_for_org(db, None, None, request=request)
-        hint_supported = False
+    region_currencies = billing.public_price_currencies(request)
+    code = billing.public_price_currency(request, hint)
+    hint_supported = bool(hint) and money.is_chargeable(hint)
     country = billing.request_geo_country(request)
     # Same rule as the subscription state: the estimate is for the NON-Indian members of the
     # INR region, who are charged rupees but think in dollars.
@@ -9176,20 +9187,23 @@ def enterprise_public_plans(
         "requested_currency": hint,
         "requested_currency_supported": hint_supported if hint else None,
         "country_code": country,
-        "inr_region": country is None or billing.is_inr_region(country),
+        "inr_region": billing.is_inr_region(country),
         "show_usd_estimate": show_usd_estimate,
-        # What a currency selector may offer this visitor (the region rule applied), and the
-        # full launch list for reference.
-        "currencies": _org_charge_currencies(None, request),
-        "all_currencies": list(money.supported_charge_currencies()),
+        # The currencies this visitor's region is priced in. No full launch list: it would
+        # only tell a visitor which other regions exist to go price-shopping in.
+        "currencies": region_currencies,
         "billing_enabled": not billing.ENTERPRISE_FREE,
         "yearly_enabled": sell_yearly,
         "yearly_price_months": int(money.YEARLY_PRICE_MONTHS),
         "tax": _tax_payload(code),
         "gst_percent": float(money.GST_PERCENT),
-        "plans": billing.public_plans_payload(code, usd_estimate=show_usd_estimate),
-        "actions": credits.actions_payload(),
-        "packages": credits.packages_payload(code),
+        "plans": billing.public_plans_payload(
+            code, usd_estimate=show_usd_estimate, currencies=region_currencies,
+        ),
+        "actions": _public_rupee_fields_only_for_inr(credits.actions_payload(), code),
+        "packages": _public_rupee_fields_only_for_inr(
+            credits.packages_payload(code, currencies=region_currencies), code,
+        ),
         "trial": billing.trial_facts(),
         "branch_pack": billing.branch_pack_facts(),
         "file_grace_days": billing.FILE_LIMIT_GRACE_DAYS,
@@ -9236,18 +9250,21 @@ def _billing_catalog_payload(db: Session, organization, request: Request | None)
     """The tier cards + subscription block shared by /billing/plans and /billing/subscription.
 
     Cards are priced in the currency this org is charged in (charge_currency_for_org: sticky
-    choice -> country -> INR, clamped to its currency region), and carry their full
-    `price_options` ladder for a selector. `usd_estimate` is attached to INR cards only for
+    choice -> country -> INR, clamped to its currency region), and carry the `price_options`
+    ladder for a selector — only the currencies this org can be charged in, never the other
+    region's prices. `usd_estimate` is attached to INR cards only for
     the non-Indian members of the INR region — the same flag the subscription state reports,
     so the chip and the cards never disagree about whether to show it."""
     org_currency = _resolve_charge_currency(None, organization, db=db, request=request)
     state = billing.build_subscription_state(db, organization.id, request=request)
+    charge_currencies = _org_charge_currencies(organization, request)
     return {
         "plans": billing.public_plans_payload(
             org_currency, usd_estimate=bool(state.get("show_usd_estimate")),
+            currencies=charge_currencies,
         ),
         "currency": org_currency,
-        "charge_currencies": _org_charge_currencies(organization, request),
+        "charge_currencies": charge_currencies,
         # The live INR GST rate, so the SPA's cross-currency preview (INR selected over a
         # foreign-quoted payload) never has to hardcode 18 — and 0 means "no tax line".
         "gst_percent": float(money.GST_PERCENT),
@@ -10029,7 +10046,9 @@ def enterprise_credits_wallet(
         # Priced in the currency this org is charged in (its region applied), with the full
         # ladder on each package so the top-up modal can offer a currency selector without a
         # second round-trip — limited to the currencies this org can actually be charged in.
-        "packages": credits.packages_payload(org_currency),
+        "packages": credits.packages_payload(
+            org_currency, currencies=_org_charge_currencies(organization, request),
+        ),
         "charge_currencies": _org_charge_currencies(organization, request),
         # D-011: shown in the top-up modal when the pack is priced in rupees.
         "inr_payment_rule": (

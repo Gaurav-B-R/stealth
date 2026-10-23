@@ -8,6 +8,9 @@ time. These tests pin:
   * token values are the catalog's own numbers (billing / credits / money), and are safe in
     HTML text, double-quoted attributes and JSON-LD strings alike;
   * "+ GST" exists only while GST is charged, and yearly copy only while yearly is on sale;
+  * ONE REGION PER VISITOR: a page is priced in the visitor's own region currency (INR from
+    India's billing region, the local ladder or USD elsewhere) and never names the other
+    region's prices; search-engine copy (JSON-LD, meta descriptions) names no price at all;
   * the owned pages carry no hand-typed plan price, no stale catalog, and don't promote the
     interim-priced client Copilot link or "priority support";
   * the routes (and the raw /static/*.html mount) serve rendered pages, a renderer failure
@@ -142,7 +145,7 @@ def test_priced_pages_actually_use_tokens(name):
 
 
 def test_unknown_token_raises_in_strict_mode_and_stays_visible_otherwise(caplog):
-    page = "<p>Starter {{ENT_STARTER_PRICE_INR}} and {{ENT_NO_SUCH_THING}}</p>"
+    page = "<p>Starter {{ENT_STARTER_PRICE}} and {{ENT_NO_SUCH_THING}}</p>"
     with pytest.raises(epp.UnknownPriceToken, match="ENT_NO_SUCH_THING"):
         epp.render(page, strict=True)
     with caplog.at_level("ERROR"):
@@ -201,21 +204,35 @@ def test_plan_tokens_are_the_live_catalog_numbers():
     for key, prefix in epp.PLAN_TOKEN_PREFIX.items():
         card = cards[key]
         assert tokens[f"ENT_{prefix}_LABEL"] == card["label"]
-        assert tokens[f"ENT_{prefix}_PRICE_INR"] == card["monthly_display"]
+        assert tokens[f"ENT_{prefix}_PRICE"] == card["monthly_display"]
         assert tokens[f"ENT_{prefix}_SEATS"] == f"{card['max_seats']:,}"
         assert tokens[f"ENT_{prefix}_OPEN_FILES"] == f"{card['max_open_files']:,}"
         assert tokens[f"ENT_{prefix}_CREDITS"] == f"{card['included_credits']:,}"
         assert tokens[f"ENT_{prefix}_READS"] == f"{card['max_reads']:,}"
-        assert tokens[f"ENT_{prefix}_YEARLY_PRICE_INR"] == card["yearly_display"]
-        for option in card["price_options"]:
-            assert tokens[f"ENT_{prefix}_PRICE_{option['currency']}"] == option["display"]
+        assert tokens[f"ENT_{prefix}_YEARLY_PRICE"] == card["yearly_display"]
     # The owner-approved 2026-10-22 card, end to end through the token map.
     assert (tokens["ENT_STARTER_LABEL"], tokens["ENT_TEAM_LABEL"], tokens["ENT_MULTI_BRANCH_LABEL"]) == (
         "Starter", "Team", "Multi-branch")
-    assert (tokens["ENT_STARTER_PRICE_INR"], tokens["ENT_TEAM_PRICE_INR"], tokens["ENT_MULTI_BRANCH_PRICE_INR"]) == (
+    assert (tokens["ENT_STARTER_PRICE"], tokens["ENT_TEAM_PRICE"], tokens["ENT_MULTI_BRANCH_PRICE"]) == (
         "₹1,499", "₹3,999", "₹9,999")
-    assert tokens["ENT_STARTER_INTL_PRICES"] == "$39 / £29 / A$59"
-    assert tokens["ENT_FROM_PRICE_INR"] == "₹1,499"
+    assert tokens["ENT_FROM_PRICE"] == "₹1,499"
+    assert tokens["ENT_CURRENCY"] == "INR"
+    # The same tokens for a visitor outside the INR region: their ladder, nothing else.
+    usd = epp.build_tokens("USD")
+    assert (usd["ENT_STARTER_PRICE"], usd["ENT_TEAM_PRICE"], usd["ENT_MULTI_BRANCH_PRICE"]) == ("$39", "$89", "$195")
+    assert usd["ENT_FROM_PRICE"] == "$39" and usd["ENT_CURRENCY"] == "USD"
+    gbp = epp.build_tokens("GBP")
+    assert (gbp["ENT_STARTER_PRICE"], gbp["ENT_TEAM_PRICE"], gbp["ENT_MULTI_BRANCH_PRICE"]) == ("£29", "£69", "£145")
+
+
+def test_no_token_can_name_a_price_in_another_currency():
+    # Per-currency and "International" tokens are what let a page show one region the other's
+    # prices. They must not exist, for any visitor currency.
+    for code in money.supported_charge_currencies():
+        names = set(epp.build_tokens(code))
+        assert not any(n.endswith("_INTL_PRICES") for n in names), code
+        for other in money.supported_charge_currencies():
+            assert not any(n.endswith(f"_{other}") for n in names), (code, other)
 
 
 def test_trial_action_pack_and_branch_tokens_follow_their_sources():
@@ -242,8 +259,11 @@ def test_trial_action_pack_and_branch_tokens_follow_their_sources():
     assert tokens["ENT_COPILOT_LINK_MESSAGES"] == str(actions["copilot_client"]["messages_included"])
 
     packs = credits.packages_payload("INR")
-    assert tokens["ENT_TOPUP_FROM_INR"] == min(packs, key=lambda p: p["amount_minor"])["amount_display"] == "₹999"
-    assert tokens["ENT_TOPUP_PACKS_INR"] == "₹999 for 100 credits, ₹2,999 for 350 and ₹4,999 for 650"
+    assert tokens["ENT_TOPUP_FROM"] == min(packs, key=lambda p: p["amount_minor"])["amount_display"] == "₹999"
+    assert tokens["ENT_TOPUP_PACKS"] == "₹999 for 100 credits, ₹2,999 for 350 and ₹4,999 for 650"
+    usd = epp.build_tokens("USD")
+    assert usd["ENT_TOPUP_FROM"] == "$12.99"
+    assert "₹" not in usd["ENT_TOPUP_PACKS"]
 
     pack = billing.branch_pack_facts()
     assert tokens["ENT_BRANCH_PACK_FILES"] == str(pack["open_files"])
@@ -258,8 +278,8 @@ def test_env_overrides_move_the_page_with_the_catalog(monkeypatch):
     monkeypatch.setattr(money, "PRICE_BOOK", book)
     monkeypatch.setitem(billing.PLANS["growth"], "max_seats", 30)
     tokens = epp.build_tokens()
-    assert tokens["ENT_STARTER_PRICE_INR"] == "₹1,199"
-    assert tokens["ENT_FROM_PRICE_INR"] == "₹1,199"
+    assert tokens["ENT_STARTER_PRICE"] == "₹1,199"
+    assert tokens["ENT_FROM_PRICE"] == "₹1,199"
     assert tokens["ENT_TEAM_SEATS"] == "30"
     rendered = epp.render(_read("for_enterprise.html"), strict=True)
     assert "₹1,199 <span>/month</span>" in rendered
@@ -269,10 +289,12 @@ def test_cards_still_render_under_the_enterprise_free_kill_switch(monkeypatch):
     monkeypatch.setattr(billing, "ENTERPRISE_FREE", True)
     assert billing.public_plans_payload("INR") == []
     tokens = epp.build_tokens()
-    assert tokens["ENT_STARTER_PRICE_INR"] == "₹1,499"
+    assert tokens["ENT_STARTER_PRICE"] == "₹1,499"
     assert tokens["ENT_MULTI_BRANCH_OPEN_FILES"] == "500"
+    assert epp.build_tokens("USD")["ENT_STARTER_PRICE"] == "$39"
     for name in PRICED_PAGES:
-        assert "{{ENT_" not in epp.render(_read(name), strict=True)
+        for code in ("INR", "USD"):
+            assert "{{ENT_" not in epp.render(_read(name), currency=code, strict=True)
 
 
 # ---------------------------------------------------------------------------
@@ -291,6 +313,11 @@ def test_gst_wording_present_while_gst_is_charged(monkeypatch):
     f1 = epp.render(_read("us_f1_visa.html"), strict=True)
     assert "₹1,499<span>&nbsp;/month + GST</span>" in f1
     assert "in the currency shown, plus GST where an Enterprise price says + GST." in f1
+    # GST is an INR tax: a visitor outside the INR region is quoted no tax at all.
+    usd = epp.build_tokens("USD")
+    assert usd["ENT_TAX_NOTE"] == usd["ENT_TAX_SUFFIX"] == usd["ENT_TAX_DISCLAIMER_SUFFIX"] == ""
+    assert "GST" not in usd["ENT_TAX_SENTENCE"]
+    assert "$39<span>&nbsp;/month</span>" in epp.render(_read("us_f1_visa.html"), currency="USD", strict=True)
 
 
 def test_gst_zero_removes_every_tax_mention(gst_zero):
@@ -304,8 +331,7 @@ def test_gst_zero_removes_every_tax_mention(gst_zero):
             assert "GST" not in rendered, name
     f1 = epp.render(_read("us_f1_visa.html"), strict=True)
     assert "₹1,499<span>&nbsp;/month</span>" in f1
-    assert "You are charged exactly the amount shown, in the currency shown.\n" in f1
-    assert 'data-tax-note=""' in f1
+    assert "in the currency shown.\n" in f1
     page = epp.render(_read("for_enterprise.html"), strict=True)
     assert '<div class="ent-price-gst"></div>' in page   # hidden by .ent-price-gst:empty
 
@@ -368,7 +394,7 @@ def test_cache_busters_are_bumped_for_the_changed_assets():
     enterprise = _read("enterprise.html")
     assert "/static/enterprise.js?v=20261022b" in enterprise
     assert "/static/enterprise.css?v=20261022a" in enterprise
-    assert "/static/app.js?v=20261022a" in _read("us_f1_visa.html")
+    assert "/static/app.js?v=20261022b" in _read("us_f1_visa.html")
     console = _read("admin_console.html")
     assert "/static/admin_console.js?v=20261022b" in console
     assert "/static/admin_console.css?v=20261022a" in console
@@ -404,18 +430,67 @@ def test_every_tokenised_page_has_a_rendering_route():
 
 @pytest.mark.parametrize("path,name", sorted(ROUTES.items()))
 def test_routes_serve_rendered_pages(client, path, name):
-    res = client.get(path)
+    res = client.get(path, headers={"cf-ipcountry": "IN"})
     assert res.status_code == 200, path
     assert res.headers["content-type"].startswith("text/html")
     assert "{{ENT_" not in res.text, path
-    if epp.tokens_in(_read(name)) & {"ENT_STARTER_PRICE_INR", "ENT_FROM_PRICE_INR"}:
+    if epp.tokens_in(_read(name)) & {"ENT_STARTER_PRICE", "ENT_FROM_PRICE"}:
         assert "₹1,499" in res.text, path
+        # A page priced per region must never be shared across regions by a cache.
+        assert res.headers["cache-control"] == "private, no-cache", path
+        assert "CF-IPCountry" in res.headers["vary"], path
+
+
+@pytest.mark.parametrize("path,name", sorted(ROUTES.items()))
+@pytest.mark.parametrize("geo,currency", [("IN", "INR"), ("NP", "INR"), ("US", "USD"), ("GB", "GBP"), (None, "USD")])
+def test_routes_price_each_visitor_in_their_own_region_only(client, path, name, geo, currency):
+    """The whole point: a visitor sees ONE region's Enterprise prices. Outside India's billing
+    region (and from an unknown country) no rupee plan or pack price; inside it, no foreign
+    ladder price. Checked against every plan and pack price in the book."""
+    if not epp.tokens_in(_read(name)) & {"ENT_STARTER_PRICE", "ENT_FROM_PRICE"}:
+        pytest.skip(f"{name} quotes no Enterprise price")
+    res = client.get(path, headers={"cf-ipcountry": geo} if geo else {})
+    text = _published_text(res.text)
+    own = billing.plan_price_minor("starter", currency)
+    assert money.format_money(own, currency) in text, (path, geo)
+    for code in money.supported_charge_currencies():
+        if (code == "INR") == (currency == "INR"):
+            continue   # same region (the foreign ladders are near-parity with each other)
+        for display in _other_region_prices(code):
+            assert display not in text, (path, geo, display)
+
+
+def _other_region_prices(code: str) -> list[str]:
+    plans = [money.format_money(billing.plan_price_minor(k, code), code) for k in billing.PAID_PLAN_KEYS]
+    packs = [p["amount_display"] for p in credits.packages_payload(code)]
+    # The student Visa Success Pass is near-parity in every currency and its B2C copy names
+    # "₹999" on purpose (terms, FAQ) — the same figure as the smallest INR credit pack.
+    pass_price = money.format_money(money.price_minor("visa_pass", code), code)
+    return sorted(set(plans + packs) - {pass_price})
+
+
+@pytest.mark.parametrize("name", [n for n in PRICED_PAGES if n != "us_f1_visa.html"])
+@pytest.mark.parametrize("code", ["INR", "USD"])
+def test_search_engine_copy_names_no_price(name, code):
+    """JSON-LD answers and meta descriptions are what a search result shows, and a crawler's
+    location would decide the currency for every searcher. They state no price at all."""
+    page = epp.render(_read(name), currency=code, strict=True)
+    enterprise_prices = sorted(
+        {d for c in money.supported_charge_currencies() for d in _other_region_prices(c)},
+        key=len, reverse=True,
+    )
+    snippets = _jsonld_blocks(page) + re.findall(r"<meta[^>]+(?:description|og:|twitter:)[^>]*>", page)
+    for snippet in snippets:
+        for display in enterprise_prices:
+            assert display not in snippet, (name, code, display)
 
 
 def test_raw_static_mount_renders_html_but_leaves_other_files_alone(client):
-    res = client.get("/static/for_enterprise.html")
+    res = client.get("/static/for_enterprise.html", headers={"cf-ipcountry": "IN"})
     assert res.status_code == 200
     assert "{{ENT_" not in res.text and "₹1,499" in res.text
+    us = client.get("/static/for_enterprise.html", headers={"cf-ipcountry": "US"})
+    assert "$39" in us.text and "₹1,499" not in us.text
     assert "<!--@partial:" not in res.text
     assert "etag" not in {k.lower() for k in res.headers.keys()}
     js = client.get("/static/app.js")

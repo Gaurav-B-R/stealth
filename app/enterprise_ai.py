@@ -498,6 +498,17 @@ def build_org_tools(db: Session, organization_id: int, ctx=None, viewer_user_id=
     _scope_query = access.scope_client_query
     _viewer_user_id = int(viewer_user_id) if viewer_user_id else None
 
+    def _billing_currency() -> Optional[str]:
+        """The currency this workspace is billed in (its own region), for any tool that
+        states money. The INR and foreign plan ladders are not near-parity, so a workspace is
+        never quoted the other region's prices; None (no price stated) if it can't be told."""
+        try:
+            from app import enterprise_billing
+            return enterprise_billing.charge_currency_for_org(db, org_id, None)
+        except Exception:
+            logger.debug("billing currency unavailable for org %s", org_id, exc_info=True)
+            return None
+
     def _org_row():
         return db.query(models.EnterpriseOrganization).filter(
             models.EnterpriseOrganization.id == org_id).first()
@@ -1227,7 +1238,7 @@ def build_org_tools(db: Session, organization_id: int, ctx=None, viewer_user_id=
         one) to get the list of available topic keys; call again with the closest
         topic key to get that topic's full guide."""
         from app import enterprise_help
-        entry = enterprise_help.render_topic(topic) if topic else None
+        entry = enterprise_help.render_topic(topic, currency=_billing_currency()) if topic else None
         if entry is None:
             return {
                 "note": ("Pick the closest topic and call get_product_help again with "
@@ -1357,10 +1368,14 @@ def build_org_tools(db: Session, organization_id: int, ctx=None, viewer_user_id=
         return out
 
     def get_credit_pricing() -> dict:
-        """List what every premium AI action costs in Rilono Credits and rupees (Deep Scan,
-        mock interview, university shortlist, Course Finder, Writing Studio, AI assistant)
-        and the credit top-up packs on sale. Use for 'what does a deep scan cost'."""
+        """List what every premium AI action costs in Rilono Credits (Deep Scan, mock
+        interview, university shortlist, Course Finder, Writing Studio, AI assistant) and the
+        credit top-up packs on sale, priced in this workspace's billing currency. Use for
+        'what does a deep scan cost'."""
         c = _credits_mod()
+        currency = _billing_currency()
+        # A credit's rupee value is only this workspace's business if it is billed in rupees.
+        show_inr = currency == "INR"
         # actions_payload/packages_payload are UI payloads whose `description` fields are
         # multi-sentence marketing copy (~4.9 KB together). A price question needs the
         # number, and this result is re-sent on every later round of the turn.
@@ -1370,10 +1385,12 @@ def build_org_tools(db: Session, organization_id: int, ctx=None, viewer_user_id=
         return {
             "actions": [{"action": a.get("label"), "price": a.get("price_label"),
                          "credits": a.get("credits"), "unit": a.get("unit_label"),
-                         "price_inr": a.get("price_inr")} for a in c.actions_payload()],
-            "packs": [{"pack": p.get("label"), "price": p.get("amount_display"),
+                         **({"price_inr": a.get("price_inr")} if show_inr else {})}
+                        for a in c.actions_payload()],
+            "packs": [{"pack": p.get("label"),
+                       **({"price": p.get("amount_display")} if currency else {}),
                        "credits": p.get("total_credits") or p.get("credits"),
-                       "bonus": p.get("bonus_credits")} for p in c.packages_payload()],
+                       "bonus": p.get("bonus_credits")} for p in c.packages_payload(currency)],
         }
 
     def get_credit_spend_summary(days: int = 30) -> dict:

@@ -18,6 +18,7 @@ from decimal import Decimal
 import pytest
 
 from app import enterprise_billing as billing
+from app import enterprise_credits as credits
 from app import money
 
 PLAN_PRODUCTS = ("plan_starter", "plan_growth", "plan_scale")
@@ -233,9 +234,9 @@ def test_public_plans_payload_quotes_the_requested_currency(code):
         # `monthly_paise` keeps its legacy name but must be minor units of `currency`.
         assert plan["monthly_paise"] == money.price_minor(product, code)
         assert plan["monthly_minor"] == plan["monthly_paise"]
-        assert [o["currency"] for o in plan["price_options"]] == list(
-            money.LAUNCH_CHARGE_CURRENCIES
-        )
+        # Only the card's own currency unless the caller names its region's currencies: a
+        # payload never carries the other region's ladder.
+        assert [o["currency"] for o in plan["price_options"]] == [code]
         if code == "INR" and money.tax_applies("INR"):
             assert plan["tax_label"] == "GST"
             assert plan["price_note"] == "+ GST"
@@ -244,6 +245,24 @@ def test_public_plans_payload_quotes_the_requested_currency(code):
             assert plan["tax_minor"] == 0
             assert plan["price_note"] == ""
             assert plan["total_minor"] == plan["monthly_minor"]
+
+
+def test_public_plans_payload_price_options_follow_the_callers_region():
+    if billing.ENTERPRISE_FREE:
+        pytest.skip("billing disabled via ENTERPRISE_FREE")
+    foreign = [c for c in money.LAUNCH_CHARGE_CURRENCIES if c != "INR"]
+    for plan in billing.public_plans_payload("USD", currencies=foreign):
+        if not plan["is_free"]:
+            assert [o["currency"] for o in plan["price_options"]] == foreign
+    for plan in billing.public_plans_payload("INR", currencies=["INR"]):
+        if not plan["is_free"]:
+            assert [o["currency"] for o in plan["price_options"]] == ["INR"]
+    for pack in credits.packages_payload("USD", currencies=foreign):
+        assert [o["currency"] for o in pack["price_options"]] == foreign
+    assert all(
+        [o["currency"] for o in pack["price_options"]] == ["GBP"]
+        for pack in credits.packages_payload("GBP")
+    )
 
 
 @pytest.mark.parametrize("code", money.LAUNCH_CHARGE_CURRENCIES)

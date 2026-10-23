@@ -373,25 +373,6 @@ const PASS_PRICE_LADDER_FALLBACK = Object.freeze([
     { currency: 'AED', amount_minor: 4900 },
     { currency: 'SGD', amount_minor: 1699 }
 ]);
-// The Enterprise plan ladders, OFFLINE FALLBACK ONLY. The server is the source of truth:
-// the /pricing card renders from GET /api/enterprise/public/plans (app/money.py PRICE_BOOK +
-// app/enterprise_billing.py PLANS, the same numbers checkout charges), and the page itself is
-// served with the INR card already filled in from that catalog. This table is used only when
-// that request fails, to repaint the tier prices for a non-INR currency — it mirrors
-// PRICE_BOOK["plan_starter"/"plan_growth"/"plan_scale"] as of 2026-10-22 (Starter / Team /
-// Multi-branch) and drift here can only show a stale price, never charge one. Amounts are
-// ex-tax minor units. The fallback never adds "+ GST" of its own: a non-INR price is a
-// zero-rated export, and for INR the card keeps the tax note the server rendered.
-const ENTERPRISE_PLAN_LADDER_FALLBACK = Object.freeze({
-    INR: { plan_starter: 149900, plan_growth: 399900, plan_scale: 999900 },
-    USD: { plan_starter: 3900, plan_growth: 8900, plan_scale: 19500 },
-    GBP: { plan_starter: 2900, plan_growth: 6900, plan_scale: 14500 },
-    EUR: { plan_starter: 3500, plan_growth: 7900, plan_scale: 17500 },
-    CAD: { plan_starter: 5200, plan_growth: 11900, plan_scale: 25900 },
-    AUD: { plan_starter: 5900, plan_growth: 13900, plan_scale: 29500 },
-    AED: { plan_starter: 14500, plan_growth: 33900, plan_scale: 72500 },
-    SGD: { plan_starter: 4900, plan_growth: 11500, plan_scale: 24500 }
-});
 // The currency the buyer is being quoted, shared by the pricing page and the paywall so
 // the two can never show different prices for the same product.
 const PASS_CURRENCY_STORAGE_KEY = 'rilono_pass_currency';
@@ -9637,6 +9618,8 @@ function showPrivacy(skipURLUpdate = false) {
 }
 
 function showPricing(skipURLUpdate = false) {
+    // Read ?for= before updateURL rewrites the address (deep links and re-renders keep it).
+    const audience = pricingAudienceFromUrl() || 'students';
     hideAllSections();
     document.getElementById('pricingSection').style.display = 'block';
     void initializePricingSelector();
@@ -9649,6 +9632,7 @@ function showPricing(skipURLUpdate = false) {
     if (!skipURLUpdate) {
         updateURL('/pricing', false);
     }
+    setPricingAudience(audience, { instant: true });
 }
 
 function showAboutUs(skipURLUpdate = false) {
@@ -9806,6 +9790,9 @@ async function initializePricingSelector() {
     const currencySelect = document.getElementById('pricingCurrencySelect');
     if (!currencySelect) return;
 
+    // The Enterprise plans are priced by the server for this visitor's region and do not
+    // follow the Pass currency selector, so they refresh once, independently.
+    void refreshEnterprisePricingCard();
     // Paint the locale guess first, then refine once the server ladder and the geo lookup
     // land — so the card never shows a currency this visitor will not be charged in.
     updatePricingByCurrency(currentPassCurrency());
@@ -9852,41 +9839,117 @@ function updatePricingByCurrency(currencyCode) {
         hintEl.textContent = 'Each currency has its own fixed price — nothing is converted at checkout.';
     }
 
-    // The Enterprise card follows the same selector, but its prices come from the server.
-    void refreshEnterprisePricingCard(currency);
 }
 
 // ---------------------------------------------------------------------------
-// Enterprise card on /pricing (server price list)
+// /pricing audience toggle (students ↔ Enterprise)
+// ---------------------------------------------------------------------------
+//
+// One page, two price lists: students see Free + the Visa Success Pass, teams see the
+// Enterprise tiers. Both panels stay in the DOM, so flipping is instant and never refetches.
+// The currency selector belongs to the students view only ([data-pricing-only]).
+// /pricing?for=enterprise opens straight on the Enterprise plans (links from the Enterprise
+// pages); the toggle keeps that parameter in sync with replaceState, since flipping a
+// toggle is not a navigation the Back button should have to undo.
+const PRICING_AUDIENCE_SUBTITLES = Object.freeze({
+    students: 'Simple plans for every stage of your study-abroad journey.',
+    enterprise: 'One flat monthly price for your whole team — every AI feature and monthly AI credits included.'
+});
+let pricingAudience = 'students';
+
+function pricingAudienceFromUrl() {
+    try {
+        const value = String(new URLSearchParams(window.location.search).get('for') || '').trim().toLowerCase();
+        if (value === 'enterprise' || value === 'teams') return 'enterprise';
+        if (value === 'students') return 'students';
+    } catch (error) {
+        // A malformed query string just means "no preference".
+    }
+    return null;
+}
+
+function setPricingAudience(audience, options = {}) {
+    const next = audience === 'enterprise' ? 'enterprise' : 'students';
+    pricingAudience = next;
+    const toggle = document.getElementById('pricingAudienceToggle');
+    if (toggle) {
+        // Opening the page (or re-rendering it) paints the thumb in place; only a visitor's
+        // own flip slides it across.
+        if (options.instant && toggle.classList) {
+            toggle.classList.add('is-instant');
+            requestAnimationFrame(() => requestAnimationFrame(() => toggle.classList.remove('is-instant')));
+        }
+        toggle.setAttribute('data-active', next);
+    }
+    document.querySelectorAll('[data-pricing-audience]').forEach((tab) => {
+        const active = tab.getAttribute('data-pricing-audience') === next;
+        tab.classList.toggle('is-active', active);
+        tab.setAttribute('aria-selected', active ? 'true' : 'false');
+        tab.tabIndex = active ? 0 : -1;
+        if (active && options.focus) tab.focus({ preventScroll: true });
+    });
+    const studentsPanel = document.getElementById('pricingStudentsPanel');
+    const enterprisePanel = document.getElementById('pricingEnterprisePanel');
+    if (studentsPanel) studentsPanel.hidden = next !== 'students';
+    if (enterprisePanel) enterprisePanel.hidden = next !== 'enterprise';
+    // The currency selector and its "every currency has its own price" copy are for the Visa
+    // Success Pass. Enterprise visitors see their own region's prices only — never a list of
+    // the currencies (and so the regions) priced differently.
+    document.querySelectorAll('[data-pricing-only]').forEach((el) => {
+        el.hidden = el.getAttribute('data-pricing-only') !== next;
+    });
+    const subtitle = document.getElementById('pricingSubtitle');
+    if (subtitle) subtitle.textContent = PRICING_AUDIENCE_SUBTITLES[next];
+    if (options.scroll && toggle) toggle.scrollIntoView({ behavior: 'smooth', block: 'center' });
+
+    if (options.updateUrl === false || window.location.pathname !== '/pricing') return;
+    try {
+        // Only `for` changes — any other parameter (utm_*, ref …) is left exactly as it was.
+        const url = new URL(window.location.href);
+        if (next === 'enterprise') url.searchParams.set('for', 'enterprise');
+        else url.searchParams.delete('for');
+        if (url.href !== window.location.href) {
+            window.history.replaceState(window.history.state, '', url.pathname + url.search + url.hash);
+        }
+    } catch (error) {
+        // Without URL/history support the toggle still works; only the link is not updated.
+    }
+}
+
+// Arrow keys / Home / End move between the two tabs (WAI-ARIA tabs pattern).
+function handlePricingAudienceKeydown(event) {
+    if (!['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key)) return;
+    event.preventDefault();
+    let next = pricingAudience === 'enterprise' ? 'students' : 'enterprise';
+    if (event.key === 'Home') next = 'students';
+    if (event.key === 'End') next = 'enterprise';
+    setPricingAudience(next, { focus: true });
+}
+
+// ---------------------------------------------------------------------------
+// Enterprise plans on /pricing (server price list)
 // ---------------------------------------------------------------------------
 //
 // Prices, limits, the tax note, the yearly offer and the US$ estimate all come from
 // GET /api/enterprise/public/plans — the same catalog checkout charges from — and the SERVER
-// decides the currency: it applies the visitor's currency region exactly as checkout will (a
-// visitor in India or a nearby INR-region country is always quoted INR, one elsewhere never
-// is). So the card may answer in a different currency than the one selected for the Visa
-// Success Pass, and that is correct: it shows what this visitor would actually be charged.
-// "+ GST" is only ever the server's `price_note` (empty while no tax is charged).
+// decides the currency from the visitor's region (billing.public_price_currency): INR from
+// India's billing region, the local ladder currency or USD from anywhere else. There is no
+// Enterprise currency selector and no hint: the INR and foreign ladders are not near-parity,
+// so a visitor is only ever shown their own region's prices, and nothing in this file knows
+// another region's. "+ GST" is only ever the server's `price_note` (empty while no tax is
+// charged).
 //
-// Until the response lands the card keeps the server-rendered INR markup. Responses are
-// cached per requested currency (switching back and forth never refetches), a failed
-// request is not cached, and a slow response for a currency the visitor has already moved
-// away from is dropped.
-const enterprisePublicPlansCache = new Map();
-let enterprisePricingRenderSeq = 0;
+// Each tier is one [data-enterprise-plan] card whose [data-ent-field] slots are filled from
+// the plan with the same key. The page is served with those cards already priced for this
+// visitor (app/enterprise_public_pricing.py), so a failed request simply leaves them as
+// served. The list is fetched once per page load; a failed request is not cached.
+let enterprisePublicPlansRequest = null;
 let enterprisePricingInitialHtml = null;
-const ENTERPRISE_TIER_PRICE_IDS = Object.freeze({
-    starter: 'pricingEnterpriseTierStarter',
-    growth: 'pricingEnterpriseTierGrowth',
-    scale: 'pricingEnterpriseTierScale'
-});
 
-function fetchEnterprisePublicPlans(currencyCode) {
-    const hint = String(currencyCode || '').trim().toUpperCase();
-    if (enterprisePublicPlansCache.has(hint)) return enterprisePublicPlansCache.get(hint);
-    const query = hint ? `?currency=${encodeURIComponent(hint)}` : '';
+function fetchEnterprisePublicPlans() {
+    if (enterprisePublicPlansRequest) return enterprisePublicPlansRequest;
     const request = (async () => {
-        const response = await fetch(`${API_BASE}/api/enterprise/public/plans${query}`, { credentials: 'same-origin' });
+        const response = await fetch(`${API_BASE}/api/enterprise/public/plans`, { credentials: 'same-origin' });
         if (!response.ok) throw new Error(`Enterprise price list request failed: ${response.status}`);
         const data = await response.json();
         if (!data || !Array.isArray(data.plans) || !data.plans.some((plan) => plan && !plan.is_free)) {
@@ -9894,9 +9957,9 @@ function fetchEnterprisePublicPlans(currencyCode) {
         }
         return data;
     })();
-    enterprisePublicPlansCache.set(hint, request);
+    enterprisePublicPlansRequest = request;
     request.catch(() => {
-        if (enterprisePublicPlansCache.get(hint) === request) enterprisePublicPlansCache.delete(hint);
+        if (enterprisePublicPlansRequest === request) enterprisePublicPlansRequest = null;
     });
     return request;
 }
@@ -9905,50 +9968,68 @@ function formatEnterpriseCount(value) {
     return Number(value || 0).toLocaleString('en-US');
 }
 
-function setEnterprisePricingNote(text) {
-    const noteEl = document.getElementById('pricingEnterpriseNote');
-    if (!noteEl) return;
-    noteEl.textContent = text || '';
-    noteEl.style.display = noteEl.textContent ? 'block' : 'none';
+// Text into an optional line, hiding the line while it has nothing to say.
+function setEnterprisePricingText(el, text) {
+    if (!el) return;
+    el.textContent = text || '';
+    el.style.display = el.textContent ? '' : 'none';
 }
 
-function enterpriseTierRowHtml(plan) {
-    const priceId = ENTERPRISE_TIER_PRICE_IDS[plan.key];
-    const price = escapeHtml(String(plan.monthly_display || ''));
-    return `${escapeHtml(String(plan.label || ''))} `
-        + (priceId ? `<span id="${priceId}">${price}</span>` : `<span>${price}</span>`)
-        + `/mo — ${escapeHtml(formatEnterpriseCount(plan.max_seats))} staff, `
-        + `${escapeHtml(formatEnterpriseCount(plan.max_open_files ?? plan.max_clients))} open files, `
-        + `${escapeHtml(formatEnterpriseCount(plan.included_credits))} AI credits/mo`;
+function enterprisePlanField(card, field) {
+    return card.querySelector(`[data-ent-field="${field}"]`);
+}
+
+function enterprisePriceHtml(display, taxNote) {
+    const note = String(taxNote || '').trim();
+    return `${escapeHtml(String(display || ''))}<span>&nbsp;/month${note ? ` ${escapeHtml(note)}` : ''}</span>`;
+}
+
+// The line under a plan's price. The US$ estimate is for the non-Indian members of the INR
+// region, who are charged rupees but think in dollars; it is of the total (tax included), so
+// say so rather than imply it is the price. Yearly is promoted only while it can be bought.
+function enterprisePlanNote(data, plan) {
+    const parts = [];
+    if (data.show_usd_estimate && plan.usd_estimate && plan.usd_estimate.monthly_display) {
+        parts.push(`Billed in ${plan.currency || data.currency} · ${plan.usd_estimate.monthly_display} a month in total`);
+    }
+    if (data.yearly_enabled && plan.yearly_display && Number(plan.yearly_months_free) > 0) {
+        parts.push(`or ${plan.yearly_display} a year (${plan.yearly_months_free} months free)`);
+    }
+    return parts.join(' · ');
+}
+
+function renderEnterprisePlanCard(card, plan, data) {
+    const setText = (field, value) => {
+        const el = enterprisePlanField(card, field);
+        if (el && value !== undefined && value !== null && value !== '') el.textContent = String(value);
+    };
+    const setCount = (field, value) => {
+        if (value !== undefined && value !== null) setText(field, formatEnterpriseCount(value));
+    };
+    setText('label', plan.label);
+    setText('purpose', plan.purpose);
+    const priceEl = enterprisePlanField(card, 'price');
+    if (priceEl) priceEl.innerHTML = enterprisePriceHtml(plan.monthly_display, plan.price_note);
+    setEnterprisePricingText(enterprisePlanField(card, 'note'), enterprisePlanNote(data, plan));
+    setCount('seats', plan.max_seats);
+    setCount('files', plan.max_open_files ?? plan.max_clients);
+    setCount('credits', plan.included_credits);
+    setCount('reads', plan.max_reads ?? plan.monthly_reads);
 }
 
 function renderEnterprisePricingFromServer(data) {
     const plans = (data.plans || []).filter((plan) => plan && !plan.is_free && Number(plan.monthly_minor) > 0);
-    if (!plans.length) return false;
-    const entry = plans.reduce((low, plan) => (Number(plan.monthly_minor) < Number(low.monthly_minor) ? plan : low));
-
-    const priceEl = document.getElementById('pricingEnterprisePrice');
-    if (priceEl) {
-        const taxNote = String(entry.price_note || '').trim();
-        priceEl.innerHTML = `${escapeHtml(String(entry.monthly_display || ''))}`
-            + `<span>&nbsp;/month${taxNote ? ` ${escapeHtml(taxNote)}` : ''}</span>`;
-    }
-    document.querySelectorAll('[data-enterprise-plan]').forEach((row) => {
-        const plan = plans.find((candidate) => candidate.key === row.getAttribute('data-enterprise-plan'));
-        if (plan) row.innerHTML = enterpriseTierRowHtml(plan);
+    const cards = Array.from(document.querySelectorAll('[data-enterprise-plan]'));
+    const planFor = (card) => plans.find((candidate) => candidate.key === card.getAttribute('data-enterprise-plan'));
+    // Nothing on the page the server prices: keep the fallback rather than hide every tier.
+    if (!cards.some(planFor)) return false;
+    cards.forEach((card) => {
+        const plan = planFor(card);
+        // A tier the server no longer sells is hidden, never left up at a stale price.
+        card.style.display = plan ? '' : 'none';
+        if (plan) renderEnterprisePlanCard(card, plan, data);
     });
 
-    const noteParts = [];
-    // Non-Indian members of the INR region are charged rupees but think in dollars; the
-    // estimate is of the total (tax included), so say so rather than imply it is the price.
-    if (data.show_usd_estimate && entry.usd_estimate && entry.usd_estimate.monthly_display) {
-        noteParts.push(`Billed in ${entry.currency} · ${entry.usd_estimate.monthly_display} a month in total`);
-    }
-    // Yearly is promoted only while it can actually be bought.
-    if (data.yearly_enabled && entry.yearly_display && Number(entry.yearly_months_free) > 0) {
-        noteParts.push(`or ${entry.yearly_display} a year (${entry.yearly_months_free} months free)`);
-    }
-    setEnterprisePricingNote(noteParts.join(' · '));
 
     const packs = (data.packages || []).filter((pack) => pack && Number(pack.amount_minor) > 0);
     const topupRow = document.getElementById('pricingEnterpriseTopupRow');
@@ -9969,46 +10050,25 @@ function renderEnterprisePricingFromServer(data) {
     return true;
 }
 
-// Offline / API down. The server-rendered markup is already the real INR card (tax note
-// included), so INR — or a currency the ladder doesn't price — just restores it; a ladder
-// currency repaints the tier prices from ENTERPRISE_PLAN_LADDER_FALLBACK with no tax note
-// (non-INR plans are zero-rated exports). Nothing else in the card is guessed: the INR-only
-// top-up price and the server's notes are hidden rather than shown in the wrong currency.
-function renderEnterprisePricingFallback(currencyCode) {
-    const card = document.getElementById('pricingEnterpriseCard');
-    if (card && enterprisePricingInitialHtml !== null) card.innerHTML = enterprisePricingInitialHtml;
-    const code = String(currencyCode || '').trim().toUpperCase();
-    const ladder = code !== 'INR' ? ENTERPRISE_PLAN_LADDER_FALLBACK[code] : null;
-    if (!ladder) return;
-    const priceEl = document.getElementById('pricingEnterprisePrice');
-    if (priceEl) {
-        priceEl.innerHTML = `${escapeHtml(formatMoneyMinor(ladder.plan_starter, code))}<span>&nbsp;/month</span>`;
-    }
-    const ladderKeys = { starter: 'plan_starter', growth: 'plan_growth', scale: 'plan_scale' };
-    Object.keys(ENTERPRISE_TIER_PRICE_IDS).forEach((planKey) => {
-        const tierEl = document.getElementById(ENTERPRISE_TIER_PRICE_IDS[planKey]);
-        const minor = ladder[ladderKeys[planKey]];
-        if (tierEl && Number.isFinite(Number(minor))) tierEl.textContent = formatMoneyMinor(minor, code);
-    });
-    setEnterprisePricingNote('');
-    const topupRow = document.getElementById('pricingEnterpriseTopupRow');
-    if (topupRow) topupRow.style.display = 'none';
+// Offline / API down, or an answer that prices none of the cards: put back the markup the
+// page was served with — already this visitor's own region's prices — rather than guess.
+function renderEnterprisePricingFallback() {
+    const container = document.getElementById('pricingEnterpriseCard');
+    if (container && enterprisePricingInitialHtml !== null) container.innerHTML = enterprisePricingInitialHtml;
 }
 
-async function refreshEnterprisePricingCard(currencyCode) {
-    const card = document.getElementById('pricingEnterpriseCard');
-    if (!card) return;
-    if (enterprisePricingInitialHtml === null) enterprisePricingInitialHtml = card.innerHTML;
-    const seq = ++enterprisePricingRenderSeq;
+async function refreshEnterprisePricingCard() {
+    const container = document.getElementById('pricingEnterpriseCard');
+    if (!container) return;
+    if (enterprisePricingInitialHtml === null) enterprisePricingInitialHtml = container.innerHTML;
     let data = null;
     try {
-        data = await fetchEnterprisePublicPlans(currencyCode);
+        data = await fetchEnterprisePublicPlans();
     } catch (error) {
         console.warn('Using the server-rendered Enterprise prices (price list unavailable):', error);
     }
-    if (seq !== enterprisePricingRenderSeq) return;  // the visitor already picked another currency
     if (!data || !renderEnterprisePricingFromServer(data)) {
-        renderEnterprisePricingFallback(currencyCode);
+        renderEnterprisePricingFallback();
     }
 }
 

@@ -422,3 +422,55 @@ def test_system_instruction_advertises_every_topic():
     assert "get_my_access" in system
     for key in help_mod.topic_keys():
         assert key in system, f"topic {key} not advertised in the system instruction"
+
+
+# ---------------------------------------------------------------------------
+# One region's prices per workspace
+# ---------------------------------------------------------------------------
+
+def _inr_enterprise_prices() -> list[str]:
+    plans = [money.format_money(billing.plan_price_minor(k, "INR"), "INR") for k in billing.PAID_PLAN_KEYS]
+    return plans + [p["amount_display"] for p in credits.packages_payload("INR")]
+
+
+def test_a_foreign_workspace_is_quoted_its_own_currency_and_never_rupees():
+    """The INR plan prices are less than half the foreign ladder: a US workspace's assistant
+    must quote dollars and must not even have the rupee figures to repeat."""
+    content = help_mod.render_topic("credits-billing", currency="USD")["content"]
+    for key in billing.PAID_PLAN_KEYS:
+        usd = money.format_money(billing.plan_price_minor(key, "USD"), "USD")
+        assert f"{usd}/month" in _plan_line(content, key)
+    assert "₹" not in content
+    for display in _inr_enterprise_prices():
+        assert display not in content
+    assert "Prices above are in USD" in content
+
+
+def test_an_indian_workspace_is_quoted_rupees_and_never_the_foreign_ladder():
+    content = help_mod.render_topic("credits-billing", currency="INR")["content"]
+    starter = money.format_money(billing.plan_price_minor("starter", "INR"), "INR")
+    assert f"{starter}/month" in _plan_line(content, "starter")
+    for code in money.supported_charge_currencies():
+        if code == "INR":
+            continue
+        for key in billing.PAID_PLAN_KEYS:
+            assert money.format_money(billing.plan_price_minor(key, code), code) not in content
+
+
+def test_no_billing_currency_means_no_price_at_all():
+    content = help_mod.render_topic("credits-billing")["content"]
+    assert "price shown on Plans & Billing" in _plan_line(content, "starter")
+    for code in money.supported_charge_currencies():
+        for key in billing.PAID_PLAN_KEYS:
+            assert money.format_money(billing.plan_price_minor(key, code), code) not in content
+
+
+def test_assistant_credit_pricing_uses_the_workspace_currency(monkeypatch):
+    from app import enterprise_ai
+    monkeypatch.setattr(billing, "charge_currency_for_org", lambda db, org, hint, request=None: "USD")
+    tools = enterprise_ai.build_org_tools(None, 1, ctx=_viewer_ctx(), viewer_user_id=1)
+    pricing = next(t for t in tools if t.__name__ == "get_credit_pricing")()
+    assert all("price_inr" not in a for a in pricing["actions"])
+    assert [p["price"] for p in pricing["packs"]] == [p["amount_display"] for p in credits.packages_payload("USD")]
+    help_tool = next(t for t in tools if t.__name__ == "get_product_help")
+    assert "₹" not in help_tool("credits-billing")["content"]
