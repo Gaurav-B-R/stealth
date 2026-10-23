@@ -1,0 +1,14 @@
+Asset: opt-fee-proposal-photo.png
+Created: October 23, 2026
+Method: Built-in ImageGen, new image generation.
+Dimensions: 1536 x 1024 pixels.
+
+Final prompt:
+Use case: photorealistic-natural
+Asset type: premium editorial photograph-style hero for a news article about proposed U.S. OPT fees for international students.
+Primary request: Replace the visual concept of a cartoon university and graduation cap with a genuinely photographic, human-centered, striking editorial image. Create a NEW composition.
+Scene: an elegant American university campus during late-afternoon golden hour in autumn, realistic pale stone academic building behind, a clearly visible American flag gently moving on a flagpole at the right, a few softly out-of-focus students far in the background.
+Subject: one fictional South Asian woman graduate, clearly an adult in her mid-twenties, with natural long dark hair, wearing a real textured black graduation gown and cap with a muted violet stole, holding a rolled diploma and a plain dark document folder against her chest. She stands centered, three-quarter body visible, looking slightly past the camera with quiet determination and a thoughtful, authentic expression. Natural facial anatomy, subtle pores, real fabric and hands. No exaggerated sadness or posed commercial smile.
+Composition: landscape 3:2, medium-wide environmental portrait shot from a slightly low eye-level with a 35mm professional lens. Keep the graduate including her full face and mortarboard fully inside the central 60 percent of the frame height, with ample space above and below to crop to a wide 16:9 news hero. Centered figure occupies about half the image height; architectural leading lines and the flag give the scene depth and context. Face and hands sharp, detailed campus softly recedes.
+Lighting and color: cinematic but believable warm directional sunlight, golden rim light in hair, natural warm skin, deep charcoal gown, rich autumn greens and copper foliage, punchy yet true-to-life contrast, soft blue sky. Visually arresting magazine cover photography. Preserve authentic photographic detail, restrained color grade, subtle fine film grain.
+Constraints: photorealistic photography, absolutely no cartoon, 3D render, paper sculpture, plastic skin or illustration. No text overlays, no lettering, no dollar amounts, no currency piles, no readable official documents, no university names, logos, official seals or watermarks. This is a conceptual AI-created editorial image, not documentary evidence of a real person or event.

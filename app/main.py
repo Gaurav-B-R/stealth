@@ -656,10 +656,6 @@ _SPA_ROUTE_META = {
         "title": "Course Finder · Rilono", "description": "Browse verified courses and get AI course shortlists for your destination.",
         "canonical": f"{SITE_ORIGIN}/courses", "noindex": True,
     },
-    "/news": {
-        "title": "Your Dashboard · Rilono", "description": "Manage your study-abroad journey.",
-        "canonical": f"{SITE_ORIGIN}/dashboard", "noindex": True,
-    },
     "/copilot": {
         "title": "AI Copilot · Rilono", "description": "Use Rilono Copilot for your study-abroad journey.",
         "canonical": f"{SITE_ORIGIN}/copilot", "noindex": True,
@@ -935,7 +931,6 @@ async def read_country_visa(request: Request):
 @app.get("/interviews")
 @app.get("/universities")
 @app.get("/courses")
-@app.get("/news")
 @app.get("/copilot")
 @app.get("/sop")
 @app.get("/rilono-ai")
@@ -949,6 +944,36 @@ async def read_preserved_public_spa_routes(request: Request):
     # flows (reset-password, verify-email, verify-university-change, unsubscribe-email) are
     # reached via hard links in transactional emails, so a missing route silently broke them.
     return _serve_us_f1_spa(request)
+
+
+@app.get("/news")
+@app.get("/news/")
+async def read_news_index():
+    """Serve public editorial news, independently of the retired dashboard feed."""
+    page = _read_static_html("news.html")
+    if page is None:
+        raise HTTPException(status_code=404, detail="Not found")
+    return HTMLResponse(page)
+
+
+@app.get("/news/us-opt-fee-proposal-2026")
+@app.get("/news/us-opt-fee-proposal-2026/")
+async def read_opt_fee_proposal_news():
+    """Serve the dated OPT fee proposal report with its own article metadata."""
+    page = _read_static_html("news-opt-fee-proposal.html")
+    if page is None:
+        raise HTTPException(status_code=404, detail="Not found")
+    return HTMLResponse(page)
+
+
+@app.get("/news/uk-graduate-visa-18-months-2027")
+@app.get("/news/uk-graduate-visa-18-months-2027/")
+async def read_uk_graduate_visa_news():
+    """Serve the dated UK Graduate visa application deadline explainer."""
+    page = _read_static_html("news-uk-graduate-visa-2027.html")
+    if page is None:
+        raise HTTPException(status_code=404, detail="Not found")
+    return HTMLResponse(page)
 
 
 @app.get("/blog")
@@ -1283,6 +1308,11 @@ async def serve_spa(full_path: str):
     """Serve index.html for all non-API routes to support client-side routing"""
     # Marketplace has been removed from the product; block old deep links explicitly.
     if full_path == "marketplace" or full_path.startswith("marketplace/"):
+        raise HTTPException(status_code=404, detail="Not found")
+
+    # News article URLs are public documents; an unknown article must not become
+    # the homepage with a successful status (a misleading soft 404).
+    if full_path.startswith("news/"):
         raise HTTPException(status_code=404, detail="Not found")
 
     # Don't serve HTML for API routes, static files, or uploads

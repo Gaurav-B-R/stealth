@@ -1037,7 +1037,6 @@ const DASHBOARD_PATH_TO_TAB = {
     '/interviews': 'visa',
     '/universities': 'universities',
     '/courses': 'courses',
-    '/news': 'overview',  // Retired news bookmarks open the dashboard.
     '/copilot': 'copilot',
     '/sop': 'sop',
     '/rilono-ai': 'records',
