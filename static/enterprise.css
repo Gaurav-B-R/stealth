@@ -1635,6 +1635,23 @@ body.ai-dock-open .toast-wrap { right: 444px; }
   .cp-hstatus { width: 100%; }
 }
 
+/* Undeliverable-address chip (client.email_delivery, from the Resend webhook): hero,
+   Overview → Email and the email composer. Spans only: `.detail-item div` restyles divs. */
+.cp-mailflag-wrap { display: inline-flex; align-items: center; gap: 3px; vertical-align: middle; }
+.cp-mailflag-wrap--detail, .cp-mailflag-wrap--hero { display: flex; margin-top: 6px; }
+.cp-mailflag-wrap--hero { margin-top: 10px; }
+.cp-mailflag {
+  display: inline-flex; align-items: center; gap: 5px;
+  padding: 3px 10px; border-radius: 999px;
+  font-size: 11.5px; font-weight: 700; line-height: 1.35; white-space: nowrap;
+  background: rgba(239, 68, 68, .10); color: #b91c1c; border: 1px solid rgba(239, 68, 68, .30);
+}
+.cp-mailflag-wrap--hero .cp-mailflag {
+  background: rgba(239, 68, 68, .30); color: #fff; border-color: rgba(252, 165, 165, .65);
+  -webkit-backdrop-filter: blur(6px); backdrop-filter: blur(6px);
+}
+.cp-mailflag-wrap--hero .info-tip { background: rgba(255, 255, 255, .16); border-color: rgba(255, 255, 255, .45); color: #fff; }
+
 /* ---------- Client profile tab polish ---------- */
 .cp-sub-label { font-size: 12px; font-weight: 700; text-transform: uppercase; letter-spacing: .05em; color: var(--muted); margin-bottom: 12px; }
 

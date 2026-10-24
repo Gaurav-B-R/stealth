@@ -217,7 +217,12 @@ Status legend:
   - The admin console's account view shows the flag, the reason and Resend's message. Support clears it there after removing the address in Resend. An email change also clears it.
   - A signed-in student sees a slim dashboard banner saying emails to their address aren't arriving, with the reason in plain words and how to fix it (contact support, or change email). Only `GET /api/auth/me` carries it, as `email_delivery_issue` plus a plain-words `email_delivery_issue_reason`. Resend's message, the timestamps and the reason code stay admin-only, and no unauthenticated response carries the flag.
   - Out-of-order retries are handled. The flag stores the latest bad-event time, and every clear records `email_undeliverable_cleared_at`. A bad event from before the last clear is ignored, and a removal older than the current flag does not clear it.
+  - Enterprise CRM clients get the same flag, in `enterprise_clients.email_undeliverable_*`. These rows are not users, so the webhook matches them separately.
+    - Every org's client row with the address is flagged, because the suppression list covers Rilono's whole Resend account.
+    - A client row stores only Resend's structured codes (for example `Permanent / NoEmail`). It never stores the subject or Resend's free-text message of the send that triggered it. The CRM payload (`email_delivery`) has no timestamp. One org's send must not tell another org anything.
+    - The consultant sees a warning chip on the client's profile and in the Emails composer. It asks them to get another address. Saving a new email clears the flag.
+    - The automatic client calendar reminder skips a flagged client. Sends a consultant starts (emails, payment links, portal shares, invites) are still attempted.
 - Consequences:
   - A flagged student also stops getting the daily nudge's in-app bell notification, because that comes from the same Gemini scan.
-  - The flag is per user. Bounces for enterprise client (CRM) addresses match no user and are only counted.
+  - A client flag clears only on `suppression.removed` or an email change. There is no "clear" button for consultants: they cannot take an address off Rilono's suppression list.
   - Nothing is recorded until the Resend webhook exists (see [runbook.md](runbook.md)). Addresses that were already suppressed are flagged the next time Resend suppresses a send to them.

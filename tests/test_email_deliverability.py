@@ -17,7 +17,10 @@ These tests pin down the fix (app/email_deliverability.py + app/routers/email_ev
 3. Transactional sends still go out, and forgot-password keeps its generic response.
 4. The admin account view shows the flag + reason and can clear it.
 5. The schema patch adds the columns to an existing users table, idempotently.
-6. A signed-in student sees their own flag (a boolean + plain-words reason) on
+6. Enterprise CRM clients (not users) get the same flag: every org's row with the address,
+   an org-neutral detail (never the triggering send's subject or diagnostic), a warning in
+   the client payload, a reset on email change, and no automatic calendar reminder.
+7. A signed-in student sees their own flag (a boolean + plain-words reason) on
    GET /api/auth/me, and nowhere unauthenticated.
 
 Every test runs on SQLite with fake payloads; no email is sent and no model is called.
@@ -142,7 +145,10 @@ def test_signed_suppressed_event_flags_the_user(webhook, db):
     response = _post(webhook, _suppressed_event("Student@Example.com"))
 
     assert response.status_code == 200, response.text
-    assert response.json() == {"status": "flagged", "event": "email.suppressed", "matched": 1, "changed": 1}
+    assert response.json() == {
+        "status": "flagged", "event": "email.suppressed", "matched": 1, "changed": 1,
+        "clients_matched": 0, "clients_changed": 0,
+    }
     db.expire_all()
     assert deliverability.is_undeliverable(user)
     assert user.email_undeliverable_reason == "suppressed"
@@ -219,7 +225,10 @@ def test_suppression_added_and_removed_round_trip(webhook, db):
 
     removed = {"type": "suppression.removed", "created_at": _iso(t0 + timedelta(minutes=1)), "data": {
         "id": "sup_1", "email": "student@example.com", "origin": "complaint"}}
-    assert _post(webhook, removed).json() == {"status": "cleared", "event": "suppression.removed", "matched": 1, "changed": 1}
+    assert _post(webhook, removed).json() == {
+        "status": "cleared", "event": "suppression.removed", "matched": 1, "changed": 1,
+        "clients_matched": 0, "clients_changed": 0,
+    }
     db.expire_all()
     assert not deliverability.is_undeliverable(user)
     assert user.email_undeliverable_cleared_by == "resend:suppression.removed"
@@ -480,7 +489,218 @@ def test_schema_patch_adds_columns_to_existing_users_table(tmp_path, monkeypatch
 
 
 # ---------------------------------------------------------------------------
-# 6. The student's own notice (GET /api/auth/me -> dashboard banner)
+# 6. Enterprise CRM clients
+# ---------------------------------------------------------------------------
+
+def _org(db, name):
+    owner = _user(db, f"owner@{name.lower().replace(' ', '-')}.example", is_enterprise_account=True)
+    org = models.EnterpriseOrganization(
+        company_name=name, created_by_user_id=owner.id,
+        subdomain_slug=name.lower().replace(" ", "-"), country_code="IN",
+    )
+    db.add(org)
+    db.commit()
+    return org, owner
+
+
+def _crm_client(db, org, owner, email, name="Priya Sharma"):
+    client = models.EnterpriseClient(
+        organization_id=org.id, full_name=name, email=email, created_by_user_id=owner.id,
+        destination_country_code="US", destination_country_name="United States", visa_type="F-1",
+    )
+    db.add(client)
+    db.commit()
+    return client
+
+
+def test_bounce_flags_every_orgs_client_row_with_an_org_neutral_detail(webhook, db):
+    acme, acme_owner = _org(db, "Acme Visas")
+    globe, globe_owner = _org(db, "Globe Overseas")
+    at_acme = _crm_client(db, acme, acme_owner, "priya@student.example")
+    # Another org's file for the same student, typed with different case and stray spaces.
+    at_globe = _crm_client(db, globe, globe_owner, "  Priya@Student.example ")
+    unrelated = _crm_client(db, acme, acme_owner, "someone-else@student.example", name="Arjun Rao")
+
+    # Acme's payment-link email bounced. Its subject and Resend's free-text diagnostic name
+    # Acme and its sender: none of that may land on Globe's row.
+    bounce = {"type": "email.bounced", "created_at": _iso(datetime.utcnow()), "data": {
+        "to": ["priya@student.example"],
+        "from": "Acme Visas <acme-visas@mail.rilono.com>",
+        "subject": "Your payment link from Acme Visas (INR 45,000)",
+        "bounce": {"type": "Permanent", "subType": "NoEmail",
+                   "message": "550 5.1.1 <priya@student.example>: rejected mail from acme-visas@mail.rilono.com"}}}
+    response = _post(webhook, bounce)
+
+    assert response.status_code == 200, response.text
+    # Counts only: no addresses, ids or org names go back to the provider.
+    assert response.json() == {
+        "status": "flagged", "event": "email.bounced", "matched": 0, "changed": 0,
+        "clients_matched": 2, "clients_changed": 2,
+    }
+    db.expire_all()
+    for row in (at_acme, at_globe):
+        assert deliverability.is_undeliverable(row)
+        assert row.email_undeliverable_reason == "bounced"
+        assert row.email_undeliverable_detail == "Permanent / NoEmail"
+    assert not deliverability.is_undeliverable(unrelated)
+
+    status = deliverability.client_status(at_globe)
+    assert status == {
+        "undeliverable": True, "reason": "bounced", "label": "Email bouncing",
+        "message": deliverability.CLIENT_REASON_MESSAGES["bounced"], "code": "Permanent / NoEmail",
+    }
+    leaked = json.dumps(status).lower()
+    for marker in ("acme", "payment link", "45,000", "550", "mail.rilono.com", "resend"):
+        assert marker not in leaked, marker
+    assert deliverability.client_status(unrelated) is None
+
+
+def test_client_suppression_round_trip_and_out_of_order_retries(webhook, db):
+    org, owner = _org(db, "Acme Visas")
+    client = _crm_client(db, org, owner, "priya@student.example")
+    t0 = datetime.utcnow() - timedelta(minutes=10)
+
+    added = {"type": "suppression.added", "created_at": _iso(t0), "data": {
+        "email": "priya@student.example", "origin": "complaint"}}
+    assert _post(webhook, added).json()["clients_changed"] == 1
+    db.expire_all()
+    assert client.email_undeliverable_reason == "complained"
+    assert client.email_undeliverable_detail is None  # nothing org-specific to keep
+
+    removed = {"type": "suppression.removed", "created_at": _iso(t0 + timedelta(minutes=5)),
+               "data": {"email": "priya@student.example"}}
+    assert _post(webhook, removed).json()["clients_changed"] == 1
+    db.expire_all()
+    assert not deliverability.is_undeliverable(client)
+    assert client.email_undeliverable_cleared_by == "resend:suppression.removed"
+
+    # A retried suppression from before the removal can't re-flag the row.
+    assert _post(webhook, _suppressed_event("priya@student.example", at=t0)).json()["clients_changed"] == 0
+    db.expire_all()
+    assert not deliverability.is_undeliverable(client)
+
+
+def test_user_and_client_at_the_same_address_are_both_flagged(webhook, db):
+    org, owner = _org(db, "Acme Visas")
+    user = _user(db, "priya@student.example")
+    client = _crm_client(db, org, owner, "priya@student.example")
+
+    body = _post(webhook, _suppressed_event("priya@student.example")).json()
+
+    assert (body["changed"], body["clients_changed"]) == (1, 1)
+    db.expire_all()
+    # The B2C account keeps the full support detail; the CRM row only Resend's code.
+    assert 'Email: "Reset your Rilono password"' in user.email_undeliverable_detail
+    assert client.email_undeliverable_detail == "OnAccountSuppressionList"
+
+
+@pytest.fixture
+def crm_api(db, monkeypatch):
+    from app.auth import get_current_active_user
+    from app.routers import enterprise as enterprise_router
+    from app import enterprise_access as access
+
+    monkeypatch.setattr(enterprise_router, "_enforce_rate_limit_or_429", lambda *a, **kw: None)
+    org, owner = _org(db, "Acme Visas")
+    db.add(models.EnterpriseOrganizationMember(
+        organization_id=org.id, user_id=owner.id, role_key=access.ROLE_OWNER, role="admin", is_active=True,
+    ))
+    db.commit()
+    app = FastAPI()
+    app.include_router(enterprise_router.router)
+    app.dependency_overrides[get_db] = lambda: db
+    app.dependency_overrides[get_current_active_user] = lambda: owner
+    with TestClient(app) as client:
+        yield client, org, owner
+
+
+def test_client_payload_carries_the_flag_and_an_email_change_clears_it(crm_api, webhook, db):
+    api, org, owner = crm_api
+    other_org, other_owner = _org(db, "Globe Overseas")
+    client = _crm_client(db, org, owner, "priya@student.example")
+    other = _crm_client(db, other_org, other_owner, "priya@student.example")
+    url = f"/api/enterprise/clients/{client.id}"
+
+    first = api.get(url)
+    assert first.status_code == 200, first.text
+    assert first.json()["client"]["email_delivery"] is None
+
+    _post(webhook, _suppressed_event("priya@student.example", subject="Globe Overseas: your visa slot"))
+    payload = api.get(url).json()["client"]
+    assert payload["email_delivery"]["label"] == "Email blocked"
+    assert "globe" not in json.dumps(payload).lower()
+
+    # An unrelated edit keeps the flag; a new address (what the chip asks for) clears it.
+    response = api.patch(url, json={"phone": "+91 98450 00000"})
+    assert response.status_code == 200, response.text
+    assert response.json()["client"]["email_delivery"]["undeliverable"] is True
+    response = api.patch(url, json={"email": "Priya.New@Student.example"})
+    assert response.status_code == 200, response.text
+    assert response.json()["client"]["email_delivery"] is None
+    db.expire_all()
+    assert client.email == "priya.new@student.example"
+    assert client.email_undeliverable_cleared_by == "email_changed"
+    # The other org's file still has the bad address, so it stays flagged.
+    assert deliverability.is_undeliverable(other)
+    # Another org's client is not reachable through this org's API.
+    assert api.get(f"/api/enterprise/clients/{other.id}").status_code == 404
+
+
+def test_client_calendar_reminder_skips_flagged_clients(db, monkeypatch):
+    from app.services import enterprise_calendar_reminders as cal
+
+    sent = []
+    monkeypatch.setattr(cal, "send_enterprise_client_calendar_reminder_email",
+                        lambda **kw: sent.append(kw["to_email"]) or True)
+    org, owner = _org(db, "Acme Visas")
+    healthy = _crm_client(db, org, owner, "arjun@student.example", name="Arjun Rao")
+    flagged = _crm_client(db, org, owner, "priya@student.example")
+    deliverability.mark_undeliverable(flagged, reason="bounced", detail=None, at=datetime.utcnow())
+    today = date.today()
+    events = [
+        models.EnterpriseCalendarEvent(
+            organization_id=org.id, client_id=c.id, title="Biometrics appointment",
+            event_date=today, notify_client=True, is_done=False,
+        )
+        for c in (healthy, flagged)
+    ]
+    db.add_all(events)
+    db.commit()
+
+    assert cal._notify_linked_clients(db, org, today, today - timedelta(days=7), "IST") == 1
+
+    assert sent == ["arjun@student.example"]
+    db.expire_all()
+    # Handled either way, like a client with no email: no daily re-scan of the same event.
+    assert all(ev.client_notified_at is not None for ev in events)
+
+
+def test_schema_patch_adds_columns_to_existing_enterprise_clients_table(tmp_path, monkeypatch):
+    from app import schema_patch
+
+    scratch = create_engine(f"sqlite:///{tmp_path / 'scratch.db'}")
+    monkeypatch.setattr(schema_patch, "engine", scratch)
+    schema_patch.ensure_enterprise_client_email_deliverability_columns()  # no table yet: no-op
+    with scratch.begin() as conn:
+        conn.execute(text("CREATE TABLE enterprise_clients (id INTEGER PRIMARY KEY, email VARCHAR)"))
+        conn.execute(text("INSERT INTO enterprise_clients (id, email) VALUES (1, 'legacy@example.com')"))
+
+    schema_patch.ensure_enterprise_client_email_deliverability_columns()
+    schema_patch.ensure_enterprise_client_email_deliverability_columns()  # idempotent
+
+    with scratch.connect() as conn:
+        columns = {row[1] for row in conn.execute(text("PRAGMA table_info(enterprise_clients)"))}
+        row = conn.execute(text("SELECT email_undeliverable_at FROM enterprise_clients WHERE id = 1")).one()
+    assert {
+        "email_undeliverable_at", "email_undeliverable_reason", "email_undeliverable_detail",
+        "email_undeliverable_cleared_at", "email_undeliverable_cleared_by",
+    } <= columns
+    assert row[0] is None
+    scratch.dispose()
+
+
+# ---------------------------------------------------------------------------
+# 7. The student's own notice (GET /api/auth/me -> dashboard banner)
 # ---------------------------------------------------------------------------
 
 def _bearer(user):

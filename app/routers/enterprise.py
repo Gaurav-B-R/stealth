@@ -37,6 +37,7 @@ from app import enterprise_credits as credits
 from app import enterprise_coupons
 from app import enterprise_payments
 from app import email_domains
+from app import email_deliverability
 from app import enterprise_finance as finance
 from app import enterprise_ai
 from app import enterprise_writing
@@ -3705,6 +3706,9 @@ def _serialize_client(
         "id": client.id,
         "full_name": client.full_name,
         "email": client.email,
+        # None, or why emails to `email` aren't being delivered (Resend webhook). Org-neutral:
+        # every org with this address sees the same flag; see email_deliverability.client_status.
+        "email_delivery": email_deliverability.client_status(client),
         "phone": client.phone,
         "nationality": client.nationality,
         "date_of_birth": _iso(client.date_of_birth),
@@ -4569,7 +4573,12 @@ def enterprise_update_client(
 
     if "email" in data:
         email_val = (data["email"] or "").strip().lower()
+        previous_email = (client.email or "").strip().lower()
         client.email = email_val or None
+        # The undeliverable flag belongs to the address it was reported for; a new one (what
+        # the warning chip asks the consultant to get) starts clean.
+        if email_val != previous_email and email_deliverability.is_undeliverable(client):
+            email_deliverability.clear_undeliverable(client, by="email_changed", force=True)
     if "phone" in data:
         client.phone = (data["phone"] or "").strip() or None
     if "nationality" in data:

@@ -3576,6 +3576,18 @@
     $("#viewTitle").textContent = cl.full_name;
 
     const detail = (label, val) => `<div class="detail-item"><label>${label}</label><div>${val || "—"}</div></div>`;
+    // Emails to this client's address aren't being delivered (bounce / spam report / blocked;
+    // set by the Resend webhook, cleared when the email is changed). Wording comes from the
+    // server (email_delivery.label / .message). Read off `cl` at render time: a save that
+    // changes the address re-opens the client and the chip goes with it.
+    function mailFlagHtml(variant) {
+      const flag = cl.email && cl.email_delivery && cl.email_delivery.undeliverable ? cl.email_delivery : null;
+      if (!flag) return "";
+      const first = (cl.full_name || "the student").split(" ")[0];
+      const tip = `<b>${esc(flag.label)}</b><br>${esc(flag.message)} Ask ${esc(first)} for another address and update it on this file.`
+        + (flag.code ? `<br><small>Code: ${esc(flag.code)}</small>` : "");
+      return `<span class="cp-mailflag-wrap cp-mailflag-wrap--${variant}"><span class="cp-mailflag" role="status"><span aria-hidden="true">⚠</span> ${esc(flag.label)}</span>${infoTip(tip, `Why emails aren't reaching ${first}`)}</span>`;
+    }
 
     $("#content").innerHTML = `
       <div class="client-page">
@@ -3595,6 +3607,7 @@
             <div class="cp-kicker">Student dossier</div>
             <h1>${esc(cl.full_name)}</h1>
             <div class="cp-hsub">${esc(cl.destination_country_name)} · ${esc(cl.visa_type)}${cl.intake ? " · " + esc(cl.intake) : ""}</div>
+            ${mailFlagHtml("hero")}
           </div>
           <div class="cp-hstatus">${statusPill(cl.stage)}</div>
         </div>
@@ -3997,7 +4010,7 @@
         <div class="cp-card">
           <div class="cp-card-head"><h3>Client details</h3>${canEdit ? `<button class="btn btn-soft btn-sm" id="cpEditInline">Edit details</button>` : ""}</div>
           <div class="detail-grid">
-            ${detail("Email", cl.email ? esc(cl.email) : "")}
+            ${detail("Email", cl.email ? esc(cl.email) + mailFlagHtml("detail") : "")}
             ${detail("Phone", cl.phone ? esc(cl.phone) : "")}
             ${detail("WhatsApp", cl.whatsapp_number ? esc(cl.whatsapp_number) : "")}
             ${detail("Current city", cl.current_city ? esc(cl.current_city) : "")}
@@ -5303,6 +5316,7 @@
             <span class="emc-av" style="background:linear-gradient(135deg,${c1},${c2})">${esc(initials(cl.full_name) || "C")}</span>
             <b>${esc(cl.full_name)}</b><span class="emc-email">${esc(cl.email)}</span>
           </span>
+          ${mailFlagHtml("inline")}
           <div style="flex:1"></div>
           <div class="emc-menu-wrap">
             <button type="button" class="emc-tool" id="emTplBtn" aria-haspopup="true" aria-expanded="false">⚡ Templates</button>

@@ -39,6 +39,18 @@ Policy:
 The flag belongs to the user's CURRENT address: the one email-change path
 (routers/auth confirm-university-change) clears it.
 
+Enterprise CRM clients (`enterprise_clients.email`, mailed by consultant emails, payment
+links, portal shares and calendar reminders) carry the same five columns and rules. They are
+not users, so the webhook matches them separately:
+  * Every client row with the address is flagged, in every org: the suppression list belongs
+    to Rilono's one Resend account, so another org's send to it is dropped just the same.
+  * Because one org's bounce flags another org's row, a client row stores an org-neutral
+    detail: Resend's structured codes only, never the subject or free-text diagnostic of the
+    send that triggered it, and the CRM is not shown when it happened (client_status).
+  * The automatic client calendar reminder skips a flagged client; consultant-initiated
+    sends still go out, with a warning chip on the client's file. Changing the client's
+    email clears the flag (routers/enterprise PATCH /clients/{id}).
+
 Svix retries can deliver an old event after a newer one. `email_undeliverable_at` therefore
 holds the time of the LATEST bad event and every clear records `email_undeliverable_cleared_at`:
 a flag event older than the last clear is ignored, and a removal older than the current flag
@@ -91,8 +103,23 @@ _SUPPRESSION_ORIGIN_REASONS = {
 # bounce (mailbox full, greylisting) must not switch off someone's emails.
 _TRANSIENT_BOUNCE_TYPES = {"transient", "temporary"}
 
+# What a consultancy sees on a CRM client's file (no vendor names: it's their product).
+CLIENT_REASON_LABELS = {
+    REASON_BOUNCED: "Email bouncing",
+    REASON_COMPLAINED: "Marked as spam",
+    REASON_SUPPRESSED: "Email blocked",
+}
+CLIENT_REASON_MESSAGES = {
+    REASON_BOUNCED: "Emails to this address bounce back: it may be mistyped or no longer exist.",
+    REASON_COMPLAINED: "The recipient marked an email as spam, so emails to this address are no longer delivered.",
+    REASON_SUPPRESSED: "Emails to this address are blocked after earlier delivery failures.",
+}
+
 _DETAIL_MAX_CHARS = 500
 _ADDRESS_RE = re.compile(r"[A-Za-z0-9._%+\-]+@[A-Za-z0-9.\-]+\.[A-Za-z]{2,}")
+# Resend's structured codes ("Permanent", "NoEmail", "OnAccountSuppressionList"): anything
+# else is stripped so no free text can ride into a client row.
+_CODE_JUNK_RE = re.compile(r"[^A-Za-z0-9_\-]")
 
 
 def webhook_secret() -> str:
@@ -173,6 +200,25 @@ def _email_event_detail(event_type: str, data: Mapping) -> str:
     return _clip(" · ".join(p for p in parts if p))
 
 
+def _code(value) -> str:
+    return _CODE_JUNK_RE.sub("", str(value or ""))[:40]
+
+
+def _client_event_detail(event_type: str, data: Mapping) -> Optional[str]:
+    """The org-neutral detail a CRM client row keeps. The event came from ONE send, possibly
+    another org's or Rilono's own, so its subject and Resend's free-text message (an SMTP
+    diagnostic can quote the sender) never reach a client row: structured codes only."""
+    if event_type == "email.bounced":
+        bounce = data.get("bounce") if isinstance(data.get("bounce"), Mapping) else {}
+        codes = [_code(bounce.get("type")), _code(bounce.get("subType"))]
+    elif event_type == "email.suppressed":
+        suppressed = data.get("suppressed") if isinstance(data.get("suppressed"), Mapping) else {}
+        codes = [_code(suppressed.get("type"))]
+    else:
+        codes = []
+    return " / ".join(c for c in codes if c) or None
+
+
 def _users_for_addresses(db, addresses: Iterable[str]) -> list:
     lowered = sorted({a.strip().lower() for a in addresses if a and a.strip()})
     if not lowered:
@@ -180,8 +226,22 @@ def _users_for_addresses(db, addresses: Iterable[str]) -> list:
     return db.query(models.User).filter(func.lower(models.User.email).in_(lowered)).all()
 
 
-def mark_undeliverable(user, *, reason: str, detail: str, at: datetime) -> bool:
-    """Flag the user's address. Returns True when the stored state changed."""
+def _clients_for_addresses(db, addresses: Iterable[str]) -> list:
+    """Every org's CRM client rows at these addresses (deliberately not org-scoped: the
+    suppression list is account-wide). Callers must never echo one row's org to another."""
+    lowered = sorted({a.strip().lower() for a in addresses if a and a.strip()})
+    if not lowered:
+        return []
+    return (
+        db.query(models.EnterpriseClient)
+        .filter(func.lower(func.trim(models.EnterpriseClient.email)).in_(lowered))
+        .all()
+    )
+
+
+def mark_undeliverable(user, *, reason: str, detail: Optional[str], at: datetime) -> bool:
+    """Flag the row's address (a User or an EnterpriseClient: same columns). Returns True
+    when the stored state changed."""
     at = _naive_utc(at)
     cleared_at = _naive_utc(getattr(user, "email_undeliverable_cleared_at", None))
     if cleared_at is not None and at <= cleared_at:
@@ -214,9 +274,32 @@ def clear_undeliverable(user, *, at: Optional[datetime] = None, by: str, force: 
     return current is not None
 
 
+def _flag_matching(db, addresses, *, reason: str, user_detail: str, client_detail: Optional[str],
+                   at: datetime, event_type: str) -> dict:
+    users = _users_for_addresses(db, addresses)
+    clients = _clients_for_addresses(db, addresses)
+    changed = [u.id for u in users if mark_undeliverable(u, reason=reason, detail=user_detail, at=at)]
+    changed_clients = [
+        (c.id, c.organization_id) for c in clients
+        if mark_undeliverable(c, reason=reason, detail=client_detail, at=at)
+    ]
+    db.commit()
+    for user_id in changed:
+        logger.warning("email deliverability: user_id=%s flagged %s (%s)", user_id, reason, event_type)
+    for client_id, org_id in changed_clients:
+        logger.warning("email deliverability: client_id=%s org_id=%s flagged %s (%s)",
+                       client_id, org_id, reason, event_type)
+    return {
+        "status": "flagged", "event": event_type,
+        "matched": len(users), "changed": len(changed),
+        "clients_matched": len(clients), "clients_changed": len(changed_clients),
+    }
+
+
 def apply_event(db, event: Mapping) -> dict:
-    """Apply one verified Resend webhook event and commit. Returns a counts-only summary
-    (no addresses or ids: it is the webhook's response body)."""
+    """Apply one verified Resend webhook event to every matching user AND every org's
+    matching CRM client row, and commit. Returns a counts-only summary (no addresses, ids
+    or orgs: it is the webhook's response body)."""
     event_type = str(event.get("type") or "").strip()
     data = event.get("data") if isinstance(event.get("data"), Mapping) else {}
     at = _parse_timestamp(event.get("created_at")) or datetime.utcnow()
@@ -227,32 +310,40 @@ def apply_event(db, event: Mapping) -> dict:
             bounce = data.get("bounce") if isinstance(data.get("bounce"), Mapping) else {}
             if str(bounce.get("type") or "").strip().lower() in _TRANSIENT_BOUNCE_TYPES:
                 return {"status": "ignored", "reason": "transient_bounce"}
-        detail = _email_event_detail(event_type, data)
-        users = _users_for_addresses(db, _addresses(data.get("to")))
-        changed = [u.id for u in users if mark_undeliverable(u, reason=reason, detail=detail, at=at)]
-        db.commit()
-        for user_id in changed:
-            logger.warning("email deliverability: user_id=%s flagged %s (%s)", user_id, reason, event_type)
-        return {"status": "flagged", "event": event_type, "matched": len(users), "changed": len(changed)}
+        return _flag_matching(
+            db, _addresses(data.get("to")), reason=reason,
+            user_detail=_email_event_detail(event_type, data),
+            client_detail=_client_event_detail(event_type, data),
+            at=at, event_type=event_type,
+        )
 
     if event_type == "suppression.added":
         origin = str(data.get("origin") or "").strip().lower()
         reason = _SUPPRESSION_ORIGIN_REASONS.get(origin, REASON_SUPPRESSED)
-        detail = _clip(f"Added to Resend's suppression list (origin: {origin or 'unknown'}).")
-        users = _users_for_addresses(db, _addresses(data.get("email")))
-        changed = [u.id for u in users if mark_undeliverable(u, reason=reason, detail=detail, at=at)]
-        db.commit()
-        for user_id in changed:
-            logger.warning("email deliverability: user_id=%s flagged %s (suppression.added)", user_id, reason)
-        return {"status": "flagged", "event": event_type, "matched": len(users), "changed": len(changed)}
+        return _flag_matching(
+            db, _addresses(data.get("email")), reason=reason,
+            user_detail=_clip(f"Added to Resend's suppression list (origin: {origin or 'unknown'})."),
+            client_detail=None, at=at, event_type=event_type,
+        )
 
     if event_type == "suppression.removed":
-        users = _users_for_addresses(db, _addresses(data.get("email")))
-        changed = [u.id for u in users if clear_undeliverable(u, at=at, by="resend:suppression.removed")]
+        addresses = _addresses(data.get("email"))
+        users = _users_for_addresses(db, addresses)
+        clients = _clients_for_addresses(db, addresses)
+        by = "resend:suppression.removed"
+        changed = [u.id for u in users if clear_undeliverable(u, at=at, by=by)]
+        changed_clients = [(c.id, c.organization_id) for c in clients if clear_undeliverable(c, at=at, by=by)]
         db.commit()
         for user_id in changed:
             logger.info("email deliverability: user_id=%s cleared (suppression.removed)", user_id)
-        return {"status": "cleared", "event": event_type, "matched": len(users), "changed": len(changed)}
+        for client_id, org_id in changed_clients:
+            logger.info("email deliverability: client_id=%s org_id=%s cleared (suppression.removed)",
+                        client_id, org_id)
+        return {
+            "status": "cleared", "event": event_type,
+            "matched": len(users), "changed": len(changed),
+            "clients_matched": len(clients), "clients_changed": len(changed_clients),
+        }
 
     return {"status": "ignored", "event": event_type or None}
 
@@ -286,4 +377,20 @@ def admin_status(user) -> dict:
         "flagged_at": _iso(getattr(user, "email_undeliverable_at", None)),
         "cleared_at": _iso(getattr(user, "email_undeliverable_cleared_at", None)),
         "cleared_by": getattr(user, "email_undeliverable_cleared_by", None),
+    }
+
+
+def client_status(client) -> Optional[dict]:
+    """A CRM client's flag as that org's staff see it (never the student: the portal has
+    its own serializer). None when deliverable. No timestamp: the event may come from
+    another org's send, and when that org mailed this student is not ours to show."""
+    if not is_undeliverable(client):
+        return None
+    reason = getattr(client, "email_undeliverable_reason", None) or REASON_SUPPRESSED
+    return {
+        "undeliverable": True,
+        "reason": reason,
+        "label": CLIENT_REASON_LABELS.get(reason, CLIENT_REASON_LABELS[REASON_SUPPRESSED]),
+        "message": CLIENT_REASON_MESSAGES.get(reason, CLIENT_REASON_MESSAGES[REASON_SUPPRESSED]),
+        "code": getattr(client, "email_undeliverable_detail", None),
     }

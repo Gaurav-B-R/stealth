@@ -236,6 +236,8 @@ _RENAMED = {
     "held_from_status": "on_hold_from_stage",
     "marketing_consent_at": "marketing_consent_at",
     "institution_share_consent_at": "institution_share_consent",
+    "email_undeliverable_reason": "email_delivery",
+    "email_undeliverable_detail": "email_delivery",
 }
 _INTERNAL = {
     "organization_id",              # tenancy filter only
@@ -246,6 +248,8 @@ _INTERNAL = {
     "stage_data",                   # separate tool: get_client_stage_records
     "stage_visits",                 # journey timestamps; not profile data
     "version",                      # optimistic-concurrency token
+    "email_undeliverable_at",       # may be ANOTHER org's send time; only the flag is shown
+    "email_undeliverable_cleared_at", "email_undeliverable_cleared_by",  # audit trail
     "sop_draft_payload", "sop_draft_updated_at",  # tolerated if present on some branches
 }
 

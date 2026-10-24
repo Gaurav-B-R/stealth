@@ -392,13 +392,13 @@ def test_copilot_guide_states_the_live_client_link_allowance():
 
 def test_cache_busters_are_bumped_for_the_changed_assets():
     enterprise = _read("enterprise.html")
-    assert "/static/enterprise.js?v=20261022b" in enterprise
-    assert "/static/enterprise.css?v=20261022a" in enterprise
     console = _read("admin_console.html")
     student_app = _read("us_f1_visa.html")
-    # At least this bump: later changes bump it again (yyyymmdd + letter versions compare
-    # as strings).
+    # At least these bumps: later changes bump them again (yyyymmdd + letter versions
+    # compare as strings).
     for page, asset, minimum in (
+        (enterprise, "enterprise.js", "20261022b"),
+        (enterprise, "enterprise.css", "20261022a"),
         (student_app, "app.js", "20261022b"),
         (console, "admin_console.js", "20261023a"),
         (console, "admin_console.css", "20261023a"),
