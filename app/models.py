@@ -492,6 +492,17 @@ class EnterpriseClient(Base):
     # Identity & contact
     full_name = Column(String, nullable=False)
     email = Column(String, nullable=True, index=True)
+    # Resend can't deliver to `email` (hard bounce / spam complaint / suppression list), set
+    # by the Resend deliverability webhook on EVERY org's client row with that address (the
+    # suppression list is account-wide). NULL = deliverable. Same columns and rules as on
+    # `users`; the stored detail is org-neutral by design. Changing `email` clears it. The
+    # automatic calendar reminder skips a flagged client; consultant-sent emails still try.
+    # See app/email_deliverability.py.
+    email_undeliverable_at = Column(DateTime(timezone=True), nullable=True)
+    email_undeliverable_reason = Column(String, nullable=True)               # bounced|complained|suppressed
+    email_undeliverable_detail = Column(Text, nullable=True)                 # provider codes only, never a subject
+    email_undeliverable_cleared_at = Column(DateTime(timezone=True), nullable=True)
+    email_undeliverable_cleared_by = Column(String, nullable=True)            # resend:... | email_changed
     phone = Column(String, nullable=True)
     # Counselling in this market runs on WhatsApp, and students routinely give a parent's
     # or a landline number as the primary contact — so the two are recorded separately.

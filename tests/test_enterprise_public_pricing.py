@@ -392,8 +392,10 @@ def test_copilot_guide_states_the_live_client_link_allowance():
 
 def test_cache_busters_are_bumped_for_the_changed_assets():
     enterprise = _read("enterprise.html")
-    assert "/static/enterprise.js?v=20261022b" in enterprise
-    assert "/static/enterprise.css?v=20261022a" in enterprise
+    # At least these bumps (same rule as the console below).
+    for asset, floor in (("enterprise.js", "20261022b"), ("enterprise.css", "20261022a")):
+        match = re.search(rf"/static/{re.escape(asset)}\?v=(\w+)", enterprise)
+        assert match and match.group(1) >= floor, asset
     assert "/static/app.js?v=20261022b" in _read("us_f1_visa.html")
     console = _read("admin_console.html")
     # At least this bump: later changes to the console bump it again (yyyymmdd + letter

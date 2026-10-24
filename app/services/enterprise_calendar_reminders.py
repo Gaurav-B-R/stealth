@@ -252,6 +252,11 @@ def _notify_linked_clients(db, org, today: date, floor: date, tz_label: str) -> 
         ev.client_notified_at = datetime.utcnow()
         if not client or not (client.email or "").strip():
             continue
+        # Resend reported the address as bouncing / complaining / suppressed. The consultant
+        # sees a warning chip on the client's file; this automatic send stops trying.
+        if email_deliverability.is_undeliverable(client):
+            logger.info("Client calendar reminder skipped: undeliverable address (org=%s, event=%s)", org.id, ev.id)
+            continue
         when_label, _overdue = _when_label(ev.event_date, today)
         try:
             ok = send_enterprise_client_calendar_reminder_email(

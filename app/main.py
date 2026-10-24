@@ -75,6 +75,7 @@ from app.schema_patch import (
     ensure_user_enterprise_account_column,
     ensure_user_acquisition_columns,
     ensure_user_email_deliverability_columns,
+    ensure_enterprise_client_email_deliverability_columns,
     ensure_account_deletion_otp_columns,
     ensure_country_change_otp_columns,
     ensure_university_country_column,
@@ -360,6 +361,8 @@ def startup_backfill_subscriptions():
     ensure_enterprise_crm_tables()
     ensure_enterprise_access_control_tables()
     ensure_enterprise_client_email_reply_columns()
+    # Must run AFTER ensure_enterprise_crm_tables (it patches enterprise_clients).
+    ensure_enterprise_client_email_deliverability_columns()
     ensure_enterprise_email_composer_schema()
     ensure_enterprise_interview_invite_columns()
     ensure_enterprise_document_request_tables()

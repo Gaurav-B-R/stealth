@@ -439,6 +439,25 @@ def ensure_user_email_deliverability_columns():
             conn.execute(text("ALTER TABLE users ADD COLUMN email_undeliverable_cleared_by VARCHAR"))
 
 
+def ensure_enterprise_client_email_deliverability_columns():
+    """Patch enterprise_clients with the same "email undeliverable" flag as users, so a CRM
+    client's bouncing address is recorded too (app/email_deliverability.py). Additive and
+    idempotent; NULL = deliverable. Must run after enterprise_clients exists."""
+    with engine.begin() as conn:
+        if not _table_exists(conn, "enterprise_clients"):
+            return
+        columns = _get_table_columns(conn, "enterprise_clients")
+        for column, ddl_type in (
+            ("email_undeliverable_at", "TIMESTAMP"),
+            ("email_undeliverable_reason", "VARCHAR"),
+            ("email_undeliverable_detail", "TEXT"),
+            ("email_undeliverable_cleared_at", "TIMESTAMP"),
+            ("email_undeliverable_cleared_by", "VARCHAR"),
+        ):
+            if column not in columns:
+                conn.execute(text(f"ALTER TABLE enterprise_clients ADD COLUMN {column} {ddl_type}"))
+
+
 def ensure_enterprise_organization_columns():
     """
     Ensure enterprise organization table has immutable subdomain storage.

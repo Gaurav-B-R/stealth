@@ -32,6 +32,7 @@ from sqlalchemy import and_, func, or_
 from sqlalchemy.orm import Session
 
 from app import models
+from app import email_deliverability
 from app import enterprise_access as access
 from app import ai_usage
 from app import course_catalog
@@ -766,7 +767,8 @@ def build_org_tools(db: Session, organization_id: int, ctx=None, viewer_user_id=
 
     def get_client_details(name: Optional[str] = None, client_id: Optional[int] = None) -> dict:
         """Get the FULL profile for a single client — everything the client screen shows:
-        contact details (email, phone, WhatsApp, current city), personal details
+        contact details (email and whether emails to it are bouncing, phone, WhatsApp,
+        current city), personal details
         (nationality, gender, date of birth), passport number and expiry (the number only
         if you may view sensitive data), guardian, the case (destination, visa category and
         type, intake, pipeline stage, priority, key date, next follow-up, assigned
@@ -809,6 +811,9 @@ def build_org_tools(db: Session, organization_id: int, ctx=None, viewer_user_id=
                                    if getattr(client, "held_from_status", None) else None),
             "added_on": _iso(client.created_at),
             "last_updated": _iso(client.updated_at),
+            # Null, or why emails to this address aren't arriving (the chip on the client
+            # screen): same org-neutral payload as the client API.
+            "email_delivery": email_deliverability.client_status(client),
         })
         if ctx is None or ctx.has("clients.view_sensitive"):
             detail["passport_number"] = client.passport_number
