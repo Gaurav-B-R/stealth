@@ -287,7 +287,7 @@ Public price list (`GET /api/enterprise/public/plans`):
 | `ENTERPRISE_PUBLIC_PLANS_RATE_LIMIT` / `ENTERPRISE_PUBLIC_PLANS_RATE_WINDOW` | 60 / 60 s | Per-IP rate limit. |
 | `ENTERPRISE_PUBLIC_PLANS_MAX_AGE` | 300 | `Cache-Control: public, max-age` in seconds (the path is exempt from the global `/api/` no-store rewrite in `app/main.py`). |
 
-Each visitor is quoted one region's prices: INR from the INR region (`ENTERPRISE_INR_REGION_COUNTRIES`), the local ladder currency or USD from anywhere else. The geo country comes from the CDN header (`CF-IPCountry` behind Cloudflare). Locally there is no such header, so pages show USD; send `cf-ipcountry: IN` (or `x-country-code: IN`) to see the INR version, e.g. `curl -H 'cf-ipcountry: IN' http://127.0.0.1:8097/for-enterprise`.
+Each visitor and each workspace is quoted in one currency, their own: INR from the INR region (`ENTERPRISE_INR_REGION_COUNTRIES`), the country's ladder currency or USD from anywhere else. A running plan keeps the currency it was bought in (latest verified plan payment, while the period runs or a mandate is live); otherwise the workspace's country decides (the stored `billing_currency` is only a record). The portal's display currency is the billing currency. There is no currency selector for Enterprise; a checkout naming another currency gets 409. The geo country comes from the CDN header (`CF-IPCountry` behind Cloudflare). Locally there is no such header, so pages show USD; send `cf-ipcountry: IN` (or `x-country-code: IN`) to see the INR version, e.g. `curl -H 'cf-ipcountry: IN' http://127.0.0.1:8097/for-enterprise`.
 
 Admin console typo guards (`app/routers/admin.py`):
 

@@ -156,7 +156,7 @@ What each action costs and every free allowance is in the credits-billing topic 
 
 ## [credits-billing] Plans, free trial, credits & billing
 
-The subscription plans and what they include, the free trial and what happens when it ends, what every AI action costs in credits, free allowances, top-up packs, how billing behaves and which payment methods a rupee price takes.
+The subscription plans and what they include, the free trial and what happens when it ends, what every AI action costs in credits, free allowances, top-up packs, how billing behaves and which payment methods are accepted.
 
 **Plans** (managed under **Plans & Billing**; needs the "Plans & subscription" permission to change):
 {{PLANS}}

@@ -22,6 +22,7 @@ from app import enterprise_coupons as coupons
 from app import enterprise_credits as credits
 from app import fx
 from app import models
+from app import money
 from app import schema_patch
 from app.database import Base
 
@@ -460,32 +461,100 @@ def _org(**fields):
     return SimpleNamespace(country_code=None, billing_currency=None, **fields)
 
 
-@pytest.mark.parametrize("country,hint,stored,expected", [
-    ("IN", "USD", None, "INR"),     # INR region: a hint for another currency is ignored
-    ("NP", None, "USD", "INR"),     # ... and so is a stored non-INR choice
-    ("KE", "GBP", None, "INR"),
-    ("GB", "INR", None, "GBP"),     # outside the region INR is never sold
-    ("GB", None, "INR", "GBP"),     # ... not even from a stored INR choice
-    ("DE", None, None, "EUR"),
-    ("US", "INR", None, "USD"),
-    ("JP", "INR", None, "USD"),     # JPY isn't chargeable -> USD
-    ("BR", None, None, "USD"),      # no ladder currency for the country -> USD
-    ("AE", "USD", None, "USD"),     # a valid non-INR hint is honoured outside the region
-    (None, None, None, "INR"),      # unknown country: the domestic default stands
-    (None, "USD", None, "USD"),
+@pytest.mark.parametrize("country,stored,expected", [
+    ("IN", None, "INR"),
+    ("NP", "USD", "INR"),           # INR region: a stored non-INR currency doesn't stand
+    ("KE", None, "INR"),
+    ("GB", None, "GBP"),
+    ("GB", "INR", "GBP"),           # outside the region INR is never sold, even if stored
+    ("US", "GBP", "USD"),           # a stored choice from the old selector doesn't pin it
+    ("DE", None, "EUR"),
+    ("US", None, "USD"),
+    ("JP", None, "USD"),            # JPY isn't chargeable -> USD
+    ("BR", None, "USD"),            # no ladder currency for the country -> USD
+    (None, None, "INR"),            # unknown country: the domestic default stands
 ])
-def test_charge_currency_for_org(db, country, hint, stored, expected):
+def test_charge_currency_for_org(db, country, stored, expected):
+    """ONE currency per workspace (D-010): its own. A hint may only confirm it."""
     org = _org()
     org.country_code, org.billing_currency = country, stored
-    assert billing.charge_currency_for_org(db, org, hint) == expected
+    assert billing.charge_currency_for_org(db, org, None) == expected
+    assert billing.charge_currency_for_org(db, org, expected) == expected
+    for other in money.supported_charge_currencies():
+        if other == expected:
+            continue
+        with pytest.raises(HTTPException) as exc:
+            billing.charge_currency_for_org(db, org, other)
+        assert exc.value.status_code == 409, (country, other)
+        assert f"billed in {expected}" in exc.value.detail
+
+
+def test_a_running_plan_pins_its_currency_and_the_quote_agrees(db):
+    """own_currency (D-010): a workspace is billed in the currency its RUNNING plan was bought
+    in (billed_currency_pin), else its country's — and the subscription quote (the
+    current-plan line) decides the same way as checkout, so one page never shows two. A
+    stale stored choice, an abandoned checkout, a refunded or a long-lapsed plan pin nothing."""
+    org = db.get(models.EnterpriseOrganization, db.info["org_id"])
+    org.country_code, org.billing_currency = "US", "GBP"
+    sub = billing.get_or_create_org_subscription(db, org.id)
+    sub.plan, sub.status = "starter", "active"
+    sub.current_period_end = START + timedelta(days=20)
+    db.commit()
+    # Only a stale stored choice: USD, its country's.
+    assert billing.charge_currency_for_org(db, org, None) == "USD"
+    # An abandoned GBP checkout (status 'created') changes nothing either.
+    db.add(models.EnterpriseSubscriptionPayment(
+        organization_id=org.id, plan="starter", amount_paise=2900, currency="GBP",
+        razorpay_order_id="order_abandoned", status="created",
+    ))
+    db.commit()
+    assert billing.charge_currency_for_org(db, org, None) == "USD"
+    # A verified GBP plan payment (made under the old selector) for the RUNNING plan pins GBP.
+    db.add(models.EnterpriseSubscriptionPayment(
+        organization_id=org.id, plan="starter", amount_paise=2900, currency="GBP",
+        razorpay_order_id="order_paid_gbp", status="verified",
+    ))
+    db.commit()
+    assert billing.charge_currency_for_org(db, org, None) == "GBP"
+    assert billing.charge_currency_for_org(None, org, None) == "GBP"   # session from the row
+    assert billing.build_subscription_state(db, org.id)["currency"] == "GBP"
+    # Once that plan has lapsed (no live mandate), the workspace is back on its own country's.
+    sub.current_period_end = START - timedelta(days=400)
+    db.commit()
+    assert billing.charge_currency_for_org(db, org, None) == "USD"
+    assert billing.build_subscription_state(db, org.id)["currency"] == "USD"
+    # ...unless a live mandate is still charging it.
+    sub.razorpay_subscription_id, sub.mandate_status = "sub_live", "active"
+    db.commit()
+    assert billing.charge_currency_for_org(db, org, None) == "GBP"
+    sub.mandate_status = "cancelled"
+    db.commit()
+    assert billing.charge_currency_for_org(db, org, None) == "USD"
+    # A fully refunded payment pins nothing, even while the period runs.
+    sub.current_period_end = START + timedelta(days=20)
+    db.query(models.EnterpriseSubscriptionPayment).filter_by(razorpay_order_id="order_paid_gbp").update({"status": "refunded"})
+    db.commit()
+    assert billing.charge_currency_for_org(db, org, None) == "USD"
+    # ...and it is always clamped to the region: a verified INR payment can't follow an office abroad.
+    org.country_code = "GB"
+    db.add(models.EnterpriseSubscriptionPayment(
+        organization_id=org.id, plan="starter", amount_paise=149900, currency="INR",
+        razorpay_order_id="order_paid_inr", status="verified",
+    ))
+    db.commit()
+    assert billing.charge_currency_for_org(db, org, None) == "GBP"
 
 
 def test_charge_currency_uses_geo_header_when_country_unknown(db):
     request = SimpleNamespace(headers={"cf-ipcountry": "GB"})
     assert billing.charge_currency_for_org(db, _org(), None, request=request) == "GBP"
-    assert billing.charge_currency_for_org(db, _org(), "INR", request=request) == "GBP"
+    with pytest.raises(HTTPException) as exc:
+        billing.charge_currency_for_org(db, _org(), "INR", request=request)
+    assert exc.value.status_code == 409
     request = SimpleNamespace(headers={"cf-ipcountry": "LK"})
-    assert billing.charge_currency_for_org(db, _org(), "USD", request=request) == "INR"
+    assert billing.charge_currency_for_org(db, _org(), None, request=request) == "INR"
+    with pytest.raises(HTTPException):
+        billing.charge_currency_for_org(db, _org(), "USD", request=request)
     # The org's own country beats the visitor's location...
     org = _org()
     org.country_code = "GB"

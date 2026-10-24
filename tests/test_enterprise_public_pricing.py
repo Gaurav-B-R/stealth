@@ -392,7 +392,7 @@ def test_copilot_guide_states_the_live_client_link_allowance():
 
 def test_cache_busters_are_bumped_for_the_changed_assets():
     enterprise = _read("enterprise.html")
-    assert "/static/enterprise.js?v=20261022b" in enterprise
+    assert "/static/enterprise.js?v=20261024a" in enterprise
     assert "/static/enterprise.css?v=20261022a" in enterprise
     assert "/static/app.js?v=20261022b" in _read("us_f1_visa.html")
     console = _read("admin_console.html")

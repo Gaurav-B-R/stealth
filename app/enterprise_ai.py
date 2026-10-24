@@ -484,7 +484,9 @@ def _slim_catalog_result(rows: list, total: int) -> dict:
     }
 
 
-def build_org_tools(db: Session, organization_id: int, ctx=None, viewer_user_id=None) -> list:
+def build_org_tools(
+    db: Session, organization_id: int, ctx=None, viewer_user_id=None, billing_currency: Optional[str] = None,
+) -> list:
     """The tool surface the assistant can call.
 
     `ctx` is the caller's access context. Without it the assistant is the widest hole in the whole
@@ -499,15 +501,40 @@ def build_org_tools(db: Session, organization_id: int, ctx=None, viewer_user_id=
     _viewer_user_id = int(viewer_user_id) if viewer_user_id else None
 
     def _billing_currency() -> Optional[str]:
-        """The currency this workspace is billed in (its own region), for any tool that
-        states money. The INR and foreign plan ladders are not near-parity, so a workspace is
-        never quoted the other region's prices; None (no price stated) if it can't be told."""
+        """The ONE currency this workspace is billed in (D-010), for any tool that states
+        money. The caller resolves it WITH the request (`billing_currency`), exactly as
+        /billing/plans does — without the geo country an INR-claiming office browsing from
+        London would be quoted rupees. The request-less lookup is only a fallback for callers
+        that don't pass it; None (no price stated) if it can't be told."""
+        if billing_currency:
+            return billing_currency
         try:
             from app import enterprise_billing
             return enterprise_billing.charge_currency_for_org(db, org_id, None)
         except Exception:
             logger.debug("billing currency unavailable for org %s", org_id, exc_info=True)
             return None
+
+    def _rupees_only_for_inr(payload):
+        """Drop every rupee figure from a UI payload unless this workspace is billed in INR.
+        Credits are an INR unit of account (1 credit = ₹10), so wallet, spend and pack
+        payloads carry *_inr numbers and ₹ display strings; a workspace billed in another
+        currency must never be told an Indian price (D-010). Credit counts stay."""
+        if _billing_currency() == "INR":
+            return payload
+
+        def _clean(value):
+            if isinstance(value, dict):
+                return {
+                    k: _clean(v) for k, v in value.items()
+                    if not str(k).endswith(("_inr", "_paise")) and k not in ("price_options", "paise_per_credit")
+                    and not (isinstance(v, str) and "₹" in v)
+                }
+            if isinstance(value, list):
+                return [_clean(v) for v in value]
+            return value
+
+        return _clean(payload)
 
     def _org_row():
         return db.query(models.EnterpriseOrganization).filter(
@@ -1309,13 +1336,15 @@ def build_org_tools(db: Session, organization_id: int, ctx=None, viewer_user_id=
     # -----------------------------------------------------------------------
 
     def get_credit_wallet() -> dict:
-        """Get the Rilono Credits wallet: current balance in credits and rupees, lifetime
-        credits purchased and spent, and whether the balance is running low.
+        """Get the Rilono Credits wallet: current balance in credits, lifetime credits
+        purchased and spent, and whether the balance is running low.
         Use for 'how many credits do we have left', 'what's our balance'."""
-        state = _credits_mod().wallet_state(db, org_id) or {}
-        # Strip nothing sensitive here — wallet_state is already a UI payload — but keep it
-        # to the fields a question is actually about.
-        return {k: v for k, v in state.items() if k not in ("recent_transactions",)}
+        state = _credits_mod().wallet_state(db, org_id, currency=_billing_currency()) or {}
+        # Keep it to the fields a question is actually about — and no rupee figure for a
+        # workspace billed in another currency.
+        return _rupees_only_for_inr(
+            {k: v for k, v in state.items() if k not in ("recent_transactions", "infra_fee")}
+        )
 
     def get_credit_free_allowances() -> dict:
         """Get how much FREE usage is left before credits are charged: free AI assistant
@@ -1372,6 +1401,7 @@ def build_org_tools(db: Session, organization_id: int, ctx=None, viewer_user_id=
         interview, university shortlist, Course Finder, Writing Studio, AI assistant) and the
         credit top-up packs on sale, priced in this workspace's billing currency. Use for
         'what does a deep scan cost'."""
+        # (rupee values only for an INR-billed workspace — see _rupees_only_for_inr)
         c = _credits_mod()
         currency = _billing_currency()
         # A credit's rupee value is only this workspace's business if it is billed in rupees.
@@ -1408,7 +1438,7 @@ def build_org_tools(db: Session, organization_id: int, ctx=None, viewer_user_id=
             ctx=ctx,
             include_by_member=(ctx is None or getattr(ctx, "is_org_scope", False)),
         ) or {}
-        return {k: v for k, v in data.items() if k not in ("timeline", "series", "trend")}
+        return _rupees_only_for_inr({k: v for k, v in data.items() if k not in ("timeline", "series", "trend")})
 
     def list_credit_transactions(limit: int = 20) -> dict:
         """List individual credit ledger entries — every top-up, debit, bonus and adjustment,
@@ -2365,6 +2395,7 @@ def run_enterprise_ai_chat(
     history: Optional[list] = None,
     ctx=None,
     cost_budget_usd: Optional[Decimal] = None,
+    billing_currency: Optional[str] = None,
 ) -> "ChatTurnResult":
     """Run one turn of the enterprise AI assistant.
 
@@ -2389,7 +2420,9 @@ def run_enterprise_ai_chat(
             usage=usage,
         )
 
-    tools = build_org_tools(db, organization.id, ctx=ctx, viewer_user_id=user.id)
+    tools = build_org_tools(
+        db, organization.id, ctx=ctx, viewer_user_id=user.id, billing_currency=billing_currency,
+    )
     system = _system_instruction(
         organization_name=organization.company_name or "your consultancy",
         user_name=(user.full_name or user.email or "there"),
