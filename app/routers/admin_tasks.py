@@ -8,8 +8,10 @@ members holding the Team section) see every task, so whoever hands out console a
 also see what the team is working on.
 
 Lifecycle: pending → in_progress / on_hold → done → closed. "Done" is the assignee saying
-"finished"; "Closed" is the task leaving the board. Anyone on a task can move it anywhere —
-the timeline records who did what, which is the accountability, not a permission matrix.
+"finished"; "Closed" is the person who handed the task out agreeing, and the task leaving the
+board. So the assignee moves a task anywhere up to Done, but only its creator (or a team
+manager) can close it, or reopen it once closed. Everything else is open to anyone on the
+task — the timeline records who did what.
 """
 
 import logging
@@ -212,6 +214,12 @@ def _can_delete(task: models.AdminTeamTask, viewer: _Viewer) -> bool:
     return viewer.oversees_all or task.created_by_user_id == viewer.user.id
 
 
+def _can_close(task: models.AdminTeamTask, viewer: _Viewer) -> bool:
+    """Closing (and reopening a closed task) is the assigner's call, not the assignee's:
+    the assignee marks Done, the person who handed the task out reviews and closes it."""
+    return viewer.oversees_all or task.created_by_user_id == viewer.user.id
+
+
 def _visible_query(db: Session, viewer: _Viewer):
     query = db.query(models.AdminTeamTask)
     if not viewer.oversees_all:
@@ -264,6 +272,7 @@ def _serialize_task(task, viewer: _Viewer, people: dict, members: dict, note_cou
         "note_count": note_count,
         "can_edit": _is_visible(task, viewer),
         "can_delete": _can_delete(task, viewer),
+        "can_close": _can_close(task, viewer),
     }
 
 
@@ -327,17 +336,27 @@ def _send_task_email(**kwargs) -> None:
 
 def _notify(background: BackgroundTasks, db: Session, *, task, actor: models.User, members: dict,
             new_assignee_id: int | None = None, previous_assignee_id: int | None = None,
-            status_changed: bool = False, changes: list[str] | None = None, note: str | None = None) -> None:
+            previous_status: str | None = None, changes: list[str] | None = None,
+            note: str | None = None) -> None:
     """Email the other people on a task. The actor never gets their own change, and only
     current console members get anything — an ex-member's inbox is not the team's."""
     changes = changes or []
     actor_label = _display_name(actor)
+    status_label = STATUSES.get(task.status, task.status)
+    status_changed = previous_status is not None and previous_status != task.status
     recipients: dict[int, str] = {}
     if new_assignee_id and new_assignee_id != actor.id:
         recipients[new_assignee_id] = f"{actor_label} assigned you a task"
+    if status_changed and task.status == "done" and task.created_by_user_id and task.created_by_user_id != actor.id:
+        # Done is a hand-back: tell the assigner it is waiting on them.
+        recipients.setdefault(task.created_by_user_id, f"{actor_label} marked a task Done — ready for you to close")
     if changes or note:
-        if status_changed:
-            headline = f"{actor_label} moved a task to {STATUSES.get(task.status, task.status)}"
+        if status_changed and task.status == "closed":
+            headline = f"{actor_label} closed a task"
+        elif status_changed and previous_status in {"done", "closed"}:
+            headline = f"{actor_label} sent a task back to {status_label}"
+        elif status_changed:
+            headline = f"{actor_label} moved a task to {status_label}"
         elif note and not changes:
             headline = f"{actor_label} added a note to a task"
         else:
@@ -503,13 +522,18 @@ def update_task(
         if required in fields and getattr(payload, required) is None:
             raise HTTPException(422, f"A task always has a {required}.")
     task = _task_or_404(db, viewer, task_id, lock=True)
+    if ("status" in fields and payload.status != task.status and "closed" in (payload.status, task.status)
+            and not _can_close(task, viewer)):
+        raise HTTPException(403, "Only the person who assigned this task can close it. Mark it Done and they'll review it."
+                            if payload.status == "closed" else
+                            "This task is closed. Only the person who assigned it can reopen it.")
     members = _team_members(db)
     now = _now()
     entries: list[tuple[str, str | None, str | None]] = []
     changes: list[str] = []
     previous_assignee = task.assignee_user_id
+    previous_status = task.status
     new_assignee = None
-    status_changed = False
 
     edited = []
     if "title" in fields:
@@ -551,7 +575,6 @@ def update_task(
         changes.append(f"Status: {STATUSES.get(task.status, task.status)} → {STATUSES[payload.status]}")
         task.status = payload.status
         task.status_changed_at = now
-        status_changed = True
     note = _clean_text(payload.note) if "note" in fields else None
 
     if not entries and not note:
@@ -569,7 +592,7 @@ def update_task(
     db.commit()
     db.refresh(task)
     _notify(background, db, task=task, actor=current_user, members=members, new_assignee_id=new_assignee,
-            previous_assignee_id=previous_assignee, status_changed=status_changed, changes=changes, note=note)
+            previous_assignee_id=previous_assignee, previous_status=previous_status, changes=changes, note=note)
     if not _is_visible(task, viewer):
         # Handed to someone else by a teammate who isn't a manager: it leaves their board.
         return {"visible": False, "task": None, "timeline": []}

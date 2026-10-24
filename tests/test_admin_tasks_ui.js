@@ -271,3 +271,43 @@ test('the dialog is focusable and its close button is not confused with closing 
     assert.match(html, /class="admin-modal tasks-modal" role="dialog"[^>]+tabindex="-1"/);
     assert.match(html, /id="adminTaskModalClose"[^>]+aria-label="Close"/);
 });
+
+test('the assignee cannot close a task: Closed is disabled, explained, and refused on drop', async () => {
+    const app = setup(() => jsonResponse(board([task(1, { status: 'done', can_close: false })])));
+    await app.loadTasks();
+    const before = app.requests.length;
+    await app.moveTaskStatus(1, 'closed');
+    assert.equal(app.requests.length, before, 'nothing is sent');
+    assert.match(app.refs.taskError.textContent, /Only Boss can close this task\. Mark it Done/);
+    assert.equal(app.state.tasks.items[0].status, 'done');
+    app.state.tasks.openId = 1;
+    app.state.tasks.detail = { task: task(1, { status: 'done', can_close: false }), timeline: [] };
+    app.renderTaskDetail();
+    const body = app.refs.taskModalBody.innerHTML;
+    assert.match(body, /<option value="closed"\s+disabled>/);
+    assert.match(body, /<option value="in_progress"\s+>/, 'everything short of Closed stays available');
+    assert.match(body, /When it’s finished, mark it Done\. Boss reviews it and closes it\./);
+});
+
+test('a closed task is locked for the assignee but reopenable by the assigner', () => {
+    const app = setup();
+    app.state.tasks.me = 17;
+    app.state.tasks.detail = { task: task(1, { status: 'closed', can_close: false }), timeline: [] };
+    app.renderTaskDetail();
+    assert.match(app.refs.taskModalBody.innerHTML, /data-task-field="status" disabled data-task-locked/);
+    assert.match(app.refs.taskModalBody.innerHTML, /Only Boss can reopen it/);
+    app.state.tasks.detail = { task: task(1, { status: 'closed', can_close: true, assignee: other, created_by: me }), timeline: [] };
+    app.renderTaskDetail();
+    assert.doesNotMatch(app.refs.taskModalBody.innerHTML, /data-task-field="status" disabled/);
+});
+
+test('work handed back as Done is flagged "Ready to close" for the assigner only', () => {
+    const app = setup();
+    app.state.tasks.me = 17;
+    const handedBack = task(3, { status: 'done', can_close: true, assignee: other, created_by: me });
+    assert.match(app.renderTaskCard(handedBack), /Ready to close/);
+    assert.doesNotMatch(app.renderTaskCard(task(4, { status: 'done', can_close: false })), /Ready to close/);
+    app.state.tasks.detail = { task: handedBack, timeline: [] };
+    app.renderTaskDetail();
+    assert.match(app.refs.taskModalBody.innerHTML, /Other marked this Done\. Close it, or move it back/);
+});

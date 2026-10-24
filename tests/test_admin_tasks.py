@@ -355,3 +355,49 @@ def test_control_characters_are_stripped_and_unstorable_text_is_a_clean_422(clie
                            content=raw)
     assert response.status_code == 422, response.text
     assert db.query(models.AdminTeamTask).count() == 1
+
+
+def test_assignee_marks_done_but_only_the_assigner_closes_or_reopens(client, db, team, emails):
+    task = create(client, team["ana"], assignee_user_id=team["ben"].id)
+    ben, ana = headers(team["ben"]), headers(team["ana"])
+    path = f"/api/admin/tasks/{task['id']}"
+    assert client.get(path, headers=ben).json()["task"]["can_close"] is False
+    assert client.get(path, headers=ana).json()["task"]["can_close"] is True
+
+    emails.clear()
+    done = client.patch(path, headers=ben, json={"status": "done", "note": "Shipped."})
+    assert done.status_code == 200 and done.json()["task"]["status"] == "done"
+    assert {m["to_email"]: m["headline"] for m in emails} == {
+        "ana@example.com": "Ben marked a task Done — ready for you to close"}
+
+    events_before = db.query(models.AdminTeamTaskNote).count()
+    refused = client.patch(path, headers=ben, json={"status": "closed", "note": "closing it myself"})
+    assert refused.status_code == 403
+    assert "Mark it Done" in refused.json()["detail"]
+    assert db.get(models.AdminTeamTask, task["id"]).status == "done"
+    assert db.query(models.AdminTeamTaskNote).count() == events_before, "a refused change writes nothing"
+
+    emails.clear()
+    closed = client.patch(path, headers=ana, json={"status": "closed"})
+    assert closed.status_code == 200 and closed.json()["task"]["status"] == "closed"
+    assert [(m["to_email"], m["headline"]) for m in emails] == [("ben@example.com", "Ana closed a task")]
+
+    reopen = client.patch(path, headers=ben, json={"status": "in_progress"})
+    assert reopen.status_code == 403 and "reopen" in reopen.json()["detail"]
+    emails.clear()
+    back = client.patch(path, headers=ana, json={"status": "in_progress", "note": "One more fix needed."})
+    assert back.status_code == 200
+    assert emails[0]["headline"] == "Ana sent a task back to In progress"
+    # Short of Closed, the assignee moves freely, including back out of Done.
+    for status in ("on_hold", "done", "pending"):
+        assert client.patch(path, headers=ben, json={"status": status}).status_code == 200
+
+
+def test_managers_and_self_assigned_owners_can_close(client, team):
+    shared = create(client, team["ana"], assignee_user_id=team["ben"].id)
+    assert client.patch(f"/api/admin/tasks/{shared['id']}", headers=headers(team["owner"]),
+                        json={"status": "closed"}).status_code == 200
+    own = create(client, team["ben"], assignee_user_id=team["ben"].id)
+    assert own["can_close"] is True
+    assert client.patch(f"/api/admin/tasks/{own['id']}", headers=headers(team["ben"]),
+                        json={"status": "closed"}).status_code == 200

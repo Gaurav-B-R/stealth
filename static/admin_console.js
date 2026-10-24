@@ -859,10 +859,12 @@ function renderTaskCard(task) {
         : (task.assignee ? taskPersonName(task.assignee) : 'Unassigned');
     const priority = TASK_PRIORITY_LABELS[task.priority] || task.priority;
     const status = TASK_STATUS_LABELS[task.status] || task.status;
-    const label = `${task.title}. ${status}, ${priority} priority${due ? `, ${due.text}` : ''}. ${personLabel}.`;
+    const ready = taskReadyToClose(task);
+    const label = `${task.title}. ${status}${ready ? ', ready for you to close' : ''}, ${priority} priority${due ? `, ${due.text}` : ''}. ${personLabel}.`;
+    const draggable = task.can_edit && !(task.status === 'closed' && !task.can_close);
     return `<div class="tasks-card priority-${escapeHtml(task.priority)}" role="button" tabindex="0" data-task-id="${escapeHtml(task.id)}"
-            draggable="${task.can_edit ? 'true' : 'false'}" aria-label="${escapeHtml(label)}">
-        <div class="tasks-card-top"><span class="tasks-card-id">#${escapeHtml(task.id)}</span><span class="tasks-priority priority-${escapeHtml(task.priority)}">${escapeHtml(priority)}</span></div>
+            draggable="${draggable ? 'true' : 'false'}" aria-label="${escapeHtml(label)}">
+        <div class="tasks-card-top"><span class="tasks-card-id">#${escapeHtml(task.id)}</span><span class="tasks-card-tags">${ready ? '<span class="tasks-ready-chip">Ready to close</span>' : ''}<span class="tasks-priority priority-${escapeHtml(task.priority)}">${escapeHtml(priority)}</span></span></div>
         <p class="tasks-card-title">${escapeHtml(task.title)}</p>
         <div class="tasks-card-foot">
             <span class="tasks-card-person">${person || !mine ? taskAvatar(person) : ''}<span>${escapeHtml(personLabel)}</span></span>
@@ -974,8 +976,28 @@ function setTaskScope(scope) {
 
 // ---- Task modal: create form and detail view --------------------------------
 
-function taskOptions(items, selected) {
-    return items.map((item) => `<option value="${escapeHtml(item.key)}" ${item.key === selected ? 'selected' : ''}>${escapeHtml(item.label)}</option>`).join('');
+function taskOptions(items, selected, isDisabled = () => false) {
+    return items.map((item) => `<option value="${escapeHtml(item.key)}" ${item.key === selected ? 'selected' : ''} ${isDisabled(item) ? 'disabled' : ''}>${escapeHtml(item.label)}</option>`).join('');
+}
+
+// The assignee takes a task up to Done; only whoever assigned it (or a team manager) can
+// close it, or reopen it once closed. The server enforces this; the UI just doesn't offer it.
+function taskStatusLocked(task, status) {
+    return Boolean(task && !task.can_close && task.status !== status && (status === 'closed' || task.status === 'closed'));
+}
+
+function taskAssignerName(task) {
+    return task?.created_by ? taskPersonName(task.created_by) : 'A team manager';
+}
+
+function taskCloseDeniedMessage(task, status) {
+    return status === 'closed'
+        ? `Only ${taskAssignerName(task)} can close this task. Mark it Done and they’ll review it.`
+        : `This task is closed. Only ${taskAssignerName(task)} can reopen it.`;
+}
+
+function taskReadyToClose(task) {
+    return task.status === 'done' && task.can_close && Boolean(task.assignee) && Number(task.assignee.id) !== Number(taskMe());
 }
 
 function taskAssigneeOptions(selectedId, current = null) {
@@ -1228,6 +1250,10 @@ function renderTaskDetail({ keepNote = true, keepEdit = true } = {}) {
         : (task.description ? `<p class="tasks-description">${escapeHtml(task.description)}</p>` : '<p class="tasks-muted">No details yet.</p>');
     const due = taskDueInfo(task);
     const assigneeGone = task.assignee && !task.assignee.has_access;
+    let statusHint = '';
+    if (!task.can_close && task.status === 'closed') statusHint = `Closed. Only ${taskAssignerName(task)} can reopen it.`;
+    else if (!task.can_close) statusHint = `When it’s finished, mark it Done. ${taskAssignerName(task)} reviews it and closes it.`;
+    else if (taskReadyToClose(task)) statusHint = `${taskPersonName(task.assignee)} marked this Done. Close it, or move it back if something’s missing.`;
     refs.taskModalBody.innerHTML = `<div class="tasks-detail">
         <div class="tasks-detail-main">
             <section class="tasks-detail-section">
@@ -1245,7 +1271,8 @@ function renderTaskDetail({ keepNote = true, keepEdit = true } = {}) {
             </section>
         </div>
         <aside class="tasks-detail-side" aria-label="Task details">
-            <label class="tasks-prop"><span>Status</span><select data-task-field="status" ${lock}>${taskOptions(TASK_STATUSES, task.status)}</select></label>
+            <label class="tasks-prop"><span>Status</span><select data-task-field="status" ${editable && !(task.status === 'closed' && !task.can_close) ? '' : 'disabled data-task-locked'}>${taskOptions(TASK_STATUSES, task.status, (item) => taskStatusLocked(task, item.key))}</select></label>
+            ${statusHint ? `<p class="tasks-prop-hint">${escapeHtml(statusHint)}</p>` : ''}
             <label class="tasks-prop"><span>Assignee</span><select data-task-field="assignee_user_id" ${lock}>${taskAssigneeOptions(task.assignee?.id ?? '', task.assignee)}</select></label>
             ${assigneeGone ? '<p class="tasks-warn">This person no longer has console access. Reassign the task.</p>' : ''}
             <label class="tasks-prop"><span>Priority</span><select data-task-field="priority" ${lock}>${taskOptions(TASK_PRIORITIES, task.priority)}</select></label>
@@ -1370,6 +1397,7 @@ async function commitTaskField(control) {
 async function moveTaskStatus(taskId, status) {
     const task = findTask(taskId);
     if (!task || !task.can_edit || task.status === status || !TASK_STATUS_LABELS[status] || state.tasks.saving) return;
+    if (taskStatusLocked(task, status)) { setTaskError(taskCloseDeniedMessage(task, status)); return; }
     const body = { status };
     if (status === 'on_hold') {
         const reason = await askOnHoldNote();
@@ -1536,6 +1564,8 @@ function bindTaskEvents() {
     refs.taskBoard?.addEventListener('dragover', (event) => {
         const zone = event.target.closest?.('[data-drop-status]');
         if (!zone || !state.tasks.dragId) return;
+        // Not a drop target: the browser shows "not allowed" over Closed for an assignee.
+        if (taskStatusLocked(findTask(state.tasks.dragId), zone.dataset.dropStatus)) return;
         event.preventDefault();
         try { event.dataTransfer.dropEffect = 'move'; } catch { /* older browsers */ }
         if (!zone.classList.contains('is-drop-target')) { clearTaskDropTargets(); zone.classList.add('is-drop-target'); }
