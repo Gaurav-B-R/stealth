@@ -27,6 +27,7 @@ const EXPORTS = [
   'branchFilterHtml', 'docReadBadge', 'planFeature', 'aiPausedMessage', 'isAiPausedError',
   'priceLabelFor', 'creditCostFor', 'billingStartPrice', 'setStatus', 'applyAiMeta', 'sendAi',
   'renderAiThread', 'updatePlanChip', 'notOpenStageLabels', 'planAllowanceSummary', 'creditTxnMeta',
+  'crWorth', 'fmtDisplay', 'creditCheckoutProceed',
 ];
 const patched = source
   .replace(HOOK, `  globalThis.__entTest = { ${EXPORTS.join(', ')} };\n${HOOK}`)
@@ -352,6 +353,92 @@ test('the currency picker offers only charge_currencies (region rule) and the US
   await np.renderBilling();
   assert.ok(content(np).includes('≈ US$57/mo · charged in INR'));
   assert.ok(content(np).includes('(≈ US$21)'));
+});
+
+test('D-010: a US workspace sees one currency — no picker, USD cards — and a 409 at checkout re-fetches', async () => {
+  const usd = { starter: [3900, '$39'], growth: [8900, '$89'], scale: [19500, '$195'] };
+  const usdCard = (c) => (c.is_free
+    ? { ...c, currency: 'USD', monthly_display: '$0', total_display: '$0', price_options: [] }
+    : { ...c, currency: 'USD', monthly_paise: usd[c.key][0], monthly_minor: usd[c.key][0], monthly_display: usd[c.key][1],
+        total_minor: usd[c.key][0], total_display: usd[c.key][1], tax_label: null, tax_percent: 0, tax_minor: 0, price_note: '',
+        price_options: [{ currency: 'USD', amount_minor: usd[c.key][0], display: usd[c.key][1] }] });
+  const payload = billingPayload({
+    plans: PLANS().map(usdCard), currency: 'USD', charge_currencies: ['USD'], gst_percent: 0,
+    tax: { percent: 0, label: null, note: '' },
+    subscription: sub({ plan: 'sandbox', plan_label: '14-day free trial', is_sandbox: true, currency: 'USD', inr_region: false }),
+  });
+  let checkoutCalls = 0;
+  const app = setup({ routes: {
+    'GET /billing/subscription': payload,
+    'POST /billing/checkout': () => { checkoutCalls += 1; return jsonResponse({ detail: 'This workspace is billed in USD. Refresh the page to see your prices in USD.' }, 409); },
+  } });
+  app.state.view = 'billing';
+  await app.renderBilling();
+  const html = content(app);
+  assert.ok(!html.includes('billingCurrencySel'), 'no "Billing currency" picker with one currency');
+  for (const other of ['£', '€', 'A$', 'C$', 'S$', 'AED', '₹']) assert.ok(!html.includes(other), `no ${other} price on the page`);
+  assert.ok(html.includes('$39') && html.includes('$89') && html.includes('$195'));
+  const toastsShown = [];
+  app.dom.get('toastWrap').appendChild = (el) => { toastsShown.push(el.innerHTML); return el; };
+  const fetchesBefore = app.requests.filter((r) => r.url.includes('/billing/subscription')).length;
+  await app.checkout('starter');
+  await settle();
+  assert.equal(checkoutCalls, 1);
+  // The checkout sent the currency it showed...
+  assert.equal(app.requests.find((r) => r.url.includes('/billing/checkout')).body.currency, 'USD');
+  // ...and on the 409 the page re-fetched its prices instead of leaving a stale grid up.
+  assert.ok(toastsShown.some((t) => t.includes('billed in USD')), toastsShown.join(' | '));
+  assert.equal(app.requests.filter((r) => r.url.includes('/billing/subscription')).length, fetchesBefore + 1);
+});
+
+test('D-010: a 409 on a plan code re-fetches the page and keeps the code the buyer typed', async () => {
+  const app = setup({ routes: {
+    'GET /billing/subscription': billingPayload(),
+    'POST /coupons/validate': () => jsonResponse({ detail: 'This workspace is billed in USD. Refresh the page to see your prices in USD.' }, 409),
+  } });
+  app.state.view = 'billing';
+  await app.renderBilling();
+  app.dom.get('billingCouponInput').value = 'SAVE10';
+  const before = app.requests.filter((r) => r.url.includes('/billing/subscription')).length;
+  await app.applyBillingCoupon();
+  await settle();
+  assert.equal(app.requests.filter((r) => r.url.includes('/billing/subscription')).length, before + 1);
+  assert.equal(app.dom.get('billingCouponInput').value, 'SAVE10');
+  // Off the page (the buyer navigated away mid-request), a 409 repaints nothing.
+  app.state.view = 'clients';
+  app.dom.get('billingCouponInput').value = 'SAVE10';
+  await app.applyBillingCoupon();
+  await settle();
+  assert.equal(app.requests.filter((r) => r.url.includes('/billing/subscription')).length, before + 1);
+});
+
+test('D-010: a 409 at top-up checkout closes the order window and re-fetches the wallet', async () => {
+  const w = wallet();
+  const app = setup({ routes: {
+    'GET /credits/wallet': { wallet: w, usage: {}, packages: PACKAGES, charge_currencies: ['INR'], topup_allowed: true },
+    'POST /credits/topup/checkout': () => jsonResponse({ detail: 'This workspace is billed in USD. Refresh the page to see your prices in USD.' }, 409),
+  } });
+  app.state.view = 'credits';
+  await app.renderCredits();
+  const walletFetches = () => app.requests.filter((r) => r.method === 'GET' && r.url.includes('/credits/wallet')).length;
+  const before = walletFetches();
+  app.openCreditCheckout('pack_100');
+  await app.creditCheckoutProceed();
+  await settle();
+  assert.ok(walletFetches() > before, 'the wallet is fetched again after the 409');
+});
+
+test('D-010: credit values are converted to the display currency — "$4.80", never a raw ₹ string', () => {
+  const app = setup();
+  app.state.me = { organization: { display_currency: { code: 'USD', symbol: '$', rate_from_inr: 0.012 } } };
+  app.creditsUi.wallet = { wallet: { credit_value_inr: 10 } };
+  assert.equal(app.crWorth(40), '$4.80');
+  assert.equal(app.crWorth(100), '$12');
+  assert.equal(app.fmtDisplay(150000000, 'INR'), '$18,000');
+  app.state.me = { organization: { display_currency: { code: 'INR', symbol: '₹', rate_from_inr: 1 } } };
+  assert.equal(app.crWorth(40), '₹400');
+  // The Usage tab no longer prints the server's ₹ value_display anywhere.
+  assert.ok(!/esc\((x|p)\.value_display/.test(source), 'Usage rows must go through crWorth');
 });
 
 test('usage panel: open files with the grace deadline, team seats and the reads allowance', async () => {

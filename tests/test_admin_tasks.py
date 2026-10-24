@@ -15,7 +15,7 @@ from sqlalchemy import create_engine, event
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
 
-from app import admin_access, auth, email_service, models
+from app import admin_access, admin_task_files, auth, email_service, enterprise_storage, models
 from app.database import Base, get_db
 from app.routers import admin as admin_router
 from app.routers import admin_tasks
@@ -100,7 +100,7 @@ def create(client, actor, **body):
 
 def test_every_task_route_declares_a_shared_policy_and_turnstile_proof():
     routes = [route for route in admin_tasks.router.routes if isinstance(route, APIRoute)]
-    assert len(routes) == 8
+    assert len(routes) == 11
     for route in routes:
         policy = getattr(route.endpoint, "admin_console_policy", None)
         assert isinstance(policy, admin_access.RoutePolicy), route.path
@@ -401,3 +401,215 @@ def test_managers_and_self_assigned_owners_can_close(client, team):
     assert own["can_close"] is True
     assert client.patch(f"/api/admin/tasks/{own['id']}", headers=headers(team["ben"]),
                         json={"status": "closed"}).status_code == 200
+
+
+# ---- Attachments ----------------------------------------------------------------
+
+PNG = b"\x89PNG\r\n\x1a\n" + b"\x00" * 64
+
+
+@pytest.fixture
+def storage(tmp_path, monkeypatch):
+    """A local directory stands in for the bucket: nothing here reaches R2."""
+    monkeypatch.setattr(enterprise_storage, "LOCAL_DIR", str(tmp_path))
+    return tmp_path
+
+
+def stored_blobs(storage):
+    return sorted(path for path in storage.rglob("*") if path.is_file())
+
+
+def attach(client, actor, task_id, name="screenshot.png", data=PNG, content_type="image/png"):
+    return client.post(f"/api/admin/tasks/{task_id}/attachments", headers=headers(actor),
+                       files={"file": (name, data, content_type)})
+
+
+def test_files_follow_the_task_and_are_stored_encrypted(client, db, team, storage, emails):
+    task = create(client, team["owner"], assignee_user_id=team["ana"].id)
+    emails.clear()
+    response = attach(client, team["ana"], task["id"])
+    assert response.status_code == 201, response.text
+    detail = response.json()
+    [file] = detail["attachments"]
+    assert file["filename"] == "screenshot.png" and file["is_image"] is True and file["ext"] == "png"
+    assert file["size"] == len(PNG) and file["uploaded_by"]["id"] == team["ana"].id and file["can_delete"] is True
+    assert file["url"] == f"/api/admin/tasks/{task['id']}/attachments/{file['id']}"
+    assert detail["task"]["attachment_count"] == 1 and detail["task"]["note_count"] == 0
+    assert (detail["timeline"][0]["kind"], detail["timeline"][0]["to_label"]) == ("attachment", "screenshot.png")
+    assert emails == [], "attaching a file is recorded, not emailed"
+
+    [blob] = stored_blobs(storage)
+    assert PNG not in blob.read_bytes(), "bytes at rest are ciphertext"
+    assert str(blob.relative_to(storage)).startswith(f"admin/tasks/{task['id']}/")
+
+    download = client.get(file["url"], headers=headers(team["owner"]))
+    assert download.status_code == 200 and download.content == PNG
+    assert download.headers["content-type"] == "image/png"
+    assert download.headers["x-content-type-options"] == "nosniff"
+    assert download.headers["cache-control"] == "private, no-store"
+    assert download.headers["content-disposition"].startswith('inline; filename="screenshot.png"')
+
+    board = client.get("/api/admin/tasks", headers=headers(team["owner"])).json()
+    assert board["tasks"][0]["attachment_count"] == 1
+    assert board["attachment_limits"]["max_files"] == admin_task_files.MAX_FILES_PER_TASK
+    assert "png" in board["attachment_limits"]["extensions"] and "svg" not in board["attachment_limits"]["extensions"]
+
+    # Not on the task: every file route is a 404, exactly like the task itself.
+    ben = headers(team["ben"])
+    assert attach(client, team["ben"], task["id"]).status_code == 404
+    assert client.get(file["url"], headers=ben).status_code == 404
+    assert client.delete(file["url"], headers=ben).status_code == 404
+    assert len(stored_blobs(storage)) == 1
+
+
+def test_accounts_without_console_access_cannot_touch_files(client, db, team, storage):
+    task = create(client, team["owner"], assignee_user_id=team["ana"].id)
+    file = attach(client, team["owner"], task["id"]).json()["attachments"][0]
+    outsider = team["outsider"]
+    assert attach(client, outsider, task["id"]).status_code == 403
+    assert client.get(file["url"], headers=headers(outsider)).status_code == 403
+    assert client.delete(file["url"], headers=headers(outsider)).status_code == 403
+    assert db.query(models.AdminTeamTaskAttachment).count() == 1
+
+
+@pytest.mark.parametrize("name,data", [("payload.html", b"<script>alert(1)</script>"), ("logo.svg", b"<svg/>"),
+                                       ("tool.exe", b"MZ"), ("archive.zip", b"PK"), ("noextension", b"x"),
+                                       ("empty.png", b"")])
+def test_unsafe_or_empty_files_are_refused_and_nothing_is_stored(client, db, team, storage, name, data):
+    task = create(client, team["owner"])
+    response = attach(client, team["owner"], task["id"], name=name, data=data, content_type="image/png")
+    assert response.status_code == 400, response.text
+    assert db.query(models.AdminTeamTaskAttachment).count() == 0
+    assert db.query(models.AdminTeamTaskNote).filter_by(kind="attachment").count() == 0
+    assert stored_blobs(storage) == []
+
+
+def test_size_and_count_caps_are_enforced_per_task(client, db, team, storage, monkeypatch):
+    task = create(client, team["owner"])
+    monkeypatch.setattr(admin_task_files, "MAX_BYTES_PER_FILE", 100)
+    too_big = attach(client, team["owner"], task["id"], data=b"x" * 101)
+    assert too_big.status_code == 400 and "100 B" in too_big.json()["detail"]
+
+    monkeypatch.setattr(admin_task_files, "MAX_FILES_PER_TASK", 2)
+    monkeypatch.setattr(admin_task_files, "MAX_BYTES_PER_TASK", 150)
+    assert attach(client, team["owner"], task["id"], name="a.png", data=b"a" * 60).status_code == 201
+    over_total = attach(client, team["owner"], task["id"], name="b.png", data=b"b" * 91)
+    assert over_total.status_code == 400 and "add up to" in over_total.json()["detail"]
+    assert attach(client, team["owner"], task["id"], name="b.png", data=b"b" * 90).status_code == 201
+    full = attach(client, team["owner"], task["id"], name="c.png", data=b"c")
+    assert full.status_code == 400 and "can hold 2 files" in full.json()["detail"]
+    assert db.query(models.AdminTeamTaskAttachment).count() == 2
+    assert len(stored_blobs(storage)) == 2
+
+
+def test_who_can_remove_a_file_and_removal_is_recorded(client, db, team, storage):
+    task = create(client, team["ana"], assignee_user_id=team["ben"].id)
+    mine = attach(client, team["ben"], task["id"], name="ben.png").json()["attachments"][0]
+    theirs = attach(client, team["ana"], task["id"], name="ana.pdf", data=b"%PDF-1.4", content_type="application/pdf")
+    theirs = theirs.json()["attachments"][1]
+    ben_view = client.get(f"/api/admin/tasks/{task['id']}", headers=headers(team["ben"])).json()["attachments"]
+    assert [item["can_delete"] for item in ben_view] == [True, False]
+
+    refused = client.delete(theirs["url"], headers=headers(team["ben"]))
+    assert refused.status_code == 403
+    removed = client.delete(mine["url"], headers=headers(team["ben"]))
+    assert removed.status_code == 200
+    assert [item["filename"] for item in removed.json()["attachments"]] == ["ana.pdf"]
+    entry = removed.json()["timeline"][0]
+    assert (entry["kind"], entry["from_label"], entry["can_delete"]) == ("attachment_removed", "ben.png", False)
+    assert client.get(mine["url"], headers=headers(team["ana"])).status_code == 404
+    assert len(stored_blobs(storage)) == 1
+
+    # The assigner (and any team manager) can tidy files they didn't add.
+    again = attach(client, team["ben"], task["id"], name="again.png").json()["attachments"][-1]
+    assert client.delete(again["url"], headers=headers(team["ana"])).status_code == 200
+    assert client.delete(theirs["url"], headers=headers(team["owner"])).status_code == 200
+    assert stored_blobs(storage) == []
+
+
+def test_pdf_opens_inline_and_everything_else_downloads(client, team, storage):
+    task = create(client, team["owner"])
+    pdf = attach(client, team["owner"], task["id"], name="invoice.pdf", data=b"%PDF-1.4", content_type="text/html")
+    sheet = attach(client, team["owner"], task["id"], name="payouts.csv", data=b"a,b\n1,2\n", content_type="text/html")
+    files = sheet.json()["attachments"]
+    assert pdf.status_code == 201 and [item["is_image"] for item in files] == [False, False]
+    pdf_download = client.get(files[0]["url"], headers=headers(team["owner"]))
+    assert pdf_download.headers["content-type"] == "application/pdf"
+    assert pdf_download.headers["content-disposition"].startswith("inline;")
+    csv_download = client.get(files[1]["url"], headers=headers(team["owner"]))
+    # The uploader's claimed text/html never comes back; text downloads as opaque bytes.
+    assert csv_download.headers["content-type"] == "application/octet-stream"
+    assert csv_download.headers["content-disposition"].startswith('attachment; filename="payouts.csv"')
+
+
+def test_filenames_are_cleaned_and_non_ascii_names_still_download(client, team, storage):
+    task = create(client, team["owner"])
+    mac = attach(client, team["owner"], task["id"], name="../../Screenshot 2026-10-24 at 2.03.12 PM.png")
+    assert mac.status_code == 201
+    assert mac.json()["attachments"][0]["filename"] == "Screenshot 2026-10-24 at 2.03.12 PM.png"
+    japanese = attach(client, team["owner"], task["id"], name="スクリーンショット.png").json()["attachments"][1]
+    download = client.get(japanese["url"], headers=headers(team["owner"]))
+    assert download.status_code == 200
+    disposition = download.headers["content-disposition"]
+    assert 'filename="file.png"' in disposition
+    assert "filename*=UTF-8''%E3%82%B9" in disposition
+    long_name = "x" * 300 + ".png"
+    kept = attach(client, team["owner"], task["id"], name=long_name).json()["attachments"][2]
+    assert len(kept["filename"]) == admin_task_files.FILENAME_MAX and kept["filename"].endswith(".png")
+
+
+def test_deleting_a_task_drops_its_files_from_storage(client, db, team, storage):
+    task = create(client, team["ana"], assignee_user_id=team["ben"].id)
+    attach(client, team["ana"], task["id"], name="one.png")
+    attach(client, team["ben"], task["id"], name="two.png")
+    assert len(stored_blobs(storage)) == 2
+    assert client.delete(f"/api/admin/tasks/{task['id']}", headers=headers(team["ana"])).status_code == 200
+    assert db.query(models.AdminTeamTaskAttachment).count() == 0
+    assert stored_blobs(storage) == []
+
+
+def test_storage_failures_are_clean_errors_that_leave_nothing_behind(client, db, team, storage, monkeypatch):
+    task = create(client, team["owner"])
+    file = attach(client, team["owner"], task["id"]).json()["attachments"][0]
+    for blob in stored_blobs(storage):
+        blob.unlink()
+    gone = client.get(file["url"], headers=headers(team["owner"]))
+    assert gone.status_code == 410 and "no longer in storage" in gone.json()["detail"]
+
+    def broken(*args, **kwargs):
+        raise RuntimeError("bucket unreachable")
+
+    monkeypatch.setattr(enterprise_storage, "store_document", broken)
+    failed = attach(client, team["owner"], task["id"], name="later.png")
+    assert failed.status_code == 502
+    assert db.query(models.AdminTeamTaskAttachment).count() == 1
+    assert db.query(models.AdminTeamTaskNote).filter_by(kind="attachment").count() == 1
+
+    monkeypatch.setattr(enterprise_storage, "LOCAL_DIR", "")
+    monkeypatch.setattr(enterprise_storage, "R2_ACCESS_KEY_ID", "")
+    assert attach(client, team["owner"], task["id"]).status_code == 503
+
+
+def test_account_deletion_keeps_the_files_on_the_task(client, db, team, storage):
+    task = create(client, team["owner"], assignee_user_id=team["ana"].id)
+    attach(client, team["ana"], task["id"])
+    ana_id = team["ana"].id
+    user_deletion.purge_user_references(db, ana_id)
+    db.delete(db.get(models.User, ana_id))
+    db.commit()
+    [file] = client.get(f"/api/admin/tasks/{task['id']}", headers=headers(team["owner"])).json()["attachments"]
+    assert file["uploaded_by"] is None
+    assert client.get(file["url"], headers=headers(team["owner"])).content == PNG
+
+
+def test_uploads_have_their_own_hourly_ceiling(client, team, storage, monkeypatch):
+    task = create(client, team["owner"])
+    scopes = []
+
+    def limiter(**kwargs):
+        scopes.append((kwargs["scope"], kwargs["limit"], kwargs["window_seconds"]))
+
+    monkeypatch.setattr(admin_router, "_enforce_rate_limit_or_429", limiter)
+    attach(client, team["owner"], task["id"])
+    assert ("admin.tasks.upload", admin_tasks.UPLOAD_RATE_LIMIT, 3600) in scopes
+    assert ("admin.tasks.write", admin_tasks.WRITE_RATE_LIMIT, admin_tasks.RATE_WINDOW_SECONDS) in scopes

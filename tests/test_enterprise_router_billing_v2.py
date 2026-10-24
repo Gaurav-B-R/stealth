@@ -357,10 +357,14 @@ def test_a_yearly_buyer_receives_exactly_twelve_allowances(credit_db, monkeypatc
 # ---------------------------------------------------------------------------
 
 @pytest.mark.parametrize("country,hint,geo,expected", [
-    ("IN", "USD", None, "INR"),     # INR region: a hint for another currency is ignored
+    ("IN", "USD", None, 409),       # INR region: another currency is refused, not swapped
+    ("IN", None, None, "INR"),
     ("NP", None, None, "INR"),
-    ("GB", "INR", None, "GBP"),     # outside the region INR is never charged
-    ("US", "INR", None, "USD"),
+    ("GB", "INR", None, 409),       # outside the region INR is never charged
+    ("GB", "GBP", None, "GBP"),     # the hint the portal sends: the currency it displayed
+    ("US", "INR", None, 409),
+    ("US", "GBP", None, 409),       # nor another country's ladder (D-010: one currency)
+    ("US", None, None, "USD"),
     (None, None, "GB", "GBP"),      # no country on file: the request's geo decides
     (None, None, "NP", "INR"),
     (None, None, None, "INR"),      # unknown everywhere: domestic default
@@ -369,9 +373,16 @@ def test_resolve_charge_currency_applies_the_region_rule(ctx, country, hint, geo
     ctx.org.country_code = country
     ctx.db.commit()
     request = SimpleNamespace(headers={"cf-ipcountry": geo} if geo else {})
-    assert enterprise._resolve_charge_currency(hint, ctx.org, db=ctx.db, request=request) == expected
-    # ...and the org id form, which is how billing is called from places without the row.
-    assert enterprise._resolve_charge_currency(hint, ctx.org.id, db=ctx.db, request=request) == expected
+    # The model and the org id form (how billing is called from places without the row).
+    for org in (ctx.org, ctx.org.id):
+        if expected == 409:
+            with pytest.raises(HTTPException) as exc:
+                enterprise._resolve_charge_currency(hint, org, db=ctx.db, request=request)
+            assert exc.value.status_code == 409
+        else:
+            assert enterprise._resolve_charge_currency(hint, org, db=ctx.db, request=request) == expected
+    if expected != 409:
+        assert enterprise._org_charge_currencies(ctx.org, request) == [expected]
 
 
 def test_coupon_preview_prices_in_the_region_currency(ctx):
@@ -381,10 +392,16 @@ def test_coupon_preview_prices_in_the_region_currency(ctx):
     add_coupon(ctx, "TEN", "10")
     body = ctx.client.post(
         "/api/enterprise/coupons/validate",
-        json={"code": "TEN", "context": "credits", "package": "starter", "currency": "INR"},
+        json={"code": "TEN", "context": "credits", "package": "starter", "currency": "AED"},
     ).json()
     assert body["currency"] == "AED"
     assert body["base_amount_paise"] == credits.package_price_minor("starter", "AED")
+    # Another country's currency is not this workspace's to preview in.
+    res = ctx.client.post(
+        "/api/enterprise/coupons/validate",
+        json={"code": "TEN", "context": "credits", "package": "starter", "currency": "INR"},
+    )
+    assert res.status_code == 409
 
 
 def test_resolve_charge_currency_still_refuses_unsupported_hints(ctx):
@@ -397,19 +414,68 @@ def test_resolve_charge_currency_still_refuses_unsupported_hints(ctx):
 # request comes from (ENTERPRISE_INR_REQUIRE_GEO_MATCH, default on).
 @pytest.mark.parametrize("country,hint,geo,expected", [
     ("IN", None, "GB", "GBP"),      # a London office that set IN in Settings
-    ("IN", "INR", "US", "USD"),     # ...whatever it hints
-    ("IN", "EUR", "US", "EUR"),     # a non-INR ladder currency it picks is fine
+    ("IN", "INR", "US", 409),       # ...can't get INR by asking for it
+    ("IN", "EUR", "US", 409),       # ...nor another country's ladder: its currency is USD
+    ("IN", "USD", "US", "USD"),
     ("NP", None, "JP", "USD"),      # geo country with no ladder of its own → USD
     ("IN", None, None, "INR"),      # geo unknown: the org's country is trusted
     ("IN", None, "IN", "INR"),
-    ("IN", "USD", "NP", "INR"),     # geo inside the region: INR only, as before
-    ("GB", "INR", "IN", "GBP"),     # the rule only ever takes INR away, never grants it
+    ("IN", "USD", "NP", 409),       # geo inside the region: INR only, as before
+    ("GB", "INR", "IN", 409),       # the rule only ever takes INR away, never grants it
+    ("GB", None, "IN", "GBP"),
 ])
 def test_inr_needs_the_request_geo_to_agree_with_the_org_country(ctx, country, hint, geo, expected):
     ctx.org.country_code = country
     ctx.db.commit()
     request = SimpleNamespace(headers={"cf-ipcountry": geo} if geo else {})
-    assert enterprise._resolve_charge_currency(hint, ctx.org, db=ctx.db, request=request) == expected
+    if expected == 409:
+        with pytest.raises(HTTPException) as exc:
+            enterprise._resolve_charge_currency(hint, ctx.org, db=ctx.db, request=request)
+        assert exc.value.status_code == 409
+    else:
+        assert enterprise._resolve_charge_currency(hint, ctx.org, db=ctx.db, request=request) == expected
+
+
+def test_portal_payloads_carry_only_the_workspaces_one_currency(ctx):
+    """D-010 in the signed-in portal: /billing/plans, /credits/wallet and the checkout
+    response's wallet all speak the org's ONE currency — no other ladder, no INR infra-fee."""
+    set_plan(ctx, "sandbox")
+    ctx.org.country_code = "US"
+    ctx.db.commit()
+    plans = ctx.client.get("/api/enterprise/billing/plans").json()
+    assert plans["currency"] == "USD" and plans["charge_currencies"] == ["USD"]
+    for card in plans["plans"]:
+        assert {o["currency"] for o in card.get("price_options") or []} <= {"USD"}
+    wallet = ctx.client.get("/api/enterprise/credits/wallet").json()
+    assert wallet["charge_currencies"] == ["USD"]
+    infra = wallet["wallet"]["infra_fee"]
+    assert [o["currency"] for o in infra["price_options"]] == ["USD"]
+    # No rupee display string anywhere a USD workspace's browser receives (D-010). The
+    # numeric credit unit (credit_value_inr) stays: the portal converts it for display.
+    assert "₹" not in json.dumps(wallet, ensure_ascii=False)
+    assert wallet["wallet"]["credit_value_inr"] == 10
+    analytics = ctx.client.get("/api/enterprise/credits/analytics").json()
+    assert "₹" not in json.dumps(analytics, ensure_ascii=False)
+    history = ctx.client.get("/api/enterprise/credits/payments").json()
+    assert history["summary"]["collected_display"] == "$0"
+    # An INR workspace keeps its rupee strings.
+    ctx.org.country_code = "IN"
+    ctx.db.commit()
+    inr_wallet = ctx.client.get("/api/enterprise/credits/wallet", headers={"CF-IPCountry": "IN"}).json()
+    assert inr_wallet["wallet"]["balance_display"].startswith("₹")
+
+
+def test_display_currency_follows_the_billing_country(ctx):
+    """A workspace with no company country on file is displayed in its browsing country's
+    currency, the same country billing uses — not rupees (D-010)."""
+    ctx.org.country_code = None
+    ctx.db.commit()
+    request = SimpleNamespace(headers={"cf-ipcountry": "GB"})
+    assert enterprise._org_display_currency(ctx.org, request)["code"] == "GBP"
+    assert enterprise._org_display_currency(ctx.org, SimpleNamespace(headers={"cf-ipcountry": "IN"}))["code"] == "INR"
+    ctx.org.country_code = "IN"     # an INR claim the geo contradicts follows the geo, as billing does
+    ctx.db.commit()
+    assert enterprise._org_display_currency(ctx.org, request)["code"] == "GBP"
 
 
 def test_inr_geo_match_kill_switch(ctx, monkeypatch):
@@ -417,7 +483,10 @@ def test_inr_geo_match_kill_switch(ctx, monkeypatch):
     ctx.org.country_code = "IN"
     ctx.db.commit()
     request = SimpleNamespace(headers={"cf-ipcountry": "GB"})
-    assert enterprise._resolve_charge_currency("GBP", ctx.org, db=ctx.db, request=request) == "INR"
+    assert enterprise._resolve_charge_currency(None, ctx.org, db=ctx.db, request=request) == "INR"
+    with pytest.raises(HTTPException) as exc:
+        enterprise._resolve_charge_currency("GBP", ctx.org, db=ctx.db, request=request)
+    assert exc.value.status_code == 409
 
 
 def test_inr_claim_from_abroad_is_quoted_and_charged_in_the_geo_ladder(ctx):
@@ -427,18 +496,29 @@ def test_inr_claim_from_abroad_is_quoted_and_charged_in_the_geo_ladder(ctx):
     ctx.db.commit()
     geo = {"CF-IPCountry": "GB"}
     body = ctx.client.get("/api/enterprise/billing/plans", headers=geo).json()
-    assert body["currency"] == "GBP" and "INR" not in body["charge_currencies"]
+    assert body["currency"] == "GBP" and body["charge_currencies"] == ["GBP"]
     assert body["subscription"]["inr_region"] is False
     assert all(p["currency"] == "GBP" for p in body["plans"])
-    res = ctx.client.post(
+    # Asking for INR from London is refused outright (not quietly re-priced)...
+    refused = ctx.client.post(
         "/api/enterprise/billing/checkout", headers=geo,
         json={"plan": "starter", "billing_cycle": "monthly", "currency": "INR"},
+    )
+    assert refused.status_code == 409
+    assert "billed in GBP" in refused.json()["detail"]
+    # ...and the displayed GBP is what checkout charges.
+    res = ctx.client.post(
+        "/api/enterprise/billing/checkout", headers=geo,
+        json={"plan": "starter", "billing_cycle": "monthly", "currency": "GBP"},
     )
     assert res.status_code == 200, res.text
     assert res.json()["currency"] == "GBP"
     assert res.json()["amount"] == billing.checkout_quote("starter", "GBP")["total_minor"]
-    topup = ctx.client.post(
+    assert ctx.client.post(
         "/api/enterprise/credits/topup/checkout", headers=geo, json={"package": "starter", "currency": "INR"},
+    ).status_code == 409
+    topup = ctx.client.post(
+        "/api/enterprise/credits/topup/checkout", headers=geo, json={"package": "starter"},
     )
     assert topup.status_code == 200, topup.text
     assert topup.json()["currency"] == "GBP"
@@ -498,11 +578,18 @@ def test_topup_checkout_charges_the_region_currency(ctx):
     set_plan(ctx, "starter")
     ctx.org.country_code = "GB"
     ctx.db.commit()
-    res = ctx.client.post("/api/enterprise/credits/topup/checkout", json={"package": "starter", "currency": "INR"})
+    assert ctx.client.post(
+        "/api/enterprise/credits/topup/checkout", json={"package": "starter", "currency": "INR"},
+    ).status_code == 409
+    res = ctx.client.post("/api/enterprise/credits/topup/checkout", json={"package": "starter", "currency": "GBP"})
     assert res.status_code == 200, res.text
     assert res.json()["currency"] == "GBP"
     order = [p for m, path, p in ctx.rzp.calls if path == "/orders"][-1]
     assert order["currency"] == "GBP"
+    wallet = ctx.client.get("/api/enterprise/credits/wallet").json()
+    assert wallet["charge_currencies"] == ["GBP"]
+    for pack in wallet["packages"]:
+        assert [o["currency"] for o in pack["price_options"]] == ["GBP"]
 
 
 # ---------------------------------------------------------------------------
@@ -1395,7 +1482,8 @@ def test_public_plans_is_anonymous_cacheable_and_rate_limited(ctx):
     ("NP", "USD", "INR", True),    # INR region: INR whatever is asked, with a US$ estimate
     ("IN", None, "INR", False),
     ("GB", "INR", "GBP", False),   # never INR outside the region
-    ("US", "EUR", "EUR", False),   # a ladder currency hint outside the region is honoured
+    ("US", "EUR", "USD", False),   # a hint is ignored: a visitor sees their own country's only
+    ("GB", None, "GBP", False),
     ("IN", "USD", "INR", False),   # never the foreign ladder inside the region
     (None, "JPY", "USD", False),   # unsupported hint ignored, not a 400
     (None, "INR", "USD", False),   # an unknown country is never quoted the INR ladder
@@ -1412,10 +1500,8 @@ def test_public_plans_region_rule(ctx, geo, hint, currency, usd):
     assert all((p["usd_estimate"] is not None) is usd for p in paid)
     if hint == "JPY":
         assert body["requested_currency_supported"] is False
-    if geo in ("NP", "IN"):
-        assert body["currencies"] == ["INR"]
-    else:
-        assert "INR" not in body["currencies"]
+    # One currency per visitor: their own, and nothing else listed.
+    assert body["currencies"] == [currency]
     # One region's prices only, anywhere in the response — not even unrendered in a ladder.
     for row in body["plans"] + body["packages"]:
         assert {o["currency"] for o in row.get("price_options") or []} <= set(body["currencies"])

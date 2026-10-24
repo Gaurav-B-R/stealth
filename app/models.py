@@ -216,6 +216,24 @@ class AdminTeamTaskNote(Base):
     created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
 
 
+class AdminTeamTaskAttachment(Base):
+    """A file pinned to a team task: the screenshot of the bug, the invoice to reconcile.
+
+    The bytes live encrypted in private object storage (app/enterprise_storage.py) under
+    `storage_key`, and are only ever served back through the task's own visibility rules
+    (app/admin_task_files.py). The router drops the blob whenever it deletes the row.
+    """
+    __tablename__ = "admin_team_task_attachments"
+
+    id = Column(Integer, primary_key=True, index=True)
+    task_id = Column(Integer, ForeignKey("admin_team_tasks.id", ondelete="CASCADE"), nullable=False, index=True)
+    uploaded_by_user_id = Column(Integer, ForeignKey("users.id", ondelete="SET NULL"), nullable=True, index=True)
+    original_filename = Column(String(160), nullable=False)
+    storage_key = Column(String(255), nullable=False, unique=True)
+    file_size = Column(Integer, nullable=False)
+    created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+
+
 class USUniversity(Base):
     __tablename__ = "us_universities"
     

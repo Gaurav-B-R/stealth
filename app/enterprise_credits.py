@@ -555,6 +555,23 @@ def format_inr(paise) -> str:
     return money.format_money(paise, "INR")
 
 
+def without_rupee_strings(payload):
+    """`payload` minus every string value that shows a rupee amount ("₹1,500").
+
+    Credits are an INR unit of account, so wallet, usage and analytics payloads carry ₹
+    display strings. A workspace billed in another currency must not receive them, rendered
+    or not (D-010); the portal shows credit values by converting the NUMERIC unit fields
+    (credit_value_inr, value_inr …) into the workspace's own display currency, so those stay."""
+    if isinstance(payload, dict):
+        return {
+            k: without_rupee_strings(v) for k, v in payload.items()
+            if not (isinstance(v, str) and "₹" in v)
+        }
+    if isinstance(payload, list):
+        return [without_rupee_strings(v) for v in payload if not (isinstance(v, str) and "₹" in v)]
+    return payload
+
+
 def usd_to_inr_paise(usd) -> int:
     """Convert a USD amount (Decimal/float) to INR paise at the live USD→INR rate
     (falls back to the static USD_TO_INR env value when the live rate is unavailable)."""
@@ -2218,7 +2235,8 @@ def infra_fee_state(db: Session, organization_id: int, *, currency: str | None =
         "fee_due": False,
         "paid_until": wallet.infra_fee_paid_until,
         "currency": code,
-        "price_options": money.price_options("infra_fee"),
+        # This workspace's own currency only (D-010) — never every country's ladder.
+        "price_options": [o for o in money.price_options("infra_fee") if o["currency"] == code],
     }
 
 
@@ -2342,11 +2360,14 @@ def actions_payload() -> list[dict]:
 
 
 def wallet_state(db: Session, organization_id: int, *, currency: str | None = None, read_only: bool = False) -> dict:
-    """Render the wallet; read-only views preserve the stored balance and grant period."""
+    """Render the wallet; read-only views preserve the stored balance and grant period.
+    Outside INR it carries no ₹ display string (without_rupee_strings, D-010)."""
     if read_only:
         with db.no_autoflush:
-            return _wallet_state(db, organization_id, currency=currency, read_only=True)
-    return _wallet_state(db, organization_id, currency=currency)
+            state = _wallet_state(db, organization_id, currency=currency, read_only=True)
+    else:
+        state = _wallet_state(db, organization_id, currency=currency)
+    return state if state.get("currency") == "INR" else without_rupee_strings(state)
 
 
 def _wallet_state(db: Session, organization_id: int, *, currency: str | None = None, read_only: bool = False) -> dict:

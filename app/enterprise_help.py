@@ -135,14 +135,6 @@ def _with_tax_note(text: str, currency: str) -> str:
     return f"{text} {note}" if note else text
 
 
-# Display names for the INR-region country codes. Wording only (no price or limit hangs on
-# it); an override of ENTERPRISE_INR_REGION_COUNTRIES with a code not listed here prints the
-# bare code, which is still correct.
-_COUNTRY_NAMES = {
-    "IN": "India", "NP": "Nepal", "BD": "Bangladesh", "LK": "Sri Lanka",
-    "NG": "Nigeria", "GH": "Ghana", "KE": "Kenya",
-}
-
 # How the tier-gated features read in prose, in billing.FEATURE_KEYS order. A key missing
 # here (a future feature) still prints, as its key with spaces.
 _FEATURE_WORDS = {
@@ -333,46 +325,37 @@ def _plans_block(currency: Optional[str] = None) -> str:
     else:
         lines.append(f"Plans are billed monthly (each payment covers {billing.PLAN_PERIOD_DAYS} days).")
 
-    # Currency region rule (billing.charge_currency_for_org). Codes from the live set.
-    region_names = sorted(
-        _COUNTRY_NAMES.get(c, c) for c in billing.INR_REGION_COUNTRIES if c != "IN"
-    )
-    others = [c for c in money.supported_charge_currencies() if c != "INR"]
-    region_text = (
-        f"Workspaces in India and {_join(region_names)} are billed in INR only (outside "
-        "India, Plans & Billing also shows an approximate US$ amount)."
-        if region_names else "Workspaces in India are billed in INR only."
-    )
-    # The geo-match sentence only while billing.INR_REQUIRE_GEO_MATCH is on — the guide must
-    # not describe a check the server isn't making.
+    # ONE currency per workspace (D-010; billing.charge_currency_for_org). Only this
+    # workspace's own currency is ever named — never the other countries' currencies, the
+    # INR region, or what anyone else pays.
     geo_text = (
-        " A workspace set to one of the INR countries but paying from a country outside them "
-        "is billed in that country's currency (or USD), not INR."
-        if billing.INR_REQUIRE_GEO_MATCH else ""
+        " A workspace whose company location is in India but which pays from another country "
+        "is billed in that country's own currency instead."
+        if currency == "INR" and billing.INR_REQUIRE_GEO_MATCH else ""
     )
     lines.append(
-        (f"Prices above are in {currency}, this workspace's billing currency. " if currency else "")
-        + region_text + " Workspaces in any other "
-        "country are billed at fixed prices in " + _join(others) + " — their own currency "
-        "where it's on that list, otherwise USD — and can't be billed in INR. The country is "
-        "the workspace's company location (Settings), or where you are browsing from if none "
-        "is set." + geo_text + " Once a plan has been paid for, the company location can only "
-        "be changed by Rilono support. Plans & Billing always shows the currency you will "
-        "actually be charged in."
+        (f"This workspace is billed in {currency}; every price above is in {currency}. " if currency else "")
+        + "The billing currency follows the workspace's company location (Settings), or where "
+        "you are browsing from if none is set; there is no currency to choose, and a running "
+        "plan keeps the currency it was bought in." + geo_text
+        + " Once a plan has been paid for, the company location can only be changed by Rilono "
+        "support. Plans & Billing always shows the currency you will actually be charged in."
     )
-    inr_methods = _inr_payment_methods_text()
-    if inr_methods:
-        lines.append(inr_methods)
+    if currency in (None, "INR"):
+        inr_methods = _inr_payment_methods_text()
+        if inr_methods:
+            lines.append(inr_methods)
 
-    # Tax. Worded from the live rate; at 0% nothing here may say "GST".
-    if money.tax_applies("INR"):
+    # Tax. Worded from the live rate; at 0% nothing here may say "GST". GST is an INR-only
+    # tax, so only a rupee-billed workspace (or one we can't place) is told about it.
+    if currency in (None, "INR") and money.tax_applies("INR"):
         lines.append(
-            f"INR prices are before tax: {_percent(money.tax_percent_for('INR'))}% GST is added "
-            f"at checkout (shown as \"{money.tax_note('INR')}\" next to the price). Other "
-            "currencies are billed without tax (zero-rated exports)."
+            f"{'Prices' if currency else 'INR prices'} are before tax: "
+            f"{_percent(money.tax_percent_for('INR'))}% GST is added at checkout (shown as "
+            f"\"{money.tax_note('INR')}\" next to the price)."
         )
     else:
-        lines.append("No tax is added at checkout: the listed price is the full price, in every currency.")
+        lines.append("No tax is added at checkout: the listed price is the full price.")
 
     # enterprise_credits.sync_plan_credits: trial -> paid is a new period (full grant); a
     # paid -> paid change inside a live period only tops up to the new tier.

@@ -393,7 +393,7 @@ def test_copilot_guide_states_the_live_client_link_allowance():
 def test_cache_busters_are_bumped_for_the_changed_assets():
     enterprise = _read("enterprise.html")
     # At least these bumps (same rule as the console below).
-    for asset, floor in (("enterprise.js", "20261022b"), ("enterprise.css", "20261022a")):
+    for asset, floor in (("enterprise.js", "20261024b"), ("enterprise.css", "20261024b")):
         match = re.search(rf"/static/{re.escape(asset)}\?v=(\w+)", enterprise)
         assert match and match.group(1) >= floor, asset
     assert "/static/app.js?v=20261022b" in _read("us_f1_visa.html")
@@ -402,7 +402,7 @@ def test_cache_busters_are_bumped_for_the_changed_assets():
     # versions compare as strings).
     for asset in ("admin_console.js", "admin_console.css"):
         match = re.search(rf"/static/{re.escape(asset)}\?v=(\w+)", console)
-        assert match and match.group(1) >= "20261023a", asset
+        assert match and match.group(1) >= "20261024a", asset
 
 
 # ---------------------------------------------------------------------------

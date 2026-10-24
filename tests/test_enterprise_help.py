@@ -216,15 +216,24 @@ def test_yearly_only_when_enabled(monkeypatch):
     assert f"{12 - money.YEARLY_PRICE_MONTHS} months free" in text
 
 
-def test_currency_region_rule_is_documented(full_text):
-    assert "billed in INR only" in full_text
-    assert "can't be billed in INR" in full_text
+def test_billing_currency_rule_names_only_the_workspaces_own_currency():
+    """D-010: one currency per workspace. The help names this workspace's currency and the
+    rule that decides it — never the other countries' currencies or the INR region."""
     for code in money.supported_charge_currencies():
+        text = help_mod.render_topic("credits-billing", currency=code)["content"]
+        assert f"This workspace is billed in {code}" in text
+        assert "there is no currency to choose" in text
+        for other in money.supported_charge_currencies():
+            if other != code:
+                assert other not in text, (code, other)
+        for name in ("Nepal", "Bangladesh", "Sri Lanka", "Nigeria", "Ghana", "Kenya"):
+            assert name not in text, (code, name)
         if code != "INR":
-            assert code in full_text, f"charge currency {code} missing from the region rule"
-    for code in billing.INR_REGION_COUNTRIES - {"IN"}:
-        name = help_mod._COUNTRY_NAMES.get(code, code)
-        assert name in full_text, f"INR-region country {code} missing"
+            assert "rupee" not in text.lower() and "₹" not in text, code
+    # No currency known: the rule, but no currency named at all.
+    text = help_mod.render_topic("credits-billing")["content"]
+    assert "This workspace is billed in" not in text
+    assert "there is no currency to choose" in text
 
 
 def test_coupon_cap_is_documented(full_text):
@@ -443,7 +452,7 @@ def test_a_foreign_workspace_is_quoted_its_own_currency_and_never_rupees():
     assert "₹" not in content
     for display in _inr_enterprise_prices():
         assert display not in content
-    assert "Prices above are in USD" in content
+    assert "This workspace is billed in USD" in content
 
 
 def test_an_indian_workspace_is_quoted_rupees_and_never_the_foreign_ladder():
@@ -474,3 +483,27 @@ def test_assistant_credit_pricing_uses_the_workspace_currency(monkeypatch):
     assert [p["price"] for p in pricing["packs"]] == [p["amount_display"] for p in credits.packages_payload("USD")]
     help_tool = next(t for t in tools if t.__name__ == "get_product_help")
     assert "₹" not in help_tool("credits-billing")["content"]
+
+
+def test_assistant_uses_the_currency_the_router_resolved_and_drops_rupees(monkeypatch):
+    """The router resolves the currency WITH the request and hands it to the assistant; the
+    request-less lookup (which would say INR for an INR-claiming office in London) is never
+    reached, and wallet/spend payloads lose every rupee figure (D-010)."""
+    from app import enterprise_ai
+    monkeypatch.setattr(billing, "charge_currency_for_org",
+                        lambda *a, **k: (_ for _ in ()).throw(AssertionError("request-less lookup used")))
+    monkeypatch.setattr(credits, "wallet_state", lambda db, org_id, currency=None, **k: {
+        "balance_credits": 120, "credit_value_inr": 10, "balance_display": "₹1,200", "paise_per_credit": 1000,
+        "currency": currency, "nested": {"value_inr": 5, "label": "ok", "note": "₹50 worth"},
+        "infra_fee": {"fee_display": "₹999"},
+    })
+    tools = enterprise_ai.build_org_tools(None, 1, ctx=_viewer_ctx(), viewer_user_id=1, billing_currency="GBP")
+    wallet = next(t for t in tools if t.__name__ == "get_credit_wallet")()
+    assert wallet == {"balance_credits": 120, "currency": "GBP", "nested": {"label": "ok"}}
+    help_tool = next(t for t in tools if t.__name__ == "get_product_help")
+    content = help_tool("credits-billing")["content"]
+    assert "This workspace is billed in GBP" in content and "₹" not in content
+    # An INR-billed workspace keeps its rupee figures.
+    tools = enterprise_ai.build_org_tools(None, 1, ctx=_viewer_ctx(), viewer_user_id=1, billing_currency="INR")
+    wallet = next(t for t in tools if t.__name__ == "get_credit_wallet")()
+    assert wallet["balance_display"] == "₹1,200" and wallet["credit_value_inr"] == 10
