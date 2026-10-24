@@ -12,20 +12,26 @@ Lifecycle: pending → in_progress / on_hold → done → closed. "Done" is the 
 board. So the assignee moves a task anywhere up to Done, but only its creator (or a team
 manager) can close it, or reopen it once closed. Everything else is open to anyone on the
 task — the timeline records who did what.
+
+Files (screenshots, invoices, exports) attach to a task and follow its visibility exactly;
+app/admin_task_files.py has the storage rules. Adding or removing one is recorded on the
+timeline but emails nobody: a new task's files upload one by one right after it is created,
+and a burst of "added a file" emails would bury the assignment itself.
 """
 
 import logging
+import os
 import re
 from dataclasses import dataclass
 from datetime import date, datetime, timezone
 from typing import Literal
 
-from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Path, Request, Response
+from fastapi import APIRouter, BackgroundTasks, Depends, File, HTTPException, Path, Request, Response, UploadFile
 from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy import func, or_
 from sqlalchemy.orm import Session
 
-from app import admin_access, admin_sessions, email_service, models
+from app import admin_access, admin_sessions, admin_task_files, email_service, enterprise_storage, models
 from app.admin_access import console_section, get_current_admin_user
 from app.auth import is_enterprise_only_account
 from app.database import get_db
@@ -63,6 +69,9 @@ TIMELINE_LIMIT = 500
 READ_RATE_LIMIT = 240
 WRITE_RATE_LIMIT = 90
 RATE_WINDOW_SECONDS = 60
+# Uploads are cheap to send and cost storage forever, so they get their own hourly ceiling.
+UPLOAD_RATE_LIMIT = int(os.getenv("ADMIN_TASK_UPLOAD_RATE_LIMIT", "120"))
+UPLOAD_RATE_WINDOW_SECONDS = 3600
 # C0 controls (minus tab/newline) and DEL. Postgres refuses NUL outright, so letting one
 # through turns a pasted log line into a 500.
 _CONTROL_CHARS = re.compile(r"[\x00-\x08\x0b-\x1f\x7f]")
@@ -256,7 +265,64 @@ def _note_counts(db: Session, task_ids: list[int]) -> dict[int, int]:
     return {task_id: int(count) for task_id, count in rows}
 
 
-def _serialize_task(task, viewer: _Viewer, people: dict, members: dict, note_count: int) -> dict:
+def _attachment_counts(db: Session, task_ids: list[int]) -> dict[int, int]:
+    if not task_ids:
+        return {}
+    rows = (db.query(models.AdminTeamTaskAttachment.task_id, func.count(models.AdminTeamTaskAttachment.id))
+            .filter(models.AdminTeamTaskAttachment.task_id.in_(task_ids))
+            .group_by(models.AdminTeamTaskAttachment.task_id).all())
+    return {task_id: int(count) for task_id, count in rows}
+
+
+def _attachments_of(db: Session, task_id: int) -> list[models.AdminTeamTaskAttachment]:
+    return (db.query(models.AdminTeamTaskAttachment)
+            .filter(models.AdminTeamTaskAttachment.task_id == task_id)
+            .order_by(models.AdminTeamTaskAttachment.id.asc()).all())
+
+
+def _attachment_or_404(db: Session, task, attachment_id: int) -> models.AdminTeamTaskAttachment:
+    row = (db.query(models.AdminTeamTaskAttachment)
+           .filter(models.AdminTeamTaskAttachment.id == attachment_id,
+                   models.AdminTeamTaskAttachment.task_id == task.id).first())
+    if row is None:
+        raise HTTPException(404, "File not found.")
+    return row
+
+
+def _can_remove_attachment(row, task, viewer: _Viewer) -> bool:
+    # Whoever added it, and whoever could delete the whole task anyway.
+    return viewer.oversees_all or viewer.user.id in (row.uploaded_by_user_id, task.created_by_user_id)
+
+
+def _serialize_attachment(row, task, viewer: _Viewer, people: dict, members: dict) -> dict:
+    ext = admin_task_files.extension_of(row.original_filename)
+    return {
+        "id": row.id,
+        "filename": row.original_filename,
+        "size": int(row.file_size or 0),
+        "size_label": admin_task_files.human_size(row.file_size or 0),
+        "ext": ext.lstrip("."),
+        "is_image": ext in admin_task_files.PREVIEW_EXT,
+        "url": f"/api/admin/tasks/{task.id}/attachments/{row.id}",
+        "uploaded_by": _person(people.get(row.uploaded_by_user_id), members),
+        "created_at": _iso(row.created_at),
+        "can_delete": _can_remove_attachment(row, task, viewer),
+    }
+
+
+def _attachment_limits() -> dict:
+    """What the console checks before uploading, so a refusal is instant and worded the
+    same as the server's."""
+    return {
+        "max_files": admin_task_files.MAX_FILES_PER_TASK,
+        "max_file_bytes": admin_task_files.MAX_BYTES_PER_FILE,
+        "max_total_bytes": admin_task_files.MAX_BYTES_PER_TASK,
+        "extensions": sorted(ext.lstrip(".") for ext in admin_task_files.ALLOWED_EXT),
+    }
+
+
+def _serialize_task(task, viewer: _Viewer, people: dict, members: dict, note_count: int,
+                    attachment_count: int = 0) -> dict:
     return {
         "id": task.id,
         "title": task.title,
@@ -270,6 +336,7 @@ def _serialize_task(task, viewer: _Viewer, people: dict, members: dict, note_cou
         "updated_at": _iso(task.updated_at),
         "status_changed_at": _iso(task.status_changed_at),
         "note_count": note_count,
+        "attachment_count": attachment_count,
         "can_edit": _is_visible(task, viewer),
         "can_delete": _can_delete(task, viewer),
         "can_close": _can_close(task, viewer),
@@ -299,7 +366,9 @@ def _detail(db: Session, task, viewer: _Viewer, members: dict) -> dict:
                .filter(models.AdminTeamTaskNote.task_id == task.id)
                .order_by(models.AdminTeamTaskNote.created_at.desc(), models.AdminTeamTaskNote.id.desc())
                .limit(TIMELINE_LIMIT).all())
+    attachments = _attachments_of(db, task.id)
     ids = {task.assignee_user_id, task.created_by_user_id}
+    ids.update(row.uploaded_by_user_id for row in attachments)
     for entry in entries:
         ids.add(entry.author_user_id)
         if entry.kind in {"assignee", "created"}:
@@ -320,7 +389,8 @@ def _detail(db: Session, task, viewer: _Viewer, members: dict) -> dict:
     } for entry in entries]
     return {
         "visible": True,
-        "task": _serialize_task(task, viewer, people, members, note_count),
+        "task": _serialize_task(task, viewer, people, members, note_count, len(attachments)),
+        "attachments": [_serialize_attachment(row, task, viewer, people, members) for row in attachments],
         "timeline": timeline,
     }
 
@@ -418,14 +488,17 @@ def list_tasks(
     tasks = open_tasks + closed_tasks
     people = _people(db, {uid for task in tasks for uid in (task.assignee_user_id, task.created_by_user_id)}, members)
     counts = _note_counts(db, [task.id for task in tasks])
+    files = _attachment_counts(db, [task.id for task in tasks])
     roster = sorted(members.values(), key=lambda user: (_display_name(user).lower(), user.id))
     return {
         "me": current_user.id,
         "can_view_all": viewer.oversees_all,
         "members": [{"id": user.id, "name": _display_name(user)} for user in roster],
-        "tasks": [_serialize_task(task, viewer, people, members, counts.get(task.id, 0)) for task in tasks],
+        "tasks": [_serialize_task(task, viewer, people, members, counts.get(task.id, 0), files.get(task.id, 0))
+                  for task in tasks],
         "closed_total": closed_total,
         "truncated": truncated,
+        "attachment_limits": _attachment_limits(),
     }
 
 
@@ -612,9 +685,15 @@ def delete_task(
     task = _task_or_404(db, viewer, task_id, lock=True)
     if not _can_delete(task, viewer):
         raise HTTPException(403, "Only the person who created this task, or a team manager, can delete it.")
+    # Collected before the rows go: the FK cascade would tidy the rows, but nothing tidies storage.
+    keys = [key for (key,) in db.query(models.AdminTeamTaskAttachment.storage_key)
+            .filter(models.AdminTeamTaskAttachment.task_id == task.id).all()]
+    db.query(models.AdminTeamTaskAttachment).filter(
+        models.AdminTeamTaskAttachment.task_id == task.id).delete(synchronize_session=False)
     db.query(models.AdminTeamTaskNote).filter(models.AdminTeamTaskNote.task_id == task.id).delete(synchronize_session=False)
     db.delete(task)
     db.commit()
+    admin_task_files.drop_blobs(keys)
     return {"id": task_id, "message": "Task deleted."}
 
 
@@ -667,4 +746,115 @@ def delete_task_note(
         raise HTTPException(403, "You can only delete notes you wrote.")
     db.delete(entry)
     db.commit()
+    return _detail(db, task, viewer, _team_members(db))
+
+
+@router.post("/{task_id}/attachments", status_code=201)
+@console_section(None, "access")
+def add_task_attachment(
+    request: Request,
+    task_id: int = Path(ge=1, le=DB_INT_MAX),
+    file: UploadFile = File(...),
+    current_user: models.User = Depends(get_current_admin_user),
+    db: Session = Depends(get_db),
+):
+    """Attach one file. Anyone who can see the task can add to it, closed tasks included,
+    the same as notes. A plain `def`: FastAPI runs it in the threadpool, so the blocking
+    storage PUT never stalls the event loop."""
+    _rate_limit(request, current_user, write=True)
+    admin_router._enforce_rate_limit_or_429(
+        request=request, scope="admin.tasks.upload", limit=UPLOAD_RATE_LIMIT,
+        window_seconds=UPLOAD_RATE_WINDOW_SECONDS, extra_key=f"user:{current_user.id}")
+    viewer = _viewer(db, current_user)
+    _task_or_404(db, viewer, task_id)  # a task you aren't on is a 404 before anything else
+    if not admin_task_files.is_configured():
+        raise HTTPException(503, "File storage isn't set up on this server, so files can't be attached yet.")
+    # One byte past the cap is enough to refuse it: never pull an oversized upload into memory.
+    data = file.file.read(admin_task_files.MAX_BYTES_PER_FILE + 1)
+    filename = admin_task_files.safe_filename(file.filename)
+    # Locked so two uploads at once can't both squeeze under the per-task caps.
+    task = _task_or_404(db, viewer, task_id, lock=True)
+    existing = (db.query(func.count(models.AdminTeamTaskAttachment.id),
+                         func.coalesce(func.sum(models.AdminTeamTaskAttachment.file_size), 0))
+                .filter(models.AdminTeamTaskAttachment.task_id == task.id).one())
+    try:
+        ext = admin_task_files.validate(filename=filename, size=len(data),
+                                        existing_count=int(existing[0]), existing_bytes=int(existing[1]))
+    except admin_task_files.AttachmentError as exc:
+        db.rollback()
+        raise HTTPException(400, str(exc))
+    key = admin_task_files.storage_key_for(task.id, ext)
+    try:
+        admin_task_files.store_blob(key, data)
+    except Exception:
+        db.rollback()
+        logger.exception("Could not store a task attachment (task_id=%s)", task.id)
+        raise HTTPException(502, "Could not upload that file right now. Please try again.")
+    now = _now()
+    db.add(models.AdminTeamTaskAttachment(task_id=task.id, uploaded_by_user_id=current_user.id,
+                                          original_filename=filename, storage_key=key,
+                                          file_size=len(data), created_at=now))
+    db.add(models.AdminTeamTaskNote(task_id=task.id, author_user_id=current_user.id, kind="attachment",
+                                    to_value=filename, created_at=now))
+    task.updated_at = now
+    try:
+        db.commit()
+    except Exception:
+        # The bytes are in the bucket but no row points at them: drop them now, or pay forever.
+        db.rollback()
+        logger.exception("Could not save a task attachment (task_id=%s)", task.id)
+        admin_task_files.drop_blobs([key])
+        raise HTTPException(502, "Could not attach that file right now. Please try again.")
+    db.refresh(task)
+    return _detail(db, task, viewer, _team_members(db))
+
+
+@router.get("/{task_id}/attachments/{attachment_id}")
+@console_section(None, "access")
+def download_task_attachment(
+    request: Request,
+    task_id: int = Path(ge=1, le=DB_INT_MAX),
+    attachment_id: int = Path(ge=1, le=DB_INT_MAX),
+    current_user: models.User = Depends(get_current_admin_user),
+    db: Session = Depends(get_db),
+):
+    _rate_limit(request, current_user, write=False)
+    viewer = _viewer(db, current_user)
+    task = _task_or_404(db, viewer, task_id)
+    row = _attachment_or_404(db, task, attachment_id)
+    try:
+        data = admin_task_files.fetch_blob(row.storage_key)
+    except enterprise_storage.DocumentNotFound:
+        raise HTTPException(410, "This file is no longer in storage. Ask whoever added it to attach it again.")
+    except Exception:
+        logger.exception("Could not fetch a task attachment (attachment_id=%s)", row.id)
+        raise HTTPException(502, "Could not open that file right now. Please try again.")
+    media_type, headers = admin_task_files.download_headers(row.original_filename)
+    return Response(content=data, media_type=media_type, headers=headers)
+
+
+@router.delete("/{task_id}/attachments/{attachment_id}")
+@console_section(None, "access")
+def delete_task_attachment(
+    request: Request,
+    task_id: int = Path(ge=1, le=DB_INT_MAX),
+    attachment_id: int = Path(ge=1, le=DB_INT_MAX),
+    current_user: models.User = Depends(get_current_admin_user),
+    db: Session = Depends(get_db),
+):
+    _rate_limit(request, current_user, write=True)
+    viewer = _viewer(db, current_user)
+    task = _task_or_404(db, viewer, task_id, lock=True)
+    row = _attachment_or_404(db, task, attachment_id)
+    if not _can_remove_attachment(row, task, viewer):
+        raise HTTPException(403, "Only the person who added this file, or whoever assigned the task, can remove it.")
+    key, filename = row.storage_key, row.original_filename
+    now = _now()
+    db.delete(row)
+    db.add(models.AdminTeamTaskNote(task_id=task.id, author_user_id=current_user.id, kind="attachment_removed",
+                                    from_value=filename, created_at=now))
+    task.updated_at = now
+    db.commit()
+    admin_task_files.drop_blobs([key])  # row first, blob second
+    db.refresh(task)
     return _detail(db, task, viewer, _team_members(db))

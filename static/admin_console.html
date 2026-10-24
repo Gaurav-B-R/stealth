@@ -863,6 +863,21 @@
         </div>
     </div>
 
+    <!-- Task attachment preview. Outside the task overlay: its backdrop blur would anchor this to the overlay's scroll -->
+    <div id="adminTaskLightbox" class="tasks-lightbox" role="dialog" aria-modal="true" aria-labelledby="adminTaskLightboxName" hidden>
+        <div class="tasks-lightbox-bar">
+            <span id="adminTaskLightboxName" class="tasks-lightbox-name"></span>
+            <span id="adminTaskLightboxCount" class="tasks-lightbox-count" hidden></span>
+            <button id="adminTaskLightboxDownload" type="button" class="tasks-lightbox-btn">Download</button>
+            <button id="adminTaskLightboxClose" type="button" class="tasks-lightbox-btn tasks-lightbox-close" aria-label="Close preview">&times;</button>
+        </div>
+        <div id="adminTaskLightboxStage" class="tasks-lightbox-stage">
+            <button id="adminTaskLightboxPrev" type="button" class="tasks-lightbox-step is-prev" aria-label="Previous image" hidden>&#8249;</button>
+            <img id="adminTaskLightboxImg" alt="">
+            <button id="adminTaskLightboxNext" type="button" class="tasks-lightbox-step is-next" aria-label="Next image" hidden>&#8250;</button>
+        </div>
+    </div>
+
     <!-- Full-screen account "Manage" view (opens over the console) -->
     <div id="adminAccountDetail" class="account-detail-overlay" hidden>
         <div class="account-detail-topbar">

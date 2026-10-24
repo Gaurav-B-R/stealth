@@ -443,13 +443,25 @@
     const code = curCode(currency);
     const cur = orgCur();
     if (!cur || code !== "INR") return fmtMoney(minor, code);
-    const v = minorToMajor(minor, "INR") * Number(cur.rate_from_inr);
-    return cur.symbol + v.toLocaleString("en-US", { maximumFractionDigits: v >= 1000 ? 0 : 2 });
+    const raw = minorToMajor(minor, "INR") * Number(cur.rate_from_inr);
+    // Whole amounts drop decimals; a fractional one shows both ("$4.80", never "$4.8") —
+    // the same rule as fmtMoney, so a converted credit value reads like a price.
+    const v = raw >= 1000 ? Math.round(raw) : Math.round(raw * 100) / 100;
+    const digits = Number.isInteger(v) ? 0 : 2;
+    return cur.symbol + v.toLocaleString("en-US", { minimumFractionDigits: digits, maximumFractionDigits: digits });
   }
   // A handful of API fields are INR *major* units (plain rupees: credit_value_inr,
   // value_inr, min_fee_rupees). Explicitly INR by definition of the field, not a guess.
   function fmtInr(amountInr) {
     return fmtDisplay(Math.round(Number(amountInr || 0) * 100), "INR");
+  }
+  // What N credits are worth, in the org's display currency. The analytics payloads also
+  // carry a server-formatted `value_display`, but that is always a ₹ string — printing it
+  // showed a London office "₹400" on the Usage tab (D-010). Credits are an INR unit of
+  // account, so their value goes through the same converter as every other rupee figure.
+  function crWorth(credits) {
+    const w = (creditsUi.wallet || {}).wallet || {};
+    return fmtInr(Number(credits || 0) * (w.credit_value_inr || 10));
   }
   // Same fields, but where the figure must stay INR because the thing it describes is
   // INR-only (the Razorpay Route fee on student collections). No display conversion.
@@ -10794,7 +10806,17 @@
         // eventual charge are quotes of the same price. undefined (old payload) is
         // dropped by JSON.stringify, keeping the body old-server compatible.
         res = await api("/coupons/validate", { method: "POST", body: { code, context: "billing", plan: target.key, billing_cycle: billingCycleNow(), currency: billingCurrencyHint(target.key) } });
-      } catch (ex) { toast(ex.message || "Invalid discount code.", "error"); return; }
+      } catch (ex) {
+        toast(ex.message || "Invalid discount code.", "error");
+        // Stale prices (see checkout()): re-fetch, but only while still on this page, and
+        // put the code the buyer typed back into the fresh input.
+        if (ex.status === 409 && state.view === "billing") {
+          await renderBilling();
+          const again = $("#billingCouponInput");
+          if (again) { again.value = code; syncCouponApply("billingCouponInput"); }
+        }
+        return;
+      }
       state.billingCoupon = { code: res.code, percent: res.percent_off, percent_display: res.percent_display };
       toast(res.percent_display + " discount applied.", "success");
       renderBilling();
@@ -10837,7 +10859,15 @@
     // authority on the amount. Per billingCurrencyHint() it is the currency the buyer
     // was actually SHOWN on the card, and it is absent entirely on an old payload.
     try { res = await api("/billing/checkout", { method: "POST", body: { plan, billing_cycle: billingCycleNow(), coupon_code: couponCode, currency: billingCurrencyHint(plan) } }); }
-    catch (ex) { toast(ex.message, "error"); release(); return; }
+    catch (ex) {
+      toast(ex.message, "error");
+      release();
+      // 409: what this page shows is out of date — most often a currency it was rendered
+      // with that is no longer this workspace's ONE currency (D-010). Re-fetch so the next
+      // click is on the prices the server will actually charge, instead of failing forever.
+      if (ex.status === 409 && state.view === "billing") renderBilling();
+      return;
+    }
     if (res.action === "contact_sales") { toast(res.message || "Please contact sales.", "error"); release(); return; }
     // A 100%-off coupon covers the whole charge, so there is no Razorpay step — the server
     // has already activated the plan and granted the credits.
@@ -11259,8 +11289,7 @@
       ${topupBlocked ? `<p class="cr-topup-blocked">${esc(pausedNote)} Top-ups are add-ons to an active plan or trial.</p>` : ""}
       ${canManage && !topupBlocked ? couponRow(coupon, "applyCreditCoupon", "removeCreditCoupon", "creditCouponInput", "top-ups") : ""}
       <div class="plan-grid">${packages.map(pkgCard).join("")}</div>
-      <p style="text-align:center;color:var(--muted);font-size:13px;margin:14px 0 28px">Secure top-ups via Razorpay (UPI, cards, NetBanking).${
-        pkgCurrencies(packages).length > 1 ? " Pick your billing currency at checkout." : ""} Purchased top-up credits never expire; your plan's monthly allowance refreshes each period.</p>
+      <p style="text-align:center;color:var(--muted);font-size:13px;margin:14px 0 28px">Secure top-ups via Razorpay (UPI, cards, NetBanking). Purchased top-up credits never expire; your plan's monthly allowance refreshes each period.</p>
 
       <div class="card cr-free-card"><div class="card-body">
         <div class="cr-free-head">Included free ${infoTip(
@@ -11342,7 +11371,9 @@
       return acc;
     }, []);
     const sum = p.summary || {};
-    const onlyInr = rowCurrencies.every((code) => code === "INR");
+    // `[].every()` is true: with no purchases this would print "₹0 paid" to a workspace
+    // billed in any currency (D-010). Only a non-empty, all-INR history earns that note.
+    const onlyInr = rowCurrencies.length > 0 && rowCurrencies.every((code) => code === "INR");
     const collectedNote = onlyInr ? ` · ${esc(sum.collected_display || "₹0")} paid` : "";
 
     mount.innerHTML = `
@@ -11546,7 +11577,7 @@
           <div class="cr-split-amt"><b>${x.credits_spent} cr</b><span> · ${x.share_pct}%</span></div>
         </div>
         ${usageBar(x.share_pct, color)}
-        <div class="cr-sub">${esc(x.value_display)}${x.price_credits ? ` · ${x.price_credits} cr each` : ""}</div>
+        <div class="cr-sub">${esc(crWorth(x.credits_spent))}${x.price_credits ? ` · ${x.price_credits} cr each` : ""}</div>
       </div>`;
     }).join("");
 
@@ -11584,7 +11615,7 @@
         <td><b>${esc(x.name)}</b>${x.is_rollup ? "" : (x.exists ? "" : ` <span class="cr-sub-inline">(removed)</span>`)}</td>
         <td class="cr-chips">${chips || '<span class="cr-sub">—</span>'}</td>
         <td style="text-align:right">${x.units}</td>
-        <td style="text-align:right;white-space:nowrap"><b>${x.credits_spent} cr</b><div class="cr-sub">${esc(x.value_display)}</div></td>
+        <td style="text-align:right;white-space:nowrap"><b>${x.credits_spent} cr</b><div class="cr-sub">${esc(crWorth(x.credits_spent))}</div></td>
         <td style="text-align:right">${x.share_pct}%</td>
         <td style="white-space:nowrap" class="cr-sub">${x.last_used_at ? fmtDate(x.last_used_at) : "—"}</td>
       </tr>`;
@@ -11708,7 +11739,7 @@
         <td class="cr-chips">${chips || '<span class="cr-sub">No spend</span>'}</td>
         <td style="text-align:right">${p.units || 0}</td>
         <td style="text-align:right">${p.clients || 0}</td>
-        <td style="text-align:right;white-space:nowrap"><b>${p.credits} cr</b><div class="cr-sub">${esc(p.value_display || "")}</div></td>
+        <td style="text-align:right;white-space:nowrap"><b>${p.credits} cr</b><div class="cr-sub">${esc(crWorth(p.credits))}</div></td>
         <td class="cr-day-share">${usageBar(Math.round((p.credits / peak) * 100), "#6366f1")}
           <span class="cr-sub">${p.share_pct}% of period</span></td>
       </tr>`;
@@ -11795,7 +11826,11 @@
     // One column per billable feature, named by the server's own label — a key the
     // client doesn't know about yet must not reach the spreadsheet as "copilot_client".
     const features = (((creditsUi.wallet || {}).wallet || {}).actions || []).filter((x) => x && x.key);
-    const headers = ["Period", "Starts", "Ends", "Credits", "Value (INR)", "Actions", "Clients", "Share %"]
+    // Credit values in the workspace's display currency (= its billing currency, D-010), as
+    // on screen — never a raw rupee column for a workspace billed in another currency.
+    const dispCur = orgCur();
+    const creditUnit = (((creditsUi.wallet || {}).wallet || {}).credit_value_inr || 10) * (dispCur ? Number(dispCur.rate_from_inr) : 1);
+    const headers = ["Period", "Starts", "Ends", "Credits", `Value (${dispCur ? dispCur.code : "INR"})`, "Actions", "Clients", "Share %"]
       .concat(features.map((x) => ((CREDIT_ACTION_META[x.key] || {}).label || x.label || x.key) + " (cr)"))
       .concat(["Other usage (cr)"]);
     const body = points.map((p) => {
@@ -11804,7 +11839,7 @@
       (p.actions || []).forEach((a) => { byKey[a.key] = a.credits; });
       return [
         crPeriodLabel(p.key, bucket), span.start || "", span.end || "",
-        p.credits, p.credits * (((creditsUi.wallet || {}).wallet || {}).credit_value_inr || 10),
+        p.credits, Math.round(p.credits * creditUnit * 100) / 100,
         p.units || 0, p.clients || 0, p.share_pct || 0,
       ].concat(features.map((x) => byKey[x.key] || 0)).concat([byKey.other || 0]);
     });
@@ -13764,6 +13799,14 @@
         if (state.view === "credits") renderCredits();
         return;
       }
+      // 409 = this modal priced the pack in a currency that is no longer the workspace's ONE
+      // currency (D-010): close it and re-fetch the wallet so the prices are the real ones.
+      if (ex.status === 409) {
+        closeModal();
+        creditsUi.wallet = null;
+        if (state.view === "credits") renderCredits();
+        return;
+      }
       renderCheckout(); return;
     }
 
@@ -13920,16 +13963,15 @@
     // actually does to a number the consultancy recognises.
     //
     // This setting is PRESENTATION ONLY and the copy has to say so, because the two real
-    // currencies now differ from it and from each other: what Rilono bills you (chosen at
-    // checkout, from a per-currency price list) and what you collect from students
-    // (INR — Razorpay Route settles in nothing else). Claiming "payments are charged in
-    // INR" here stopped being true the moment we started creating non-INR orders.
+    // currencies can differ from it and from each other: what Rilono bills you (your
+    // workspace's ONE billing currency, shown on Plans & Billing — D-010) and what you collect
+    // from students (INR — Razorpay Route settles in nothing else).
     const curNote = dc.code === "INR"
       ? "Amounts across this portal display in <b>INR (₹)</b>."
       : `Amounts display in <b>${esc(dc.code)}</b> — a ₹10,000 fee shows as ` +
         `<b>${esc(dc.symbol || "")}${(10000 * Number(dc.rate_from_inr || 0)).toLocaleString(undefined, { maximumFractionDigits: 0 })}</b> ` +
-        "at today's rate, refreshed daily. This is display only: credit top-ups are " +
-        "charged in the currency you pick at checkout, and student payments you collect are always in INR.";
+        "at today's rate, refreshed daily. This is display only: plans and credit top-ups are " +
+        "billed in your workspace's billing currency (shown on Plans & Billing), and student payments you collect are always in INR.";
     const portalHost = (org.subdomain_slug || "") + "." + rootDomain();
     const membership = state.me.membership || {};
     const role = membership.role || "";

@@ -27,6 +27,16 @@ const TASK_PRIORITY_LABELS = Object.fromEntries(TASK_PRIORITIES.map((item) => [i
 const TASK_PRIORITY_RANK = { urgent: 0, high: 1, medium: 2, low: 3 };
 const TASK_SCOPES = ['mine', 'created', 'all'];
 const TASK_PREFS_KEY = 'rilonoAdminTaskPrefs';
+// Mirrors app/admin_task_files.py; the board's `attachment_limits` replaces it once loaded.
+const TASK_ATTACH_DEFAULTS = {
+    max_files: 20, max_file_bytes: 25 * 1024 * 1024, max_total_bytes: 100 * 1024 * 1024,
+    extensions: ['csv', 'doc', 'docx', 'gif', 'heic', 'jpeg', 'jpg', 'json', 'log', 'md', 'mov', 'mp4', 'pdf',
+        'png', 'ppt', 'pptx', 'txt', 'webm', 'webp', 'xls', 'xlsx']
+};
+const TASK_PREVIEW_EXTS = ['png', 'jpg', 'jpeg', 'webp', 'gif'];
+// Thumbnails are the full file, so very large images wait for a click instead.
+const TASK_THUMB_MAX_BYTES = 10 * 1024 * 1024;
+const TASK_CLIP_ICON = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m21.4 11.1-9.2 9.2a6 6 0 0 1-8.5-8.5l9.2-9.2a4 4 0 0 1 5.7 5.7l-9.2 9.2a2 2 0 0 1-2.8-2.8l8.5-8.5"/></svg>';
 
 const state = {
     authToken: null,
@@ -134,6 +144,15 @@ const refs = {
     taskModalTitle: document.getElementById('adminTaskModalTitle'),
     taskModalClose: document.getElementById('adminTaskModalClose'),
     taskModalBody: document.getElementById('adminTaskModalBody'),
+    taskLightbox: document.getElementById('adminTaskLightbox'),
+    taskLightboxStage: document.getElementById('adminTaskLightboxStage'),
+    taskLightboxImg: document.getElementById('adminTaskLightboxImg'),
+    taskLightboxName: document.getElementById('adminTaskLightboxName'),
+    taskLightboxCount: document.getElementById('adminTaskLightboxCount'),
+    taskLightboxPrev: document.getElementById('adminTaskLightboxPrev'),
+    taskLightboxNext: document.getElementById('adminTaskLightboxNext'),
+    taskLightboxDownload: document.getElementById('adminTaskLightboxDownload'),
+    taskLightboxClose: document.getElementById('adminTaskLightboxClose'),
     sessionBadge: document.getElementById('adminSessionBadge'),
     sidebar: document.getElementById('adminSidebar'),
     sidebarClose: document.getElementById('adminSidebarClose'),
@@ -684,11 +703,13 @@ function freshTaskState() {
     const prefs = readTaskPrefs();
     return { items: [], members: [], me: null, canViewAll: false, closedTotal: 0, truncated: false,
         loaded: false, loading: false, requestId: 0, scope: prefs.scope, search: '', person: '', showClosed: prefs.showClosed,
-        openId: null, detail: null, detailRequestId: 0, editing: false, saving: false, pendingOpenId: null, dragId: null };
+        openId: null, detail: null, detailRequestId: 0, editing: false, saving: false, pendingOpenId: null, dragId: null,
+        attachLimits: null, createFiles: [], fileUrls: new Map(), fileLoads: new Map(), lightboxId: null };
 }
 
 function clearTaskState() {
     const previous = state.tasks;
+    if (previous) releaseTaskFiles(previous);
     state.tasks = freshTaskState();
     state.tasks.requestId = (previous?.requestId || 0) + 1;
     state.tasks.detailRequestId = (previous?.detailRequestId || 0) + 1;
@@ -860,7 +881,9 @@ function renderTaskCard(task) {
     const priority = TASK_PRIORITY_LABELS[task.priority] || task.priority;
     const status = TASK_STATUS_LABELS[task.status] || task.status;
     const ready = taskReadyToClose(task);
-    const label = `${task.title}. ${status}${ready ? ', ready for you to close' : ''}, ${priority} priority${due ? `, ${due.text}` : ''}. ${personLabel}.`;
+    const files = Number(task.attachment_count) || 0;
+    const fileLabel = files ? ` ${files} file${files === 1 ? '' : 's'} attached.` : '';
+    const label = `${task.title}. ${status}${ready ? ', ready for you to close' : ''}, ${priority} priority${due ? `, ${due.text}` : ''}. ${personLabel}.${fileLabel}`;
     const draggable = task.can_edit && !(task.status === 'closed' && !task.can_close);
     return `<div class="tasks-card priority-${escapeHtml(task.priority)}" role="button" tabindex="0" data-task-id="${escapeHtml(task.id)}"
             draggable="${draggable ? 'true' : 'false'}" aria-label="${escapeHtml(label)}">
@@ -868,7 +891,7 @@ function renderTaskCard(task) {
         <p class="tasks-card-title">${escapeHtml(task.title)}</p>
         <div class="tasks-card-foot">
             <span class="tasks-card-person">${person || !mine ? taskAvatar(person) : ''}<span>${escapeHtml(personLabel)}</span></span>
-            <span class="tasks-card-signals">${due ? `<span class="tasks-due ${due.tone}">${escapeHtml(due.text)}</span>` : ''}${task.note_count ? `<span class="tasks-note-count" title="${escapeHtml(task.note_count)} note${task.note_count === 1 ? '' : 's'}"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 12a8 8 0 0 1-11.6 7.1L4 20l1-4.6A8 8 0 1 1 21 12Z"/></svg>${escapeHtml(task.note_count)}</span>` : ''}</span>
+            <span class="tasks-card-signals">${due ? `<span class="tasks-due ${due.tone}">${escapeHtml(due.text)}</span>` : ''}${task.note_count ? `<span class="tasks-note-count" title="${escapeHtml(task.note_count)} note${task.note_count === 1 ? '' : 's'}"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 12a8 8 0 0 1-11.6 7.1L4 20l1-4.6A8 8 0 1 1 21 12Z"/></svg>${escapeHtml(task.note_count)}</span>` : ''}${files ? `<span class="tasks-note-count" title="${files} file${files === 1 ? '' : 's'}">${TASK_CLIP_ICON}${files}</span>` : ''}</span>
         </div>
     </div>`;
 }
@@ -953,6 +976,7 @@ async function loadTasks({ quiet = false } = {}) {
         state.tasks.canViewAll = Boolean(payload.can_view_all);
         state.tasks.closedTotal = Number(payload.closed_total) || 0;
         state.tasks.truncated = Boolean(payload.truncated);
+        if (payload.attachment_limits && Array.isArray(payload.attachment_limits.extensions)) state.tasks.attachLimits = payload.attachment_limits;
         state.tasks.loaded = true;
         setTaskError();
         renderTaskPersonFilter();
@@ -1035,6 +1059,7 @@ function focusTaskDialog() {
 }
 
 function closeTaskModal() {
+    releaseTaskFiles(state.tasks);
     state.tasks.openId = null;
     state.tasks.detail = null;
     state.tasks.editing = false;
@@ -1067,6 +1092,7 @@ function taskModalHasDraft() {
     if (!body?.querySelector) return false;
     const note = body.querySelector('[data-task-form="note"] textarea');
     if (note && note.value.trim()) return true;
+    if (state.tasks.createFiles.length && body.querySelector('[data-task-form="create"]')) return true;
     if (state.tasks.editing || body.querySelector('[data-task-typing]')) return true;
     const create = body.querySelector('[data-task-form="create"]');
     return Boolean(create && [...create.querySelectorAll('input[type="text"], textarea')].some((field) => field.value.trim()));
@@ -1089,6 +1115,7 @@ function setTaskSaving(saving) {
 async function openTaskCreate() {
     if (!canWriteSection('tasks') || state.tasks.saving) return;
     if (!state.tasks.loaded) { await loadTasks(); if (!state.tasks.loaded) return; }
+    releaseTaskFiles(state.tasks);
     state.tasks.openId = null; state.tasks.detail = null; state.tasks.editing = false;
     state.tasks.detailRequestId += 1;
     const me = taskMe();
@@ -1100,6 +1127,10 @@ async function openTaskCreate() {
     refs.taskModalBody.innerHTML = `<form class="tasks-form" data-task-form="create" novalidate>
         <label class="tasks-field"><span>Title</span><input type="text" name="title" maxlength="200" required placeholder="What needs to be done?" autocomplete="off"></label>
         <label class="tasks-field"><span>Details <span class="tasks-optional">(optional)</span></span><textarea name="description" rows="4" maxlength="5000" placeholder="Context, links, and what “done” looks like"></textarea></label>
+        <div class="tasks-field"><span id="adminTaskCreateFilesLabel">Attachments <span class="tasks-optional">(optional)</span></span>
+            ${renderTaskDropzone({ labelledBy: 'adminTaskCreateFilesLabel' })}
+            <ul class="tasks-file-queue" data-task-file-queue aria-label="Files to attach" hidden></ul>
+        </div>
         <div class="tasks-form-grid">
             <label class="tasks-field"><span>Assign to</span><select name="assignee_user_id">${taskAssigneeOptions(defaultAssignee)}</select></label>
             <label class="tasks-field"><span>Priority</span><select name="priority">${taskOptions(TASK_PRIORITIES, 'medium')}</select></label>
@@ -1132,21 +1163,45 @@ async function submitTaskCreate(form) {
     try { payload = readTaskCreateForm(form); } catch (error) { setTaskModalError(error.message); form.querySelector('[name="title"]')?.focus(); return; }
     if (!await ensureAdminProtection({ silent: false })) return;
     setTaskModalError(); setTaskSaving(true);
+    const submit = form.querySelector?.('button[type="submit"]');
+    const submitLabel = submit?.textContent || 'Create task';
+    let created = null;
     try {
+        if (submit) submit.textContent = 'Creating…';
         const response = await adminFetch(`${API_BASE}/api/admin/tasks`, {
             method: 'POST', headers: buildAuthHeaders({ 'Content-Type': 'application/json' }), credentials: 'same-origin', body: JSON.stringify(payload)
         });
         const result = await response.json().catch(() => ({}));
         if (!response.ok || !result.task) { setTaskModalError(normalizeErrorMessage(result, 'Could not create the task.')); return; }
-        upsertTask(result.task);
+        created = result.task;
+        upsertTask(created);
         // Show the task where it now lives, so creating one never looks like nothing happened.
-        if (!taskInScope(result.task)) { state.tasks.scope = taskInScope(result.task, 'mine') ? 'mine' : taskInScope(result.task, 'created') ? 'created' : 'all'; saveTaskPrefs(); }
+        if (!taskInScope(created)) { state.tasks.scope = taskInScope(created, 'mine') ? 'mine' : taskInScope(created, 'created') ? 'created' : 'all'; saveTaskPrefs(); }
+        // The task exists now, so from here on a failure must never offer "Create task" again.
+        const queued = state.tasks.createFiles.map((item) => item.file);
+        const upload = queued.length
+            ? await uploadTaskFiles(created.id, queued, (done, total) => { if (submit) submit.textContent = `Attaching ${done} of ${total}…`; })
+            : { payload: null, failures: [] };
+        if (upload.payload?.task) upsertTask(upload.payload.task);
+        if (upload.failures.length) {
+            clearTaskQueue(state.tasks);
+            await openTaskDetail(created.id);
+            setTaskFileError(`Task created, but ${taskFailureSummary(upload.failures)} Add ${upload.failures.length === 1 ? 'it' : 'them'} again here.`);
+            renderTaskBoard(); updateTaskBadgeFromItems();
+            return;
+        }
         closeTaskModal();
         renderTaskBoard(); updateTaskBadgeFromItems();
-        const assignee = result.task.assignee;
-        showFlash(assignee && Number(assignee.id) !== Number(taskMe()) ? `Task assigned to ${assignee.name}. They’ll get an email.` : 'Task created.', 'success');
-    } catch { setTaskModalError('Could not create the task. Please retry.'); }
-    finally { setTaskSaving(false); }
+        const assignee = created.assignee;
+        const attached = queued.length ? ` with ${queued.length} file${queued.length === 1 ? '' : 's'}` : '';
+        showFlash(assignee && Number(assignee.id) !== Number(taskMe()) ? `Task assigned to ${assignee.name}${attached}. They’ll get an email.` : `Task created${attached}.`, 'success');
+    } catch {
+        if (created) { clearTaskQueue(state.tasks); await openTaskDetail(created.id); setTaskFileError('Task created, but its files couldn’t be attached. Add them again here.'); }
+        else setTaskModalError('Could not create the task. Please retry.');
+    } finally {
+        if (submit?.isConnected) submit.textContent = submitLabel;
+        if (state.tasks.saving) setTaskSaving(false);
+    }
 }
 
 async function openTaskDetail(taskId) {
@@ -1186,7 +1241,11 @@ function applyTaskDetail(payload, { keepNote = true, endEdit = false } = {}) {
         closeTaskModal(); renderTaskBoard(); updateTaskBadgeFromItems();
         return false;
     }
-    state.tasks.detail = { task: payload.task, timeline: Array.isArray(payload.timeline) ? payload.timeline : [] };
+    state.tasks.detail = { task: payload.task, timeline: Array.isArray(payload.timeline) ? payload.timeline : [],
+        attachments: Array.isArray(payload.attachments) ? payload.attachments : [] };
+    // Previews of files that are gone (removed here or by a teammate) are released.
+    const live = new Set(state.tasks.detail.attachments.map((file) => Number(file.id)));
+    [...state.tasks.fileUrls.keys()].forEach((id) => { if (!live.has(id)) { URL.revokeObjectURL(state.tasks.fileUrls.get(id)); state.tasks.fileUrls.delete(id); } });
     if (endEdit) state.tasks.editing = false;
     upsertTask(payload.task);
     renderTaskBoard(); updateTaskBadgeFromItems();
@@ -1212,6 +1271,8 @@ function describeTaskEvent(entry) {
         const fields = String(entry.to || '').split(',').filter(Boolean).map((field) => escapeHtml(field));
         return `edited the ${fields.join(' and ') || 'task'}`;
     }
+    case 'attachment': return `attached ${strong(entry.to_label || entry.to)}`;
+    case 'attachment_removed': return `removed the file ${strong(entry.from_label || entry.from)}`;
     default: return 'updated this task';
     }
 }
@@ -1231,6 +1292,7 @@ function renderTaskDetail({ keepNote = true, keepEdit = true } = {}) {
     const detail = state.tasks.detail;
     if (!detail || !refs.taskModalBody) return;
     const { task, timeline } = detail;
+    const attachments = detail.attachments || [];
     // A status change made while a note or an edit is half-written must not wipe it.
     const sameTask = refs.taskModalBody.dataset?.taskId === String(task.id);
     const draftNote = keepNote && sameTask ? refs.taskModalBody.querySelector?.('[data-task-form="note"] textarea')?.value || '' : '';
@@ -1260,6 +1322,7 @@ function renderTaskDetail({ keepNote = true, keepEdit = true } = {}) {
                 <div class="tasks-section-head"><h4>Details</h4>${editable && !state.tasks.editing ? '<button type="button" class="tasks-link-btn" data-task-action="edit">Edit</button>' : ''}</div>
                 ${description}
             </section>
+            ${renderTaskAttachments(attachments, editable)}
             <section class="tasks-detail-section">
                 <div class="tasks-section-head"><h4>Notes &amp; activity</h4><span class="tasks-muted">${Number(task.note_count) || 0} note${Number(task.note_count) === 1 ? '' : 's'}</span></div>
                 ${editable ? `<form class="tasks-note-form" data-task-form="note" novalidate>
@@ -1298,6 +1361,7 @@ function renderTaskDetail({ keepNote = true, keepEdit = true } = {}) {
     if (edit && !wasEditing) edit.querySelector('[name="title"]')?.focus();
     else if (state.tasks.focusKey) refs.taskModalBody.querySelector?.(state.tasks.focusKey)?.focus?.({ preventScroll: true });
     state.tasks.focusKey = null;
+    hydrateTaskThumbnails();
 }
 
 async function patchTask(taskId, body, { endEdit = false } = {}) {
@@ -1483,6 +1547,460 @@ async function deleteTask() {
     finally { setTaskSaving(false); }
 }
 
+// ---- Attachments: screenshots and files on a task (app/admin_task_files.py) ----
+// A new task's files wait in the form and upload one by one once the task exists; on an
+// open task they upload straight away. Browse, drop anywhere on the dialog, or paste.
+
+let taskFileSeq = 0;
+
+function taskAttachLimits() {
+    return state.tasks.attachLimits || TASK_ATTACH_DEFAULTS;
+}
+
+function taskFileExt(name) {
+    const match = /\.([a-z0-9]{1,16})$/i.exec(String(name || '').trim());
+    return match ? match[1].toLowerCase() : '';
+}
+
+function formatTaskBytes(bytes) {
+    let value = Math.max(0, Number(bytes) || 0);
+    if (value < 1024) return `${Math.round(value)} B`;
+    for (const unit of ['KB', 'MB', 'GB']) {
+        value /= 1024;
+        if (value < 1024 || unit === 'GB') return `${value.toFixed(1).replace(/\.0$/, '')} ${unit}`;
+    }
+    return `${value.toFixed(1)} GB`;
+}
+
+function taskFileAttachment(fileId) {
+    return (state.tasks.detail?.attachments || []).find((file) => Number(file.id) === Number(fileId)) || null;
+}
+
+function renderTaskFileBadge(ext) {
+    return `<span class="tasks-file-badge" aria-hidden="true">${escapeHtml(String(ext || 'file').slice(0, 4))}</span>`;
+}
+
+function renderTaskFileInput() {
+    const accept = taskAttachLimits().extensions.map((ext) => `.${ext}`).join(',');
+    return `<input type="file" multiple hidden tabindex="-1" data-task-file-input accept="${escapeHtml(accept)}">`;
+}
+
+function renderTaskDropzone({ labelledBy = '' } = {}) {
+    return `<div class="tasks-dropzone" data-task-dropzone${labelledBy ? ` role="group" aria-labelledby="${labelledBy}"` : ''}>
+        ${renderTaskFileInput()}${TASK_CLIP_ICON}
+        <p><button type="button" class="tasks-link-btn" data-task-action="pick-files">Choose files</button> or drop them here. Paste a screenshot with Ctrl / ⌘ + V.</p>
+        <p class="tasks-muted">Images, PDFs, documents, spreadsheets or a screen recording, up to ${escapeHtml(formatTaskBytes(taskAttachLimits().max_file_bytes))} each</p>
+    </div>`;
+}
+
+function renderTaskFileQueue() {
+    const list = refs.taskModalBody?.querySelector?.('[data-task-file-queue]');
+    if (!list) return;
+    const items = state.tasks.createFiles;
+    list.hidden = !items.length;
+    list.innerHTML = items.map((item) => `<li class="tasks-file-chip">
+        ${item.preview ? `<img src="${escapeHtml(item.preview)}" alt="">` : renderTaskFileBadge(taskFileExt(item.file.name))}
+        <span class="tasks-file-chip-text"><span class="tasks-file-chip-name" title="${escapeHtml(item.file.name)}">${escapeHtml(item.file.name)}</span><span class="tasks-muted">${escapeHtml(formatTaskBytes(item.file.size))}</span></span>
+        <button type="button" class="tasks-file-remove" data-task-action="unqueue-file" data-file-key="${escapeHtml(item.key)}" aria-label="Don’t attach ${escapeHtml(item.file.name)}">&times;</button>
+    </li>`).join('');
+}
+
+function renderTaskAttachments(attachments, editable) {
+    const count = attachments.length;
+    const cards = attachments.map((file) => {
+        const id = Number(file.id);
+        const cached = state.tasks.fileUrls.get(id);
+        const thumb = file.is_image && (cached || Number(file.size) <= TASK_THUMB_MAX_BYTES);
+        const who = file.uploaded_by ? taskPersonName(file.uploaded_by) : 'Former member';
+        return `<li class="tasks-file-card">
+            <button type="button" class="tasks-file-thumb${thumb && !cached ? ' is-loading' : ''}" data-task-action="${file.is_image ? 'preview-file' : 'download-file'}" data-file-id="${id}" data-file-thumb="${id}" aria-label="${escapeHtml(`${file.is_image ? 'Preview' : 'Download'} ${file.filename}`)}">${thumb
+                ? `<img data-file-img="${id}" alt=""${cached ? ` src="${escapeHtml(cached)}"` : ''}>`
+                : renderTaskFileBadge(file.ext || taskFileExt(file.filename))}</button>
+            <div class="tasks-file-info">
+                <span class="tasks-file-name" title="${escapeHtml(file.filename)}">${escapeHtml(file.filename)}</span>
+                <span class="tasks-file-meta">${escapeHtml(file.size_label || formatTaskBytes(file.size))} · ${escapeHtml(who)} · <time datetime="${escapeHtml(file.created_at || '')}" title="${escapeHtml(formatDateTime(file.created_at))} UTC">${escapeHtml(formatRelativeTime(file.created_at))}</time></span>
+                <span class="tasks-file-actions"><button type="button" class="tasks-link-btn" data-task-action="download-file" data-file-id="${id}">Download</button>${file.can_delete ? `<button type="button" class="tasks-link-btn is-danger" data-task-action="remove-file" data-file-id="${id}">Remove</button>` : ''}</span>
+            </div>
+        </li>`;
+    }).join('');
+    let body;
+    if (count) {
+        const room = editable && count < taskAttachLimits().max_files;
+        body = `<ul class="tasks-files" aria-labelledby="adminTaskFilesHeading">${cards}</ul>${room ? `<div class="tasks-files-add" data-task-dropzone>${renderTaskFileInput()}<button type="button" class="tasks-link-btn" data-task-action="pick-files">${TASK_CLIP_ICON}Add files</button><span class="tasks-muted">or drop them here, or paste a screenshot</span></div>` : ''}`;
+    } else {
+        body = editable ? renderTaskDropzone({ labelledBy: 'adminTaskFilesHeading' }) : '<p class="tasks-muted">No files attached.</p>';
+    }
+    return `<section class="tasks-detail-section tasks-attachments" data-task-attachments>
+        <div class="tasks-section-head"><h4 id="adminTaskFilesHeading">Attachments</h4>${count ? `<span class="tasks-muted">${count} file${count === 1 ? '' : 's'}</span>` : ''}</div>
+        ${body}
+        <p class="tasks-muted tasks-upload-status" data-task-upload-status role="status" hidden></p>
+        <p class="tasks-error" data-task-file-error role="alert" hidden></p>
+    </section>`;
+}
+
+function setTaskFileError(message = '') {
+    const line = refs.taskModalBody?.querySelector?.('[data-task-file-error]');
+    if (!line) { setTaskModalError(message); return; }
+    line.textContent = message;
+    line.hidden = !message;
+}
+
+function setTaskUploadStatus(message = '') {
+    const line = refs.taskModalBody?.querySelector?.('[data-task-upload-status]');
+    if (!line) return;
+    line.textContent = message;
+    line.hidden = !message;
+}
+
+function clearTaskQueue(tasks) {
+    (tasks?.createFiles || []).forEach((item) => { if (item.preview) URL.revokeObjectURL(item.preview); });
+    if (tasks) tasks.createFiles = [];
+}
+
+// Every preview is a blob URL holding the whole file in memory: let them all go when the
+// dialog closes or the person signs out.
+function releaseTaskFiles(tasks) {
+    if (!tasks) return;
+    closeTaskLightbox({ restoreFocus: false });
+    clearTaskQueue(tasks);
+    tasks.fileUrls?.forEach((url) => URL.revokeObjectURL(url));
+    tasks.fileUrls?.clear();
+    tasks.fileLoads?.clear();
+}
+
+function checkTaskFile(file, used) {
+    const limits = taskAttachLimits();
+    const ext = taskFileExt(file?.name);
+    if (!ext || !limits.extensions.includes(ext)) return 'That file type can’t be attached.';
+    if (!file.size) return 'That file is empty.';
+    if (file.size > limits.max_file_bytes) return `Each file can be up to ${formatTaskBytes(limits.max_file_bytes)}.`;
+    if (used.count >= limits.max_files) return `A task can hold ${limits.max_files} files.`;
+    if (used.bytes + file.size > limits.max_total_bytes) return `A task’s files can add up to ${formatTaskBytes(limits.max_total_bytes)}.`;
+    return '';
+}
+
+function taskFailureSummary(failures) {
+    if (failures.length === 1) return `“${failures[0].name}” couldn’t be attached: ${failures[0].message}`;
+    return `${failures.length} files couldn’t be attached: ${failures.map((item) => `“${item.name}” (${String(item.message).replace(/\.$/, '')})`).join(', ')}.`;
+}
+
+// Browsers call every pasted screenshot "image.png". Give it a name that sorts and reads.
+function nameTaskPastedFiles(files) {
+    if (typeof File !== 'function') return files;
+    const now = new Date();
+    const pad = (value) => String(value).padStart(2, '0');
+    const stamp = `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())} at ${pad(now.getHours())}.${pad(now.getMinutes())}.${pad(now.getSeconds())}`;
+    const typeExt = { 'image/png': 'png', 'image/jpeg': 'jpg', 'image/gif': 'gif', 'image/webp': 'webp' };
+    return files.map((file, index) => {
+        if (file.name && !/^image\.(png|jpe?g|gif|webp)$/i.test(file.name)) return file;
+        const ext = taskFileExt(file.name) || typeExt[file.type] || 'png';
+        const suffix = files.length > 1 ? ` (${index + 1})` : '';
+        return new File([file], `Screenshot ${stamp}${suffix}.${ext}`, { type: file.type, lastModified: file.lastModified });
+    });
+}
+
+function queueTaskFiles(files) {
+    const queue = state.tasks.createFiles;
+    const used = { count: queue.length, bytes: queue.reduce((sum, item) => sum + item.file.size, 0) };
+    const rejected = [];
+    files.forEach((file) => {
+        const problem = checkTaskFile(file, used);
+        if (problem) { rejected.push({ name: file.name, message: problem }); return; }
+        used.count += 1; used.bytes += file.size;
+        const previewable = TASK_PREVIEW_EXTS.includes(taskFileExt(file.name)) && file.size <= TASK_THUMB_MAX_BYTES;
+        queue.push({ key: `f${++taskFileSeq}`, file, preview: previewable ? URL.createObjectURL(file) : '' });
+    });
+    renderTaskFileQueue();
+    setTaskModalError(rejected.length ? taskFailureSummary(rejected) : '');
+}
+
+function unqueueTaskFile(key) {
+    const item = state.tasks.createFiles.find((entry) => entry.key === key);
+    if (!item) return;
+    if (item.preview) URL.revokeObjectURL(item.preview);
+    state.tasks.createFiles = state.tasks.createFiles.filter((entry) => entry !== item);
+    renderTaskFileQueue();
+    refs.taskModalBody?.querySelector?.('[data-task-action="pick-files"]')?.focus?.({ preventScroll: true });
+}
+
+async function uploadTaskFile(taskId, file) {
+    const body = new FormData();
+    body.append('file', file, file.name);
+    try {
+        const response = await adminFetch(`${API_BASE}/api/admin/tasks/${encodeURIComponent(taskId)}/attachments`, {
+            method: 'POST', headers: buildAuthHeaders(), credentials: 'same-origin', body
+        });
+        const payload = await response.json().catch(() => ({}));
+        if (response.ok && payload.task) return { ok: true, payload };
+        const message = response.status === 413 ? `Each file can be up to ${formatTaskBytes(taskAttachLimits().max_file_bytes)}.`
+            : response.status === 404 ? 'This task was deleted, or it isn’t shared with you any more.'
+                : normalizeErrorMessage(payload, 'The upload didn’t go through.');
+        return { ok: false, status: response.status, message };
+    } catch {
+        return { ok: false, status: 0, message: 'The upload was interrupted. Check your connection and try again.' };
+    }
+}
+
+// One at a time: each upload is checked against the task's caps as they stand.
+async function uploadTaskFiles(taskId, files, onProgress = () => {}) {
+    let payload = null;
+    const failures = [];
+    for (let index = 0; index < files.length; index += 1) {
+        onProgress(index + 1, files.length);
+        const result = await uploadTaskFile(taskId, files[index]);
+        if (result.ok) { payload = result.payload; continue; }
+        failures.push({ name: files[index].name, message: result.message });
+        if ([401, 403, 404, 409].includes(result.status)) {
+            // The task or the access is gone: the rest would fail the same way.
+            files.slice(index + 1).forEach((rest) => failures.push({ name: rest.name, message: result.message }));
+            break;
+        }
+    }
+    return { payload, failures };
+}
+
+async function uploadToOpenTask(files) {
+    const detail = state.tasks.detail;
+    if (!detail?.task?.can_edit || state.tasks.saving) return;
+    const taskId = Number(detail.task.id);
+    const used = { count: detail.attachments.length, bytes: detail.attachments.reduce((sum, file) => sum + (Number(file.size) || 0), 0) };
+    const rejected = [];
+    const accepted = files.filter((file) => {
+        const problem = checkTaskFile(file, used);
+        if (problem) { rejected.push({ name: file.name, message: problem }); return false; }
+        used.count += 1; used.bytes += file.size;
+        return true;
+    });
+    if (!accepted.length) { setTaskFileError(taskFailureSummary(rejected)); return; }
+    if (!await ensureAdminProtection({ silent: false })) return;
+    setTaskSaving(true); setTaskFileError(); setTaskModalError();
+    let failures = [];
+    try {
+        const upload = await uploadTaskFiles(taskId, accepted, (done, total) => setTaskUploadStatus(total > 1 ? `Uploading ${done} of ${total}…` : 'Uploading…'));
+        failures = upload.failures;
+        if (upload.payload && state.tasks.openId === taskId) applyTaskDetail(upload.payload);
+    } finally { setTaskSaving(false); }
+    if (state.tasks.openId !== taskId) return;
+    setTaskUploadStatus();
+    const problems = [...rejected, ...failures];
+    if (problems.length) setTaskFileError(taskFailureSummary(problems));
+    else setTaskUploadStatus(accepted.length === 1 ? 'File attached.' : `${accepted.length} files attached.`);
+}
+
+async function addTaskFiles(files) {
+    const target = taskFileTarget();
+    if (!target || !files?.length) return;
+    if (target === 'create') queueTaskFiles(files);
+    else await uploadToOpenTask(files);
+}
+
+function taskFileTarget() {
+    if (!refs.taskModal || refs.taskModal.hidden || state.tasks.saving) return null;
+    if (refs.taskLightbox && !refs.taskLightbox.hidden) return null;
+    if (refs.taskModalBody?.querySelector?.('[data-task-form="create"]')) return 'create';
+    if (state.tasks.detail?.task?.can_edit && refs.taskModalBody?.querySelector?.('[data-task-attachments]')) return 'detail';
+    return null;
+}
+
+async function fetchTaskFileBlob(file) {
+    const response = await adminFetch(`${API_BASE}${file.url}`, { headers: buildAuthHeaders(), credentials: 'same-origin' });
+    if (!response.ok) {
+        const payload = await response.json().catch(() => ({}));
+        throw new Error(normalizeErrorMessage(payload, 'Could not open this file. Please retry.'));
+    }
+    return response.blob();
+}
+
+// Image previews only: fetched once per dialog, kept until it closes.
+function loadTaskFileUrl(file) {
+    const tasks = state.tasks;
+    const id = Number(file.id);
+    if (tasks.fileUrls.has(id)) return Promise.resolve(tasks.fileUrls.get(id));
+    if (tasks.fileLoads.has(id)) return tasks.fileLoads.get(id);
+    const load = (async () => {
+        const blob = await fetchTaskFileBlob(file);
+        const url = URL.createObjectURL(blob);
+        // Closed, or signed out, while it loaded: nobody is left to show it to.
+        if (state.tasks !== tasks || tasks.fileLoads.get(id) !== load) { URL.revokeObjectURL(url); throw new Error('Closed before it loaded.'); }
+        tasks.fileUrls.set(id, url);
+        return url;
+    })();
+    tasks.fileLoads.set(id, load);
+    load.catch(() => {}).finally(() => { if (tasks.fileLoads.get(id) === load) tasks.fileLoads.delete(id); });
+    return load;
+}
+
+function hydrateTaskThumbnails() {
+    const detail = state.tasks.detail;
+    if (!detail || !refs.taskModalBody) return;
+    (detail.attachments || [])
+        .filter((file) => file.is_image && Number(file.size) <= TASK_THUMB_MAX_BYTES && !state.tasks.fileUrls.has(Number(file.id)))
+        .forEach((file) => {
+            const id = Number(file.id);
+            loadTaskFileUrl(file).then((url) => {
+                const img = refs.taskModalBody?.querySelector?.(`img[data-file-img="${id}"]`);
+                if (!img) return;
+                img.src = url;
+                img.closest?.('.tasks-file-thumb')?.classList.remove('is-loading');
+            }).catch(() => {
+                const thumb = refs.taskModalBody?.querySelector?.(`[data-file-thumb="${id}"]`);
+                if (thumb) { thumb.classList.remove('is-loading'); thumb.innerHTML = renderTaskFileBadge(file.ext); }
+            });
+        });
+}
+
+async function downloadTaskFile(fileId) {
+    const file = taskFileAttachment(fileId);
+    if (!file || !await ensureAdminProtection({ silent: false })) return;
+    setTaskFileError();
+    try {
+        const cached = state.tasks.fileUrls.get(Number(file.id));
+        const url = cached || URL.createObjectURL(await fetchTaskFileBlob(file));
+        const link = document.createElement('a');
+        link.href = url;
+        link.download = file.filename;
+        document.body.appendChild(link);
+        link.click();
+        link.remove();
+        // Revoke after the click so the download has a live URL to read from.
+        if (!cached) setTimeout(() => URL.revokeObjectURL(url), 2000);
+    } catch (error) {
+        setTaskFileError(error?.message || 'Could not download this file. Please retry.');
+    }
+}
+
+async function removeTaskFile(fileId) {
+    const task = state.tasks.detail?.task;
+    const file = taskFileAttachment(fileId);
+    if (!task || !file?.can_delete || state.tasks.saving) return;
+    if (!(await confirmDialog(`“${file.filename}” will be removed from this task for everyone.`, { title: 'Remove this file?', okText: 'Remove file' }))) return;
+    if (!await ensureAdminProtection({ silent: false })) return;
+    state.tasks.focusKey = '[data-task-action="pick-files"]';
+    setTaskSaving(true); setTaskFileError();
+    try {
+        const response = await adminFetch(`${API_BASE}${file.url}`, { method: 'DELETE', headers: buildAuthHeaders(), credentials: 'same-origin' });
+        const payload = await response.json().catch(() => ({}));
+        if (!response.ok) { setTaskFileError(normalizeErrorMessage(payload, 'Could not remove the file.')); return; }
+        if (state.tasks.openId === Number(task.id)) applyTaskDetail(payload);
+    } catch { setTaskFileError('Could not remove the file. Please retry.'); }
+    finally { setTaskSaving(false); }
+}
+
+function taskLightboxImages() {
+    return (state.tasks.detail?.attachments || []).filter((file) => file.is_image);
+}
+
+async function openTaskLightbox(fileId) {
+    const file = taskFileAttachment(fileId);
+    if (!file || !refs.taskLightbox) return;
+    const id = Number(file.id);
+    if (refs.taskLightbox.hidden) state.tasks.lightboxReturn = document.activeElement || null;
+    state.tasks.lightboxId = id;
+    const images = taskLightboxImages();
+    const position = images.findIndex((item) => Number(item.id) === id);
+    if (refs.taskLightboxName) refs.taskLightboxName.textContent = file.filename;
+    if (refs.taskLightboxCount) { refs.taskLightboxCount.textContent = images.length > 1 ? `${position + 1} of ${images.length}` : ''; refs.taskLightboxCount.hidden = images.length < 2; }
+    if (refs.taskLightboxPrev) refs.taskLightboxPrev.hidden = images.length < 2;
+    if (refs.taskLightboxNext) refs.taskLightboxNext.hidden = images.length < 2;
+    if (refs.taskLightboxImg) { refs.taskLightboxImg.removeAttribute('src'); refs.taskLightboxImg.alt = file.filename; }
+    refs.taskLightbox.classList.add('is-loading');
+    if (refs.taskLightbox.hidden) {
+        refs.taskLightbox.hidden = false;
+        if (refs.taskModal) refs.taskModal.inert = true;  // focus stays on the preview
+        refs.taskLightboxClose?.focus?.({ preventScroll: true });
+    }
+    try {
+        const url = await loadTaskFileUrl(file);
+        if (state.tasks.lightboxId !== id || !refs.taskLightboxImg) return;
+        refs.taskLightboxImg.src = url;
+        refs.taskLightbox.classList.remove('is-loading');
+    } catch (error) {
+        if (state.tasks.lightboxId !== id) return;
+        closeTaskLightbox();
+        setTaskFileError(error?.message || 'Could not open this file. Please retry.');
+    }
+}
+
+function stepTaskLightbox(direction) {
+    const images = taskLightboxImages();
+    if (images.length < 2 || !state.tasks.lightboxId) return;
+    const index = images.findIndex((item) => Number(item.id) === state.tasks.lightboxId);
+    void openTaskLightbox(images[(index + direction + images.length) % images.length].id);
+}
+
+function closeTaskLightbox({ restoreFocus = true } = {}) {
+    const tasks = state.tasks;
+    if (!refs.taskLightbox || refs.taskLightbox.hidden) { if (tasks) tasks.lightboxId = null; return; }
+    refs.taskLightbox.hidden = true;
+    refs.taskLightbox.classList.remove('is-loading');
+    refs.taskLightboxImg?.removeAttribute?.('src');
+    if (refs.taskModal) refs.taskModal.inert = false;
+    const back = tasks?.lightboxReturn;
+    if (tasks) { tasks.lightboxId = null; tasks.lightboxReturn = null; }
+    if (restoreFocus) (back?.isConnected ? back : refs.taskModal?.querySelector?.('[role="dialog"]'))?.focus?.({ preventScroll: true });
+}
+
+function transferHasFiles(transfer) {
+    return [...(transfer?.types || [])].includes('Files');
+}
+
+function filesFromTransfer(transfer) {
+    const files = [...(transfer?.files || [])];
+    if (files.length) return files;
+    return [...(transfer?.items || [])].filter((item) => item.kind === 'file').map((item) => item.getAsFile()).filter(Boolean);
+}
+
+function handleTaskPaste(event) {
+    if (!taskFileTarget()) return;
+    const transfer = event.clipboardData;
+    const files = filesFromTransfer(transfer);
+    if (!files.length) return;
+    let text = '';
+    try { text = transfer.getData('text/plain') || ''; } catch { /* no text on the clipboard */ }
+    // Copying cells from Excel or Sheets also puts a picture of them on the clipboard. Into
+    // a text field, the text is what was meant.
+    const field = event.target?.closest?.('textarea, input:not([type="file"])');
+    if (field && text.trim()) return;
+    event.preventDefault();
+    void addTaskFiles(nameTaskPastedFiles(files));
+}
+
+function bindTaskFileEvents() {
+    document.addEventListener?.('paste', handleTaskPaste);
+    refs.taskModal?.addEventListener('dragover', (event) => {
+        if (!transferHasFiles(event.dataTransfer)) return;
+        event.preventDefault();  // a dropped file must never replace the console
+        const accepting = Boolean(taskFileTarget());
+        try { event.dataTransfer.dropEffect = accepting ? 'copy' : 'none'; } catch { /* older browsers */ }
+        refs.taskModal.classList.toggle('is-file-over', accepting);
+    });
+    refs.taskModal?.addEventListener('dragleave', (event) => {
+        if (!event.relatedTarget || !refs.taskModal.contains(event.relatedTarget)) refs.taskModal.classList.remove('is-file-over');
+    });
+    refs.taskModal?.addEventListener('drop', (event) => {
+        if (!transferHasFiles(event.dataTransfer)) return;
+        event.preventDefault();
+        refs.taskModal.classList.remove('is-file-over');
+        void addTaskFiles(filesFromTransfer(event.dataTransfer));
+    });
+    // A file dropped on the board itself would open in place of the console.
+    refs.tasksTabPanel?.addEventListener('dragover', (event) => {
+        if (!transferHasFiles(event.dataTransfer)) return;
+        event.preventDefault();
+        try { event.dataTransfer.dropEffect = 'none'; } catch { /* older browsers */ }
+    });
+    refs.tasksTabPanel?.addEventListener('drop', (event) => { if (transferHasFiles(event.dataTransfer)) event.preventDefault(); });
+    refs.taskLightboxClose?.addEventListener('click', () => closeTaskLightbox());
+    refs.taskLightboxDownload?.addEventListener('click', () => { if (state.tasks.lightboxId) void downloadTaskFile(state.tasks.lightboxId); });
+    refs.taskLightboxPrev?.addEventListener('click', () => stepTaskLightbox(-1));
+    refs.taskLightboxNext?.addEventListener('click', () => stepTaskLightbox(1));
+    refs.taskLightbox?.addEventListener('click', (event) => { if (event.target === refs.taskLightbox || event.target === refs.taskLightboxStage) closeTaskLightbox(); });
+    refs.taskLightbox?.addEventListener('keydown', (event) => {
+        if (event.key === 'ArrowLeft') { event.preventDefault(); stepTaskLightbox(-1); }
+        if (event.key === 'ArrowRight') { event.preventDefault(); stepTaskLightbox(1); }
+    });
+}
+
 // ---- Deep links: /admin_console#task-42 (used by task emails) ---------------
 
 function taskIdFromHash() {
@@ -1603,16 +2121,34 @@ function bindTaskEvents() {
     });
     refs.taskModalBody?.addEventListener('change', (event) => {
         if (event.target.closest('[data-task-field]')) handleTaskFieldChange(event);
+        const picker = event.target.closest('[data-task-file-input]');
+        if (picker) {
+            const files = [...(picker.files || [])];
+            picker.value = '';  // choosing the same file again still fires change
+            void addTaskFiles(files);
+        }
     });
     refs.taskModalBody?.addEventListener('click', (event) => {
         const button = event.target.closest('[data-task-action]');
-        if (!button || button.disabled) return;
+        if (!button) {
+            if (event.target.matches?.('[data-task-file-input]')) return;  // the picker's own click
+            // The whole drop area opens the file picker, not just its button.
+            const zone = event.target.closest('[data-task-dropzone]');
+            if (zone && !state.tasks.saving) zone.querySelector('[data-task-file-input]')?.click();
+            return;
+        }
+        if (button.disabled) return;
         const action = button.dataset.taskAction;
         if (action === 'cancel') void requestCloseTaskModal();
         if (action === 'edit') { state.tasks.editing = true; renderTaskDetail(); }
         if (action === 'cancel-edit') { state.tasks.editing = false; renderTaskDetail({ keepEdit: false }); }
         if (action === 'delete') void deleteTask();
         if (action === 'delete-note') void deleteTaskNote(button.dataset.noteId);
+        if (action === 'pick-files') button.closest('[data-task-dropzone]')?.querySelector('[data-task-file-input]')?.click();
+        if (action === 'unqueue-file') unqueueTaskFile(button.dataset.fileKey);
+        if (action === 'preview-file') void openTaskLightbox(button.dataset.fileId);
+        if (action === 'download-file') void downloadTaskFile(button.dataset.fileId);
+        if (action === 'remove-file') void removeTaskFile(button.dataset.fileId);
     });
     refs.taskModalBody?.addEventListener('focusout', handleTaskFieldBlur);
     refs.taskModalBody?.addEventListener('keydown', (event) => {
@@ -1625,6 +2161,7 @@ function bindTaskEvents() {
         else form.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }));
     });
     window.addEventListener?.('hashchange', handleTaskHashChange);
+    bindTaskFileEvents();
 }
 
 function setDateColumnTimeZoneLabels() {
@@ -1725,6 +2262,7 @@ function bindEvents() {
     refs.aiBillingSyncBtn?.addEventListener('click', syncAiBilling);
     initAiRangeInputs();
     document.addEventListener('keydown', (event) => {
+        if (event.key === 'Escape' && refs.taskLightbox && !refs.taskLightbox.hidden) { closeTaskLightbox(); return; }
         if (event.key === 'Escape' && refs.couponModal && !refs.couponModal.hidden) closeCouponModal();
         if (event.key === 'Escape' && refs.taskModal && !refs.taskModal.hidden) void requestCloseTaskModal();
     });
