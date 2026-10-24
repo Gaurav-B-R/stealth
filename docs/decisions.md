@@ -1,6 +1,6 @@
 # Rilono Decision Log
 
-Last updated: 2026-10-23
+Last updated: 2026-10-24
 
 This file records durable technical decisions visible in the current codebase.
 
@@ -204,3 +204,19 @@ Status legend:
     - An Indian business that pays with a foreign-issued card is treated as foreign.
   - Razorpay keeps its fee on a refunded mandate charge.
   - Only Rilono staff can lift the INR bar, in the database. There is no admin console control yet.
+
+## D-012 Resend Delivery Failures Flag The User; Only Non-Transactional Sends Stop
+
+- Status: Accepted
+- Recorded: 2026-10-24
+- Context: A send counts as "accepted" when Resend returns an id. Suppression, bounces and spam complaints are reported later, by webhook, and the app had no webhook for them. Addresses on Resend's suppression list got a "reset link sent" screen, received nothing, and the daily AI nudge kept paying Gemini to write emails they could not receive.
+- Decision:
+  - A Svix-signed webhook, `POST /api/webhooks/resend/email-events`, has its own secret, `RESEND_DELIVERABILITY_WEBHOOK_SECRET`. It records `email.bounced` (permanent only), `email.complained`, `email.suppressed` and `suppression.added` as a per-user flag, `users.email_undeliverable_*`. `suppression.removed` clears the flag. Code: `app/email_deliverability.py`.
+  - Non-transactional sends skip a flagged user. These are the daily AI nudge (excluded in the candidate SQL, before the snapshot, R2 or Gemini work), the enterprise calendar digest, discount promos and the marketing-audience sync.
+  - Transactional sends (password reset, OTPs, verification) are still attempted. The forgot-password response stays generic, so it never reveals the flag or whether the account exists.
+  - The admin console's account view shows the flag, the reason and Resend's message. Support clears it there after removing the address in Resend. An email change also clears it.
+  - Out-of-order retries are handled. The flag stores the latest bad-event time, and every clear records `email_undeliverable_cleared_at`. A bad event from before the last clear is ignored, and a removal older than the current flag does not clear it.
+- Consequences:
+  - A flagged student also stops getting the daily nudge's in-app bell notification, because that comes from the same Gemini scan.
+  - The flag is per user. Bounces for enterprise client (CRM) addresses match no user and are only counted.
+  - Nothing is recorded until the Resend webhook exists (see [runbook.md](runbook.md)). Addresses that were already suppressed are flagged the next time Resend suppresses a send to them.

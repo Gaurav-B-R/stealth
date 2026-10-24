@@ -422,6 +422,23 @@ def ensure_user_acquisition_columns():
         conn.execute(text("CREATE INDEX IF NOT EXISTS ix_users_heard_about_us ON users(heard_about_us)"))
 
 
+def ensure_user_email_deliverability_columns():
+    """Patch users with the "email undeliverable" flag the Resend deliverability webhook sets
+    (app/email_deliverability.py). Additive/idempotent; NULL = deliverable."""
+    with engine.begin() as conn:
+        columns = _get_table_columns(conn, "users")
+        if "email_undeliverable_at" not in columns:
+            conn.execute(text("ALTER TABLE users ADD COLUMN email_undeliverable_at TIMESTAMP"))
+        if "email_undeliverable_reason" not in columns:
+            conn.execute(text("ALTER TABLE users ADD COLUMN email_undeliverable_reason VARCHAR"))
+        if "email_undeliverable_detail" not in columns:
+            conn.execute(text("ALTER TABLE users ADD COLUMN email_undeliverable_detail TEXT"))
+        if "email_undeliverable_cleared_at" not in columns:
+            conn.execute(text("ALTER TABLE users ADD COLUMN email_undeliverable_cleared_at TIMESTAMP"))
+        if "email_undeliverable_cleared_by" not in columns:
+            conn.execute(text("ALTER TABLE users ADD COLUMN email_undeliverable_cleared_by VARCHAR"))
+
+
 def ensure_enterprise_organization_columns():
     """
     Ensure enterprise organization table has immutable subdomain storage.

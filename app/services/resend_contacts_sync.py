@@ -326,6 +326,10 @@ def _load_eligible_users(limit: int = 0) -> list[models.User]:
                 # (or later in settings) are synced to the marketing audience.
                 models.User.marketing_emails_consent.is_(True),
                 models.User.email.isnot(None),
+                # Bounced / complained / suppressed addresses (app.email_deliverability)
+                # never join the marketing audience, and an existing contact is not
+                # flipped back to unsubscribed=False below.
+                models.User.email_undeliverable_at.is_(None),
             )
             .order_by(models.User.id.asc())
         )

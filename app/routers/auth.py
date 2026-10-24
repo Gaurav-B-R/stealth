@@ -6,6 +6,7 @@ from datetime import timedelta, datetime
 from urllib.parse import urlparse
 from app.database import get_db
 from app import models, schemas
+from app import email_deliverability
 from app.legal import LEGAL_TERMS_PRIVACY_VERSION
 from app.auth import (
     authenticate_user,
@@ -1191,7 +1192,14 @@ def forgot_password(
     user.password_reset_token_expires = token_expires
     db.commit()
     
-    # Password reset is transactional; do not gate it on email_notifications_enabled.
+    # Password reset is transactional; do not gate it on email_notifications_enabled, nor on
+    # the undeliverable flag (it may be stale). Log the flag so support can tell the user
+    # their address is suppressed; the response stays generic either way.
+    if email_deliverability.is_undeliverable(user):
+        logger.warning(
+            "forgot-password: user_id=%s address flagged undeliverable (%s); sending anyway",
+            user.id, user.email_undeliverable_reason,
+        )
     base_url = os.getenv("BASE_URL", DEFAULT_PUBLIC_BASE_URL)
     email_accepted = send_password_reset_email(user.email, reset_token, base_url)
     
@@ -1586,6 +1594,9 @@ def verify_university_change(token: str, db: Session = Depends(get_db)):
     
     user.email = user.pending_email
     user.university = user.pending_university
+    # A bounce/suppression flag belonged to the old address.
+    if email_deliverability.is_undeliverable(user):
+        email_deliverability.clear_undeliverable(user, by="email_changed", force=True)
     
     # Clear pending change info
     user.pending_email = None

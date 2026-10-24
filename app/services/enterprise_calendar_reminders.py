@@ -31,6 +31,7 @@ from typing import Optional
 from sqlalchemy.exc import IntegrityError
 
 from app.database import SessionLocal
+from app import email_deliverability
 from app import models
 from app import enterprise_catalog as catalog
 from app import enterprise_time as ent_time
@@ -311,6 +312,7 @@ def run_calendar_reminder_job(force: bool = False) -> dict:
         emailed = 0
         considered = 0
         clients_emailed = 0
+        skipped_undeliverable = 0
 
         org_ids = [oid for (oid,) in db.query(models.EnterpriseOrganization.id).all()]
         for org_id in org_ids:
@@ -339,6 +341,10 @@ def run_calendar_reminder_job(force: bool = False) -> dict:
                 user = db.query(models.User).filter(models.User.id == user_id).first()
                 if not user or not user.email or user.email_notifications_enabled is False:
                     continue
+                # Resend reported the address as bouncing / complaining / suppressed.
+                if email_deliverability.is_undeliverable(user):
+                    skipped_undeliverable += 1
+                    continue
                 items.sort(key=lambda it: (it["date"], it.get("time") or "99:99", it["title"]))
                 overdue = [it for it in items if it["overdue"]]
                 today_items = [it for it in items if not it["overdue"]]
@@ -365,6 +371,7 @@ def run_calendar_reminder_job(force: bool = False) -> dict:
         return {
             "status": "completed", "run_date": run_date.isoformat(),
             "recipients_emailed": emailed, "clients_emailed": clients_emailed,
+            "recipients_skipped_undeliverable": skipped_undeliverable,
             "events_considered": considered, "orgs": len(org_ids),
         }
     except Exception as exc:

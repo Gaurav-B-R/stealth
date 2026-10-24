@@ -4,6 +4,7 @@ from fastapi.responses import FileResponse, RedirectResponse, HTMLResponse, JSON
 from fastapi.middleware.cors import CORSMiddleware
 from app.database import engine, Base, SessionLocal
 from app.routers import auth, upload, profile, documents, ai_chat, pricing, subscription, news, notifications, admin, enterprise, visa_pass, onboarding, shortlist, courses, e2e, outcomes, sop, careers
+from app.routers import email_events
 from app.routers import admin_auth, admin_tasks
 from app import careers_catalog
 from app.subscriptions import backfill_missing_subscriptions
@@ -73,6 +74,7 @@ from app.schema_patch import (
     ensure_user_legal_consent_column,
     ensure_user_enterprise_account_column,
     ensure_user_acquisition_columns,
+    ensure_user_email_deliverability_columns,
     ensure_account_deletion_otp_columns,
     ensure_country_change_otp_columns,
     ensure_university_country_column,
@@ -324,6 +326,7 @@ app.include_router(e2e.router)
 app.include_router(outcomes.router)
 app.include_router(sop.router)
 app.include_router(careers.router)
+app.include_router(email_events.router)
 
 
 @app.on_event("startup")
@@ -342,6 +345,7 @@ def startup_backfill_subscriptions():
     ensure_referral_columns()
     ensure_visa_outcome_columns()
     ensure_user_acquisition_columns()
+    ensure_user_email_deliverability_columns()
     ensure_subscription_usage_columns()
     ensure_subscription_payment_recurring_columns()
     ensure_document_catalog_columns()

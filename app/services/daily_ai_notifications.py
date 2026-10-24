@@ -10,6 +10,7 @@ from pydantic import BaseModel, ValidationError
 from sqlalchemy import and_, exists, func, not_
 from sqlalchemy.exc import IntegrityError
 
+from app import email_deliverability
 from app import models
 from app import visa_catalog
 from app.database import SessionLocal
@@ -417,16 +418,18 @@ def _load_profile_raw_json(user_id: int, r2_client) -> str:
 def _process_single_user(user_id: int, model: Any, model_name: str, r2_client) -> bool:
     session = SessionLocal()
     try:
-        # Re-check the consumer-only rule here, not just in the run's candidate query: a run
-        # walks every due account one Gemini call at a time, so a user who joins a workspace
-        # (or is flagged enterprise) after the listing must still be dropped BEFORE the
-        # snapshot refresh below writes to R2.
+        # Re-check the consumer-only and deliverability rules here, not just in the run's
+        # candidate query: a run walks every due account one Gemini call at a time, so a user
+        # who joins a workspace (or is flagged enterprise), or whose address Resend reports
+        # undeliverable, after the listing must still be dropped BEFORE the snapshot refresh
+        # below writes to R2.
         user = (
             session.query(models.User)
             .filter(
                 models.User.id == user_id,
                 models.User.is_active.is_(True),
                 _consumer_account_clause(),
+                email_deliverability.deliverable_clause(),
             )
             .first()
         )
@@ -563,9 +566,16 @@ def run_daily_ai_notification_job(force: bool = False) -> dict:
         # Enterprise (B2B) accounts are excluded in SQL — see _consumer_account_clause. They
         # are filtered BEFORE the dormancy cadence and the USER_LIMIT slice, so they neither
         # count as "dormant deferred" nor use up a slot a student account should get.
+        # Accounts whose address Resend can't deliver to (bounce / spam complaint /
+        # suppression list — app.email_deliverability) are excluded the same way: the scan
+        # exists to write that email, so it would be a Gemini call nobody can receive.
         user_rows = (
             db.query(models.User.id, models.User.created_at, models.User.first_login_at, models.User.last_login_at)
-            .filter(models.User.is_active.is_(True), _consumer_account_clause())
+            .filter(
+                models.User.is_active.is_(True),
+                _consumer_account_clause(),
+                email_deliverability.deliverable_clause(),
+            )
             .order_by(models.User.id.asc())
             .all()
         )
@@ -574,6 +584,16 @@ def run_daily_ai_notification_job(force: bool = False) -> dict:
         users_skipped_enterprise = int(
             db.query(func.count(models.User.id))
             .filter(models.User.is_active.is_(True), not_(_consumer_account_clause()))
+            .scalar()
+            or 0
+        )
+        users_skipped_undeliverable = int(
+            db.query(func.count(models.User.id))
+            .filter(
+                models.User.is_active.is_(True),
+                _consumer_account_clause(),
+                not_(email_deliverability.deliverable_clause()),
+            )
             .scalar()
             or 0
         )
@@ -587,7 +607,8 @@ def run_daily_ai_notification_job(force: bool = False) -> dict:
         print(
             f"Daily AI notifier: {len(user_ids)} account(s) due today, "
             f"{users_skipped_dormant} dormant account(s) deferred to their fortnightly scan, "
-            f"{users_skipped_enterprise} enterprise account(s) skipped"
+            f"{users_skipped_enterprise} enterprise account(s) skipped, "
+            f"{users_skipped_undeliverable} undeliverable-email account(s) skipped"
         )
 
         users_scanned = 0
@@ -613,6 +634,7 @@ def run_daily_ai_notification_job(force: bool = False) -> dict:
             "users_scanned": users_scanned,
             "users_skipped_dormant": users_skipped_dormant,
             "users_skipped_enterprise": users_skipped_enterprise,
+            "users_skipped_undeliverable": users_skipped_undeliverable,
             "notifications_sent": notifications_sent,
         }
     except Exception as exc:  # noqa: BLE001

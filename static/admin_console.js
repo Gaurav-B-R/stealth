@@ -4138,6 +4138,25 @@ function renderAccountDetail(userId, data) {
     const acq = a.acquisition || {}, ref = a.referral || {}, vd = a.visa_decision || {};
     const vdChipClass = { approved: 'green', refused: 'amber', withdrawn: 'grey', deferred: 'grey' }[vd.decision] || 'grey';
 
+    // Resend bounce / spam-complaint / suppression flag (set by the deliverability webhook).
+    // Nudges, digests and promos skip a flagged account; password reset + OTPs still try.
+    const ed = a.email_delivery || {};
+    const emailDeliveryChip = ed.undeliverable
+        ? `<span class="acct-chip red">Undeliverable · ${escapeHtml(ed.reason_label || ed.reason || 'flagged')}</span>`
+        : '<span class="acct-chip green">Deliverable</span>';
+    const emailDeliveryAlert = ed.undeliverable ? `
+          <div class="acct-alert" id="acctEmailDeliveryAlert">
+            <div class="acct-alert-title">Emails to ${escapeHtml(a.email || 'this address')} are not arriving</div>
+            <p>Resend reported <strong>${escapeHtml(ed.reason_label || ed.reason || 'a delivery failure')}</strong>${ed.flagged_at ? ` on ${escapeHtml(acctFmt(ed.flagged_at))}` : ''}.
+              Password-reset and sign-in codes are still sent but will likely not arrive; daily nudges, digests and promotions are paused.</p>
+            ${ed.detail ? `<p class="acct-alert-detail">${escapeHtml(ed.detail)}</p>` : ''}
+            <p>Remove the address from the suppression list in Resend (or ask the student for another address), then clear this flag. If Resend still suppresses it, the next email flags it again.</p>
+            <button type="button" class="table-btn" id="acctEmailDeliveryClearBtn" data-admin-write="users">Clear flag</button>
+          </div>` : '';
+    const emailDeliveryMeta = (!ed.undeliverable && ed.cleared_at)
+        ? ` <span style="color:#94a3b8;font-size:12px">cleared ${escapeHtml(acctFmt(ed.cleared_at))}${ed.cleared_by ? ' · ' + escapeHtml(ed.cleared_by) : ''}</span>`
+        : '';
+
     // Coupon codes issued FOR this account (per-account "conversion play" offers).
     const offers = data.coupon_offers || [];
     const offersHtml = offers.length
@@ -4154,7 +4173,7 @@ function renderAccountDetail(userId, data) {
     document.getElementById('adminAccountBody').innerHTML = `
       <div class="acct-grid">
         <div style="display:grid;gap:16px">
-          <div class="acct-card"><h3>Profile</h3>
+          <div class="acct-card"><h3>Profile</h3>${emailDeliveryAlert}
             <dl class="acct-kv">
               <dt>Status</dt><dd>${active ? '<span class="acct-chip green">Active</span>' : '<span class="acct-chip grey">Inactive</span>'} ${a.email_verified ? '<span class="acct-chip green">Verified</span>' : '<span class="acct-chip amber">Unverified</span>'}</dd>
               <dt>Role</dt><dd>${escapeHtml(a.role || 'student')}</dd>
@@ -4166,6 +4185,7 @@ function renderAccountDetail(userId, data) {
               <dt>Last login</dt><dd>${escapeHtml(acctFmt(a.last_login_at))}</dd>
               <dt>Onboarded</dt><dd>${a.onboarding_completed_at ? escapeHtml(acctFmt(a.onboarding_completed_at)) : 'Not completed'}</dd>
               <dt>Marketing opt-in</dt><dd>${a.marketing_consent ? 'Yes' : 'No'}</dd>
+              <dt>Email delivery</dt><dd>${emailDeliveryChip}${a.email_notifications_enabled === false ? ' <span class="acct-chip grey">Unsubscribed from notifications</span>' : ''}${emailDeliveryMeta}</dd>
             </dl>
           </div>
           <div class="acct-card"><h3>Plan &amp; usage &nbsp; ${planChip}</h3>${usageHtml || '<div class="acct-empty">No subscription record.</div>'}</div>
@@ -4237,6 +4257,8 @@ function renderAccountDetail(userId, data) {
 
     const recoBtn = document.getElementById('acctRecoBtn');
     if (recoBtn) recoBtn.addEventListener('click', () => runAccountReco(userId));
+    const emailClearBtn = document.getElementById('acctEmailDeliveryClearBtn');
+    if (emailClearBtn) emailClearBtn.addEventListener('click', () => clearAccountEmailUndeliverable(userId, emailClearBtn));
     const toggleBtn = document.getElementById('acctToggleBtn');
     if (toggleBtn) toggleBtn.addEventListener('click', async () => { const ok = await updateUserStatus(userId, !active, a.email || a.name || ''); if (ok) closeAccountDetail(); });
     const delBtn = document.getElementById('acctDeleteBtn');
@@ -4317,6 +4339,33 @@ async function deleteAccountCoupon(userId, code) {
     } catch (error) {
         console.error('Delete coupon failed:', error);
         showFlash('Failed to delete the coupon.', 'error');
+    }
+}
+
+async function clearAccountEmailUndeliverable(userId, button) {
+    if (!requireAdminPermission('users', 'write')) return;
+    if (!(await confirmDialog(
+        'Daily nudges, digests and promotions will resume for this address. Only clear it after the address is off the suppression list in Resend.',
+        { title: 'Clear the undeliverable flag?', okText: 'Clear flag', danger: false },
+    ))) return;
+    if (!await ensureAdminProtection({ silent: false })) return;
+    if (button) { button.disabled = true; button.textContent = 'Clearing…'; }
+    try {
+        const response = await adminFetch(`${API_BASE}/api/admin/users/${userId}/email-delivery/clear`, {
+            method: 'POST', headers: buildAuthHeaders(), credentials: 'same-origin',
+        });
+        const payload = await response.json().catch(() => ({}));
+        if (!response.ok) {
+            showFlash(normalizeErrorMessage(payload, 'Could not clear the flag.'), 'error');
+            return;
+        }
+        showFlash('Email delivery flag cleared.', 'success');
+        await openAccountDetail(userId);
+    } catch (error) {
+        console.error('Clear email-undeliverable flag failed:', error);
+        showFlash('Could not clear the flag.', 'error');
+    } finally {
+        if (button && button.isConnected) { button.disabled = false; button.textContent = 'Clear flag'; }
     }
 }
 

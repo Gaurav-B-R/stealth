@@ -124,8 +124,17 @@ class User(Base):
     visa_decision_source = Column(String, nullable=True)              # self_reported|admin
     # Lets the "did you get your decision?" dashboard card be snoozed so we don't nag; NULL = show if eligible.
     visa_decision_prompt_snoozed_until = Column(DateTime(timezone=True), nullable=True)
+    # Resend can't deliver to this address (hard bounce / spam complaint / suppression list),
+    # set by the Resend deliverability webhook. NULL = deliverable. Non-transactional sends
+    # (daily AI nudge, digests, promos) skip a flagged user; transactional ones still try.
+    # See app/email_deliverability.py.
+    email_undeliverable_at = Column(DateTime(timezone=True), nullable=True)   # latest bad event
+    email_undeliverable_reason = Column(String, nullable=True)               # bounced|complained|suppressed
+    email_undeliverable_detail = Column(Text, nullable=True)                 # provider message + which email
+    email_undeliverable_cleared_at = Column(DateTime(timezone=True), nullable=True)
+    email_undeliverable_cleared_by = Column(String, nullable=True)            # admin:<email> | resend:... | email_changed
     created_at = Column(DateTime(timezone=True), server_default=func.now())
-    
+
     documents = relationship("Document", back_populates="uploader", cascade="all, delete-orphan")
     subscription = relationship("Subscription", back_populates="user", uselist=False, cascade="all, delete-orphan")
     # NOT delete-orphan: payment (financial) records must be RETAINED for accounting/tax after

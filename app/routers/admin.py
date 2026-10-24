@@ -23,6 +23,7 @@ from app import enterprise_credits
 from app import enterprise_billing
 from app import enterprise_coupons
 from app import enterprise_refunds
+from app import email_deliverability
 from app import email_service
 from app import fx
 from app import money
@@ -1929,6 +1930,8 @@ def admin_user_detail(
             "last_login_at": _admin_iso(getattr(user, "last_login_at", None)),
             "onboarding_completed_at": _admin_iso(getattr(user, "onboarding_completed_at", None)),
             "marketing_consent": bool(getattr(user, "marketing_emails_consent", False)),
+            "email_notifications_enabled": getattr(user, "email_notifications_enabled", None) is not False,
+            "email_delivery": email_deliverability.admin_status(user),
             "heard_about_us": getattr(user, "heard_about_us", None),
             "heard_about_label": acq.heard_about_label(getattr(user, "heard_about_us", None)),
             "acquisition": {
@@ -2110,6 +2113,40 @@ def admin_user_conversion_reco(
     if not result.get("found"):
         raise HTTPException(status_code=404, detail="Account not found.")
     return result
+
+
+@router.post("/users/{user_id}/email-delivery/clear")
+@console_section("users", "write")
+def admin_clear_email_undeliverable(
+    user_id: int,
+    request: Request,
+    current_user: models.User = Depends(get_current_admin_user),
+    _: None = Depends(require_admin_turnstile_proof),
+    db: Session = Depends(get_db),
+):
+    """Clear the account's "email undeliverable" flag (set by the Resend deliverability
+    webhook) once support has taken the address off Resend's suppression list. Nudges,
+    digests and promos resume; if Resend still suppresses the address, the next send's
+    event flags it again."""
+    _enforce_rate_limit_or_429(
+        request=request, scope="admin.user.email_delivery_clear",
+        limit=ADMIN_ENDPOINT_RATE_LIMIT, window_seconds=ADMIN_ENDPOINT_RATE_WINDOW_SECONDS,
+        extra_key=f"user:{current_user.id}",
+    )
+    user = db.query(models.User).filter(models.User.id == int(user_id)).first()
+    if not user:
+        raise HTTPException(status_code=404, detail="Account not found.")
+    previous = user.email_undeliverable_reason
+    cleared = email_deliverability.clear_undeliverable(
+        user, by=f"admin:{(current_user.email or current_user.id)}", force=True,
+    )
+    db.commit()
+    if cleared:
+        logger.info(
+            "admin %s cleared email-undeliverable flag (%s) on user_id=%s",
+            current_user.id, previous, user.id,
+        )
+    return {"cleared": cleared, "email_delivery": email_deliverability.admin_status(user)}
 
 
 @router.post("/users/{user_id}/visa-decision")
@@ -3278,16 +3315,21 @@ def send_enterprise_account_coupon_email_admin(
         raise HTTPException(status_code=404, detail="Discount code not found.")
 
     # Resolve recipients: an explicit override, else every active member, else
-    # the account creator as a last resort.
+    # the account creator as a last resort. Addresses Resend reports as bouncing /
+    # complaining / suppressed (app.email_deliverability) are skipped: this is marketing.
     recipients: list[tuple[str, str | None]] = []
+    skipped_undeliverable: list[str] = []
     override = (payload.email or "").strip().lower() if payload and payload.email else ""
     if override:
         existing = db.query(models.User).filter(func.lower(models.User.email) == override).first()
-        recipients.append((override, existing.full_name if existing else None))
+        if existing and email_deliverability.is_undeliverable(existing):
+            skipped_undeliverable.append(override)
+        else:
+            recipients.append((override, existing.full_name if existing else None))
     else:
         seen: set[str] = set()
         member_rows = (
-            db.query(models.User.email, models.User.full_name)
+            db.query(models.User.email, models.User.full_name, models.User.email_undeliverable_at)
             .join(
                 models.EnterpriseOrganizationMember,
                 models.EnterpriseOrganizationMember.user_id == models.User.id,
@@ -3298,16 +3340,30 @@ def send_enterprise_account_coupon_email_admin(
             )
             .all()
         )
-        for email, name in member_rows:
+        for email, name, undeliverable_at in member_rows:
             normalized = (email or "").strip().lower()
             if normalized and normalized not in seen:
                 seen.add(normalized)
-                recipients.append((normalized, name))
-        if not recipients and org.created_by_user_id:
+                if undeliverable_at is not None:
+                    skipped_undeliverable.append(normalized)
+                else:
+                    recipients.append((normalized, name))
+        if not recipients and not skipped_undeliverable and org.created_by_user_id:
             creator = db.query(models.User).filter(models.User.id == org.created_by_user_id).first()
             if creator and creator.email:
-                recipients.append((creator.email.strip().lower(), creator.full_name))
+                if email_deliverability.is_undeliverable(creator):
+                    skipped_undeliverable.append(creator.email.strip().lower())
+                else:
+                    recipients.append((creator.email.strip().lower(), creator.full_name))
 
+    if not recipients and skipped_undeliverable:
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                "Not sent: every recipient's address is flagged undeliverable (hard bounce, spam "
+                "complaint or Resend suppression). See Email delivery on their account."
+            ),
+        )
     if not recipients:
         raise HTTPException(status_code=400, detail="No recipient email found for this account.")
 
@@ -3346,11 +3402,17 @@ def send_enterprise_account_coupon_email_admin(
             detail="Could not send the promotion email. Please check the email service configuration.",
         )
 
+    skipped_note = (
+        f" Skipped {len(skipped_undeliverable)} undeliverable address"
+        f"{'es' if len(skipped_undeliverable) != 1 else ''}."
+        if skipped_undeliverable else ""
+    )
     return {
         "sent": sent,
         "failed": failed,
+        "skipped_undeliverable": skipped_undeliverable,
         "recipients": [email for email, _ in recipients],
-        "message": f"Promotion email sent to {sent} recipient{'s' if sent != 1 else ''}.",
+        "message": f"Promotion email sent to {sent} recipient{'s' if sent != 1 else ''}.{skipped_note}",
     }
 
 

@@ -396,8 +396,11 @@ def test_cache_busters_are_bumped_for_the_changed_assets():
     assert "/static/enterprise.css?v=20261022a" in enterprise
     assert "/static/app.js?v=20261022b" in _read("us_f1_visa.html")
     console = _read("admin_console.html")
-    assert "/static/admin_console.js?v=20261023a" in console
-    assert "/static/admin_console.css?v=20261023a" in console
+    # At least this bump: later changes to the console bump it again (yyyymmdd + letter
+    # versions compare as strings).
+    for asset in ("admin_console.js", "admin_console.css"):
+        match = re.search(rf"/static/{re.escape(asset)}\?v=(\w+)", console)
+        assert match and match.group(1) >= "20261023a", asset
 
 
 # ---------------------------------------------------------------------------

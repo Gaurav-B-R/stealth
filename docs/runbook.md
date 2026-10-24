@@ -161,6 +161,8 @@ Email delivery failures:
 
 - Verify `RESEND_API_KEY`, sender domain settings, `BASE_URL`, and `USE_TEST_EMAIL`
 - Check logs from `app/email_service.py`
+- "I never got the reset email": open the account in the admin console and look at **Email delivery** in Profile. If it is flagged undeliverable (hard bounce, spam complaint or Resend suppression), remove the address from Resend's suppression list (Resend dashboard, Suppressions), then press **Clear flag**. If Resend still suppresses the address, the next email flags it again. Don't confirm on the public forgot-password form whether an account exists.
+- The flag comes from the Resend webhook (D-012). In Resend, open Webhooks and add `https://rilono.com/api/webhooks/resend/email-events` for `email.bounced`, `email.complained`, `email.suppressed`, `suppression.added` and `suppression.removed`. Then set `RESEND_DELIVERABILITY_WEBHOOK_SECRET` to its signing secret. Until that secret is set, the endpoint answers 503.
 
 Subscription/payment failures:
 
