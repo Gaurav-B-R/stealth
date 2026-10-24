@@ -1,5 +1,7 @@
 const API_BASE = '';
 const COOKIE_AUTH_SENTINEL = '__cookie_session__';
+// Declared up here: clearClientAuthState() (and so renderEmailDeliveryBanner) can run early.
+const EMAIL_DELIVERY_BANNER_HIDDEN_KEY = 'rilono_email_delivery_banner_hidden';
 let currentUser = null;
 let authToken = null;
 let currentSubscription = null;
@@ -1830,6 +1832,7 @@ function clearClientAuthState({ render = true } = {}) {
     // Drop any post-login prompt still waiting its turn — the session it belonged to is over.
     postLoginPromptQueue.length = 0;
     postLoginQuietUntil = 0;
+    renderEmailDeliveryBanner(null);
     if (render) {
         updateUIForAuth();
         const authedPaths = ['/dashboard', '/subscription', ...Object.keys(DASHBOARD_PATH_TO_TAB)];
@@ -1853,6 +1856,9 @@ async function checkAuth() {
             if (!authToken) {
                 authToken = COOKIE_AUTH_SENTINEL;
             }
+            // Only /me carries the deliverability notice; profile/onboarding responses that
+            // later replace currentUser don't, so render it from this response.
+            renderEmailDeliveryBanner(currentUser);
             // Personalize the document/journey catalog to the signed-in student's destination
             // BEFORE any dashboard paint. updateUIForAuth() below — and showDashboard() later —
             // kick off loadProfile() → the visa-journey widget, which reads journeyStageCatalog.
@@ -1880,6 +1886,62 @@ async function checkAuth() {
         clearClientAuthState();
         return false;
     }
+}
+
+// "Emails to you aren't arriving" banner. The flag comes from the Resend deliverability
+// webhook (app/email_deliverability.py); /api/auth/me exposes only a boolean + a plain-words
+// reason. "×" hides it for this browser session (EMAIL_DELIVERY_BANNER_HIDDEN_KEY); it
+// returns on the next one while flagged.
+function renderEmailDeliveryBanner(user) {
+    const banner = document.getElementById('emailDeliveryBanner');
+    if (!banner) return;
+    let hiddenFor = null;
+    try { hiddenFor = sessionStorage.getItem(EMAIL_DELIVERY_BANNER_HIDDEN_KEY); } catch (e) { /* storage blocked */ }
+    if (!user || !user.email_delivery_issue || hiddenFor === String(user.id)) {
+        banner.hidden = true;
+        return;
+    }
+    document.getElementById('emailDeliveryBannerAddress').textContent = user.email || 'your address';
+    document.getElementById('emailDeliveryBannerReason').textContent = user.email_delivery_issue_reason || '';
+    wireEmailDeliveryBanner(banner);
+    banner.hidden = false;
+}
+
+function wireEmailDeliveryBanner(banner) {
+    if (banner.dataset.wired) return;
+    banner.dataset.wired = '1';
+    const info = banner.querySelector('.email-delivery-info');
+    const infoBtn = document.getElementById('emailDeliveryInfoBtn');
+    const setInfoOpen = (open) => {
+        info.classList.toggle('is-open', open);
+        infoBtn.setAttribute('aria-expanded', open ? 'true' : 'false');
+    };
+    infoBtn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        setInfoOpen(!info.classList.contains('is-open'));
+    });
+    document.addEventListener('click', (e) => {
+        if (!info.contains(e.target)) setInfoOpen(false);
+    });
+    banner.addEventListener('keydown', (e) => {
+        if (e.key === 'Escape') setInfoOpen(false);
+    });
+    document.getElementById('emailDeliveryChangeBtn').addEventListener('click', () => {
+        switchDashboardTab('profile');
+        const target = document.getElementById('changeUniversityBtn');
+        if (target) {
+            target.scrollIntoView({ behavior: 'smooth', block: 'center' });
+            target.focus({ preventScroll: true });
+        }
+    });
+    document.getElementById('emailDeliveryDismissBtn').addEventListener('click', () => {
+        banner.hidden = true;
+        try {
+            if (currentUser && currentUser.id != null) {
+                sessionStorage.setItem(EMAIL_DELIVERY_BANNER_HIDDEN_KEY, String(currentUser.id));
+            }
+        } catch (e) { /* storage blocked: hidden until the next page load */ }
+    });
 }
 
 function renderUserInfo(user) {
@@ -10990,6 +11052,7 @@ async function logout() {
     // Cancel any post-login prompt still awaiting its turn — it belongs to the session just ended.
     postLoginPromptQueue.length = 0;
     postLoginQuietUntil = 0;
+    renderEmailDeliveryBanner(null);
     floatingChatOpen = false;
     rilonoAiConversationHistory = [];  // Clear shared chat history
     clearRilonoAiSessionAttachments(false);

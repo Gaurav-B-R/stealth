@@ -58,6 +58,13 @@ class UserResponse(UserBase):
         from_attributes = True
 
 
+class CurrentUserResponse(UserResponse):
+    """GET /api/auth/me only. UserResponse is also returned by /register (unauthenticated)
+    and nested in document payloads, so the deliverability notice lives here, not there."""
+    email_delivery_issue: bool = False
+    email_delivery_issue_reason: Optional[str] = None
+
+
 class OnboardingRequest(BaseModel):
     destination_country_code: str
     visa_type_key: str

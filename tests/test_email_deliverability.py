@@ -17,6 +17,8 @@ These tests pin down the fix (app/email_deliverability.py + app/routers/email_ev
 3. Transactional sends still go out, and forgot-password keeps its generic response.
 4. The admin account view shows the flag + reason and can clear it.
 5. The schema patch adds the columns to an existing users table, idempotently.
+6. A signed-in student sees their own flag (a boolean + plain-words reason) on
+   GET /api/auth/me, and nowhere unauthenticated.
 
 Every test runs on SQLite with fake payloads; no email is sent and no model is called.
 
@@ -475,3 +477,66 @@ def test_schema_patch_adds_columns_to_existing_users_table(tmp_path, monkeypatch
     } <= columns
     assert row[0] is None  # existing users start deliverable
     scratch.dispose()
+
+
+# ---------------------------------------------------------------------------
+# 6. The student's own notice (GET /api/auth/me -> dashboard banner)
+# ---------------------------------------------------------------------------
+
+def _bearer(user):
+    from app.auth import create_access_token
+
+    return {"Authorization": f"Bearer {create_access_token(data={'sub': user.email})}"}
+
+
+@pytest.mark.parametrize("reason", ["bounced", "complained", "suppressed"])
+def test_me_tells_a_flagged_student_why_in_plain_words(db, monkeypatch, reason):
+    student = _user(db, "flagged@example.com")
+    deliverability.mark_undeliverable(
+        student, reason=reason, at=datetime.utcnow(),
+        detail="OnAccountSuppressionList: internal provider message · Email: \"Reset\"",
+    )
+    db.commit()
+    client = _auth_client(db, monkeypatch, [])
+
+    body = client.get("/api/auth/me", headers=_bearer(student)).json()
+
+    assert body["email_delivery_issue"] is True
+    assert body["email_delivery_issue_reason"] == deliverability.STUDENT_REASON_LABELS[reason]
+    assert "Resend" not in body["email_delivery_issue_reason"]
+    # Only the boolean + label reach the student: no provider detail, times or reason code.
+    serialized = json.dumps(body)
+    assert "OnAccountSuppressionList" not in serialized
+    assert not any(key.startswith("email_undeliverable") for key in body)
+
+
+def test_me_reports_no_issue_for_a_deliverable_or_cleared_student(db, monkeypatch):
+    fine = _user(db, "fine@example.com")
+    cleared = _user(db, "cleared@example.com")
+    _flag(db, cleared)
+    deliverability.clear_undeliverable(cleared, by="admin:support@rilono.example", force=True)
+    db.commit()
+    client = _auth_client(db, monkeypatch, [])
+
+    for user in (fine, cleared):
+        body = client.get("/api/auth/me", headers=_bearer(user)).json()
+        assert body["email"] == user.email
+        assert body["email_delivery_issue"] is False
+        assert body["email_delivery_issue_reason"] is None
+
+
+def test_delivery_notice_is_never_on_unauthenticated_responses(db, monkeypatch):
+    from app import schemas
+
+    _flag(db, _user(db, "flagged@example.com"))
+    client = _auth_client(db, monkeypatch, [])
+
+    anonymous = client.get("/api/auth/me")
+    assert anonymous.status_code == 401
+    assert "email_delivery" not in anonymous.text
+    forgot = client.post("/api/auth/forgot-password", json={"email": "flagged@example.com"})
+    assert "email_delivery" not in forgot.text and "undeliverable" not in forgot.text
+    # UserResponse also backs POST /register (unauthenticated) and nested document
+    # uploaders, so the notice must live only on /me's own schema.
+    assert "email_delivery_issue" not in schemas.UserResponse.model_fields
+    assert "email_delivery_issue" in schemas.CurrentUserResponse.model_fields

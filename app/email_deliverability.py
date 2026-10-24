@@ -32,6 +32,9 @@ Policy:
   * The admin console's account view shows the flag and reason and can clear it after
     support has removed the address from Resend's suppression list (a suppression.removed
     event clears it on its own).
+  * The signed-in student sees a dashboard banner fed by GET /api/auth/me, which carries
+    only a boolean and a plain-words reason (student_status). Nothing unauthenticated
+    reveals the flag.
 
 The flag belongs to the user's CURRENT address: the one email-change path
 (routers/auth confirm-university-change) clears it.
@@ -65,6 +68,13 @@ REASON_LABELS = {
     REASON_COMPLAINED: "Spam complaint",
     REASON_SUPPRESSED: "On Resend's suppression list",
 }
+# What the signed-in student is told (plain words, no provider names or Resend's message).
+STUDENT_REASON_LABELS = {
+    REASON_BOUNCED: "Your email provider rejected our messages.",
+    REASON_COMPLAINED: "One of our emails was reported as spam.",
+    REASON_SUPPRESSED: "Delivery to this address was stopped after earlier failed attempts.",
+}
+STUDENT_REASON_FALLBACK = "Our messages can't be delivered to this address."
 
 _EMAIL_EVENT_REASONS = {
     "email.bounced": REASON_BOUNCED,
@@ -250,6 +260,19 @@ def apply_event(db, event: Mapping) -> dict:
 def _iso(value: Optional[datetime]) -> Optional[str]:
     value = _naive_utc(value)
     return value.replace(tzinfo=timezone.utc).isoformat() if value else None
+
+
+def student_status(user) -> dict:
+    """The signed-in student's own view, for GET /api/auth/me only: a boolean and a
+    plain-words reason. Never the detail, timestamps or who cleared it, and never on an
+    unauthenticated response (forgot-password stays generic)."""
+    if not is_undeliverable(user):
+        return {"email_delivery_issue": False, "email_delivery_issue_reason": None}
+    reason = getattr(user, "email_undeliverable_reason", None) or ""
+    return {
+        "email_delivery_issue": True,
+        "email_delivery_issue_reason": STUDENT_REASON_LABELS.get(reason, STUDENT_REASON_FALLBACK),
+    }
 
 
 def admin_status(user) -> dict:

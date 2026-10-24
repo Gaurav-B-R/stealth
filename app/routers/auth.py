@@ -1090,7 +1090,7 @@ async def oauth_callback(provider: str, request: Request, db: Session = Depends(
     return response
 
 
-@router.get("/me", response_model=schemas.UserResponse)
+@router.get("/me", response_model=schemas.CurrentUserResponse)
 def read_users_me(
     current_user: models.User = Depends(get_current_active_user),
     db: Session = Depends(get_db)
@@ -1100,7 +1100,10 @@ def read_users_me(
     ensure_user_referral_code(db, current_user, commit=True)
     if not had_referral_code and current_user.referral_code:
         _refresh_student_profile_snapshot_safe(db=db, user_id=current_user.id)
-    return current_user
+    # The student's own "our emails can't reach you" notice (dashboard banner).
+    return schemas.CurrentUserResponse.model_validate(current_user).model_copy(
+        update=email_deliverability.student_status(current_user)
+    )
 
 
 @router.post("/logout")

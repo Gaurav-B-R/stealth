@@ -215,6 +215,7 @@ Status legend:
   - Non-transactional sends skip a flagged user. These are the daily AI nudge (excluded in the candidate SQL, before the snapshot, R2 or Gemini work), the enterprise calendar digest, discount promos and the marketing-audience sync.
   - Transactional sends (password reset, OTPs, verification) are still attempted. The forgot-password response stays generic, so it never reveals the flag or whether the account exists.
   - The admin console's account view shows the flag, the reason and Resend's message. Support clears it there after removing the address in Resend. An email change also clears it.
+  - A signed-in student sees a slim dashboard banner saying emails to their address aren't arriving, with the reason in plain words and how to fix it (contact support, or change email). Only `GET /api/auth/me` carries it, as `email_delivery_issue` plus a plain-words `email_delivery_issue_reason`. Resend's message, the timestamps and the reason code stay admin-only, and no unauthenticated response carries the flag.
   - Out-of-order retries are handled. The flag stores the latest bad-event time, and every clear records `email_undeliverable_cleared_at`. A bad event from before the last clear is ignored, and a removal older than the current flag does not clear it.
 - Consequences:
   - A flagged student also stops getting the daily nudge's in-app bell notification, because that comes from the same Gemini scan.

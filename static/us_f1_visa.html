@@ -136,7 +136,7 @@
       ]
     }
     </script>
-    <link rel="stylesheet" href="/static/styles.css?v=20261022a">
+    <link rel="stylesheet" href="/static/styles.css?v=20261024a">
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Sora:wght@600;700;800&display=swap" rel="stylesheet">
@@ -2754,6 +2754,36 @@
                     <button id="dashSidebarToggle" class="dash-sidebar-toggle" aria-label="Open sidebar">
                         <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 6h16M4 12h16M4 18h16"/></svg>
                     </button>
+                    <!-- Our emails can't reach this student's address (Resend bounce/complaint/
+                         suppression flag from GET /api/auth/me; see renderEmailDeliveryBanner). -->
+                    <div id="emailDeliveryBanner" class="email-delivery-banner" role="status" hidden>
+                        <span class="email-delivery-banner-icon" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12.5V6a2 2 0 0 0-2-2H5a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2h7.5"></path><path d="m3 7 9 6 9-6"></path><path d="M19 15v3"></path><path d="M19 21h.01"></path></svg></span>
+                        <p class="email-delivery-banner-text">
+                            <strong>Emails to <span id="emailDeliveryBannerAddress">your address</span> aren't arriving.</strong>
+                            <span id="emailDeliveryBannerReason"></span>
+                            <span class="email-delivery-info">
+                                <button type="button" class="email-delivery-info-btn" id="emailDeliveryInfoBtn"
+                                    aria-label="Why this happens and how to fix it" aria-expanded="false"
+                                    aria-describedby="emailDeliveryInfoTip">i</button>
+                                <span class="email-delivery-info-tip" id="emailDeliveryInfoTip" role="tooltip">
+                                    Our email service reported that messages to this address can't be delivered,
+                                    so we've paused reminder emails to it. Important emails, like password-reset
+                                    links, may not reach you either.<br><br>
+                                    <strong>To fix it:</strong> email support from any inbox and we'll unblock the
+                                    address once it accepts mail again. If you marked one of our emails as spam,
+                                    mark it "Not spam" first. To use a different address, switch to your
+                                    university (.edu) email in Profile &rarr; Change University, or ask support to
+                                    move your account.
+                                </span>
+                            </span>
+                        </p>
+                        <div class="email-delivery-banner-actions">
+                            <a class="email-delivery-banner-btn" href="mailto:contact@rilono.com?subject=Rilono%20emails%20aren%27t%20reaching%20me">Contact support</a>
+                            <button type="button" class="email-delivery-banner-link" id="emailDeliveryChangeBtn">Change email</button>
+                            <button type="button" class="email-delivery-banner-close" id="emailDeliveryDismissBtn"
+                                aria-label="Hide this notice for now">&times;</button>
+                        </div>
+                    </div>
                     <!-- Overview Tab -->
                     <div id="dashboardTab-overview" class="dashboard-tab active">
                         <div class="tab-header">
@@ -3134,7 +3164,7 @@
                                                     your .edu email)</span></label>
                                             <input type="text" id="profileUniversity" readonly
                                                 style="background-color: var(--bg-tertiary); cursor: not-allowed; opacity: 0.8;">
-                                            <button type="button" onclick="showChangeUniversityModal()"
+                                            <button type="button" id="changeUniversityBtn" onclick="showChangeUniversityModal()"
                                                 style="margin-top: 0.5rem; font-size: 0.8rem; padding: 0.4rem 0.8rem; background: transparent; border: 1px solid var(--primary-color); color: var(--primary-color); border-radius: 6px; cursor: pointer;">
                                                 🎓 Change University
                                             </button>
@@ -7036,7 +7066,7 @@
              looks for #pricingCountrySelect (gone), so the currency selector stays empty,
              the pass price never renders, and the checkout modal has no currency control
              while the server now prices per currency. -->
-        <script src="/static/app.js?v=20261022b"></script>
+        <script src="/static/app.js?v=20261024a"></script>
         <script>
         (function() {
             var toggle = document.getElementById('dashSidebarToggle');
