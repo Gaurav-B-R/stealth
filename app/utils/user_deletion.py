@@ -43,6 +43,9 @@ logger = logging.getLogger(__name__)
 # nullable in both the models and prod.
 _DELINK_USER_COLUMNS = [
     (models.AdminConsoleAccess, "updated_by_user_id"),
+    (models.AdminTeamTask, "assignee_user_id"),  # team tasks are shared work: keep, unassigned
+    (models.AdminTeamTask, "created_by_user_id"),
+    (models.AdminTeamTaskNote, "author_user_id"),
     (models.SubscriptionPayment, "user_id"),  # financial records kept for accounting/tax
     (models.GeminiUsageEvent, "user_id"),  # AI cost metering stays for spend analysis
     (models.EnterpriseOrganization, "dpa_accepted_by_user_id"),

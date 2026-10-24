@@ -4468,3 +4468,107 @@ def send_enterprise_new_lead_email(
         return False, None, "Email provider did not confirm delivery."
     except Exception as e:
         return False, None, str(e)[:500]
+
+
+def send_admin_task_email(
+    *,
+    to_email: str,
+    recipient_name: Optional[str],
+    actor_label: str,
+    headline: str,
+    task_title: str,
+    status_label: str,
+    priority_label: str,
+    assignee_label: str,
+    due_label: Optional[str],
+    changes: Optional[list[str]] = None,
+    note: Optional[str] = None,
+    task_url: str,
+) -> tuple[bool, Optional[str], Optional[str]]:
+    """Tell a teammate that a task on the Admin Console board changed.
+
+    Internal-only: recipients are current console members, and the board itself is the
+    record. This copy exists because nobody sits in the console all day — an assignment
+    or an "On hold" nobody sees is a task that silently stalls.
+    """
+    if not RESEND_API_KEY:
+        return False, None, "Email service is not configured."
+    recipient = (to_email or "").strip().lower()
+    if not recipient:
+        return False, None, "Recipient email is missing."
+
+    title = (task_title or "").strip() or "Untitled task"
+    subject_title = _sanitize_header_text(title)
+    if len(subject_title) > 90:
+        subject_title = subject_title[:87].rstrip() + "…"
+    subject = f"{_sanitize_header_text(headline)}: {subject_title}"
+    safe_name = escape((recipient_name or "").strip() or "there")
+    facts = [("Status", status_label), ("Priority", priority_label), ("Assignee", assignee_label)]
+    if due_label:
+        facts.append(("Due", due_label))
+    facts_html = "".join(
+        f"<tr><td style=\"padding:4px 14px 4px 0;color:#64748b;font-size:13px;\">{escape(label)}</td>"
+        f"<td style=\"padding:4px 0;color:#0f172a;font-size:13px;font-weight:600;\">{escape(value or '—')}</td></tr>"
+        for label, value in facts
+    )
+    change_items = [item for item in (changes or []) if item]
+    changes_html = ""
+    if change_items:
+        changes_html = (
+            "<ul style=\"margin:0 0 16px 0;padding-left:18px;font-size:14px;line-height:1.6;color:#334155;\">"
+            + "".join(f"<li>{escape(item)}</li>" for item in change_items)
+            + "</ul>"
+        )
+    note_text = (note or "").strip()
+    note_html = ""
+    if note_text:
+        note_html = (
+            "<div style=\"margin:0 0 18px 0;padding:12px 14px;border-left:3px solid #6254d9;background:#f5f3ff;"
+            "border-radius:6px;font-size:14px;line-height:1.6;color:#1e293b;white-space:pre-wrap;\">"
+            f"{escape(note_text)}</div>"
+        )
+    safe_url = escape(task_url, quote=True)
+    html_content = f"""
+    <!DOCTYPE html><html><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"></head>
+    <body style="margin:0;padding:0;background:#f5f6fa;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,'Helvetica Neue',Arial,sans-serif;">
+      <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="background:#f5f6fa;padding:24px 12px;">
+        <tr><td align="center">
+          <table role="presentation" width="520" cellspacing="0" cellpadding="0" style="max-width:520px;background:#ffffff;border:1px solid #e4e7ee;border-radius:14px;overflow:hidden;">
+            <tr><td style="padding:22px 28px;background:#182235;color:#ffffff;">
+              <div style="font-size:12px;letter-spacing:.08em;text-transform:uppercase;color:#9da9be;">Rilono Admin Console · Tasks</div>
+              <h1 style="margin:8px 0 0 0;font-size:20px;line-height:1.3;">{escape(headline)}</h1>
+            </td></tr>
+            <tr><td style="padding:24px 28px;color:#0f172a;">
+              <p style="margin:0 0 12px 0;font-size:15px;line-height:1.6;">Hi {safe_name},</p>
+              <p style="margin:0 0 6px 0;font-size:13px;color:#64748b;">{escape(actor_label or 'A teammate')} · task</p>
+              <p style="margin:0 0 16px 0;font-size:17px;font-weight:700;line-height:1.4;">{escape(title)}</p>
+              {changes_html}{note_html}
+              <table role="presentation" cellspacing="0" cellpadding="0" style="margin:0 0 20px 0;">{facts_html}</table>
+              <a href="{safe_url}" style="display:inline-block;padding:11px 20px;border-radius:8px;background:#6254d9;color:#ffffff;font-size:14px;font-weight:600;text-decoration:none;">Open task</a>
+              <p style="margin:18px 0 0 0;font-size:12px;color:#94a3b8;line-height:1.6;">You get these emails for tasks you created or that are assigned to you.</p>
+            </td></tr>
+          </table>
+        </td></tr>
+      </table>
+    </body></html>
+    """
+    text_lines = [f"Hi {(recipient_name or '').strip() or 'there'},", "", headline, "", title, ""]
+    text_lines += [f"- {item}" for item in change_items]
+    if note_text:
+        text_lines += ["", "Note:", note_text]
+    text_lines += ["", *(f"{label}: {value or '—'}" for label, value in facts), "", f"Open task: {task_url}"]
+    try:
+        params = {
+            "from": f"{RESEND_FROM_NAME} <{_resolve_resend_from_email()}>",
+            "to": [recipient],
+            "subject": subject,
+            "html": html_content,
+            "text": "\n".join(text_lines) + "\n",
+        }
+        email_response = resend.Emails.send(params)
+        email_id = _extract_resend_email_id(email_response)
+        if email_id:
+            return True, email_id, None
+        return False, None, "Email provider did not confirm delivery."
+    except Exception as e:
+        return False, None, str(e)[:500]

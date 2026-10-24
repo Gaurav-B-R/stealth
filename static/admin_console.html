@@ -7,7 +7,7 @@
     <title>Rilono Admin Console</title>
     <meta name="robots" content="noindex,nofollow">
     <link rel="icon" type="image/png" href="/static/logo.png">
-    <link rel="stylesheet" href="/static/admin_console.css?v=20261022a">
+    <link rel="stylesheet" href="/static/admin_console.css?v=20261023a">
     <script src="https://challenges.cloudflare.com/turnstile/v0/api.js?render=explicit" async defer></script>
 </head>
 
@@ -44,7 +44,12 @@
                     <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="5" y="5" width="14" height="14" rx="3"/><path d="M9 1v4m6-4v4M9 19v4m6-4v4M1 9h4m-4 6h4m14-6h4m-4 6h4"/><rect x="9" y="9" width="6" height="6" rx="1"/></svg>
                     <span class="nav-label">AI Costs</span>
                 </button>
-                <span class="nav-group-label" data-admin-group="team" role="presentation">Rilono Employees</span>
+                <span class="nav-group-label" data-admin-group="tasks team" role="presentation">Rilono Employees</span>
+                <button id="adminTasksTabBtn" type="button" class="tab-btn" data-tab="tasks" role="tab" aria-controls="adminTasksTabPanel" aria-selected="false" tabindex="-1" hidden>
+                    <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M10 6h10M10 12h10M10 18h10"/><path d="m3.5 6 1.5 1.5L8 4.5M3.5 12l1.5 1.5L8 10.5M3.5 18l1.5 1.5L8 16.5"/></svg>
+                    <span class="nav-label">Tasks</span>
+                    <span id="adminTasksNavBadge" class="tasks-nav-badge" aria-hidden="true" hidden></span>
+                </button>
                 <button id="adminTeamTabBtn" type="button" class="tab-btn" data-tab="team" role="tab" aria-controls="adminTeamTabPanel" aria-selected="false" tabindex="-1" hidden>
                     <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="9" cy="7" r="3"/><path d="M3 21v-3a6 6 0 0 1 12 0v3m3-12v6m-3-3h6"/></svg>
                     <span class="nav-label">Team</span>
@@ -303,6 +308,38 @@
                         <span id="adminEnterprisePageInfo">Page 1 of 1</span>
                         <button id="adminEnterpriseNextBtn" type="button" class="ghost-btn small-btn" disabled>Next</button>
                     </div>
+                </section>
+
+                <section id="adminTasksTabPanel" class="tab-panel" role="tabpanel" aria-labelledby="adminTasksTabBtn" tabindex="-1" hidden>
+                    <div class="page-heading tasks-heading">
+                        <div>
+                            <span class="page-eyebrow">Rilono Employees</span>
+                            <h2>Tasks</h2>
+                            <p>Hand work to a teammate and follow it from Pending to Closed.</p>
+                        </div>
+                        <button id="adminTaskNewBtn" type="button" class="primary-btn small-btn tasks-new-btn">
+                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg>
+                            New task
+                        </button>
+                    </div>
+                    <div class="tasks-toolbar">
+                        <div id="adminTaskScopes" class="tasks-scopes" role="group" aria-label="Show tasks">
+                            <button type="button" class="tasks-scope is-active" data-task-scope="mine" aria-pressed="true">Assigned to me <span class="tasks-scope-count" data-scope-count="mine">0</span></button>
+                            <button type="button" class="tasks-scope" data-task-scope="created" aria-pressed="false">Assigned by me <span class="tasks-scope-count" data-scope-count="created">0</span></button>
+                            <button type="button" class="tasks-scope" data-task-scope="all" aria-pressed="false"><span id="adminTaskScopeAllLabel">All tasks</span> <span class="tasks-scope-count" data-scope-count="all">0</span></button>
+                        </div>
+                        <div class="tasks-filters">
+                            <label class="tasks-search"><span class="tasks-sr-only">Search tasks</span>
+                                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg>
+                                <input id="adminTaskSearch" type="search" placeholder="Search tasks" autocomplete="off">
+                            </label>
+                            <label id="adminTaskPersonWrap" class="tasks-person" hidden><span class="tasks-sr-only">Filter by assignee</span><select id="adminTaskPerson"><option value="">Everyone</option></select></label>
+                            <label class="tasks-toggle"><input id="adminTaskShowClosed" type="checkbox"> Show closed</label>
+                        </div>
+                    </div>
+                    <p id="adminTaskError" class="tasks-error" role="alert" hidden></p>
+                    <p id="adminTaskHint" class="tasks-hint" hidden></p>
+                    <div id="adminTaskBoard" class="tasks-board"></div>
                 </section>
 
                 <section id="adminTeamTabPanel" class="tab-panel" role="tabpanel" aria-labelledby="adminTeamTabBtn" tabindex="-1" hidden>
@@ -812,6 +849,20 @@
         </div>
     </div>
 
+    <!-- Team task: create form and task detail (notes, history, status) -->
+    <div id="adminTaskModal" class="admin-modal-overlay tasks-modal-overlay" hidden>
+        <div class="admin-modal tasks-modal" role="dialog" aria-modal="true" aria-labelledby="adminTaskModalTitle" aria-busy="false" tabindex="-1">
+            <div class="admin-modal-head tasks-modal-head">
+                <div class="tasks-modal-heading">
+                    <span id="adminTaskModalEyebrow" class="tasks-modal-eyebrow">New task</span>
+                    <h3 id="adminTaskModalTitle">New task</h3>
+                </div>
+                <button id="adminTaskModalClose" type="button" class="admin-modal-close" aria-label="Close">&times;</button>
+            </div>
+            <div id="adminTaskModalBody" class="admin-modal-body tasks-modal-body"></div>
+        </div>
+    </div>
+
     <!-- Full-screen account "Manage" view (opens over the console) -->
     <div id="adminAccountDetail" class="account-detail-overlay" hidden>
         <div class="account-detail-topbar">
@@ -824,7 +875,7 @@
         </div>
     </div>
 
-    <script src="/static/admin_console.js?v=20261022b"></script>
+    <script src="/static/admin_console.js?v=20261023a"></script>
 </body>
 
 </html>

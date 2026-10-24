@@ -5,6 +5,28 @@ const ADMIN_TIME_ZONE = 'UTC';
 const ADMIN_TIME_ZONE_LABEL = 'UTC';
 const ADMIN_SECTIONS = ['users', 'enterprise', 'analytics', 'finance', 'ai', 'team'];
 const ADMIN_SECTION_LABELS = { users: 'Student Accounts', enterprise: 'Enterprise Accounts', analytics: 'Analytics & Agent', finance: 'Investment Analytics', ai: 'AI Costs', team: 'Team' };
+// Sidebar tabs in display order. Tasks is not a grantable section: every console member
+// gets it, and the server decides task by task who may see or change what.
+const ADMIN_TABS = ['users', 'enterprise', 'analytics', 'finance', 'ai', 'tasks', 'team'];
+const TASK_STATUSES = [
+    { key: 'pending', label: 'Pending' },
+    { key: 'in_progress', label: 'In progress' },
+    { key: 'on_hold', label: 'On hold' },
+    { key: 'done', label: 'Done' },
+    { key: 'closed', label: 'Closed' }
+];
+const TASK_STATUS_LABELS = Object.fromEntries(TASK_STATUSES.map((item) => [item.key, item.label]));
+const TASK_OPEN_STATUSES = ['pending', 'in_progress', 'on_hold'];
+const TASK_PRIORITIES = [
+    { key: 'urgent', label: 'Urgent' },
+    { key: 'high', label: 'High' },
+    { key: 'medium', label: 'Medium' },
+    { key: 'low', label: 'Low' }
+];
+const TASK_PRIORITY_LABELS = Object.fromEntries(TASK_PRIORITIES.map((item) => [item.key, item.label]));
+const TASK_PRIORITY_RANK = { urgent: 0, high: 1, medium: 2, low: 3 };
+const TASK_SCOPES = ['mine', 'created', 'all'];
+const TASK_PREFS_KEY = 'rilonoAdminTaskPrefs';
 
 const state = {
     authToken: null,
@@ -13,6 +35,8 @@ const state = {
     accessRevision: 0,
     accessRequestId: 0,
     team: { members: [], sections: [], loading: false, saving: false, editingId: null },
+    tasks: freshTaskState(),
+    taskBadgeRequestId: 0,
     adminProtectionVerified: false,
     activeTab: 'users',
     users: [],
@@ -92,6 +116,24 @@ const refs = {
     teamTableBody: document.getElementById('adminTeamTableBody'),
     teamSummary: document.getElementById('adminTeamSummary'),
     teamFormTitle: document.getElementById('adminTeamFormTitle'),
+    tasksTabBtn: document.getElementById('adminTasksTabBtn'),
+    tasksTabPanel: document.getElementById('adminTasksTabPanel'),
+    tasksNavBadge: document.getElementById('adminTasksNavBadge'),
+    taskNewBtn: document.getElementById('adminTaskNewBtn'),
+    taskScopes: document.getElementById('adminTaskScopes'),
+    taskScopeAllLabel: document.getElementById('adminTaskScopeAllLabel'),
+    taskSearch: document.getElementById('adminTaskSearch'),
+    taskPerson: document.getElementById('adminTaskPerson'),
+    taskPersonWrap: document.getElementById('adminTaskPersonWrap'),
+    taskShowClosed: document.getElementById('adminTaskShowClosed'),
+    taskError: document.getElementById('adminTaskError'),
+    taskHint: document.getElementById('adminTaskHint'),
+    taskBoard: document.getElementById('adminTaskBoard'),
+    taskModal: document.getElementById('adminTaskModal'),
+    taskModalEyebrow: document.getElementById('adminTaskModalEyebrow'),
+    taskModalTitle: document.getElementById('adminTaskModalTitle'),
+    taskModalClose: document.getElementById('adminTaskModalClose'),
+    taskModalBody: document.getElementById('adminTaskModalBody'),
     sessionBadge: document.getElementById('adminSessionBadge'),
     sidebar: document.getElementById('adminSidebar'),
     sidebarClose: document.getElementById('adminSidebarClose'),
@@ -272,16 +314,20 @@ document.addEventListener('DOMContentLoaded', () => {
 });
 
 function canAccessSection(section) {
+    if (section === 'tasks') return Boolean(state.access);
     return Boolean(state.access?.sections?.includes(section)
         && (section !== 'team' || (state.access.role === 'admin' && state.access.can_manage_team)));
 }
 
 function canWriteSection(section) {
+    if (section === 'tasks') return Boolean(state.access);
     return canAccessSection(section) && ['admin', 'editor'].includes(state.access.role)
         && state.access.can_write_sections.includes(section);
 }
 
 function canDeleteSection(section) {
+    // Tasks: the server allows a delete only to the task's creator or a team manager.
+    if (section === 'tasks') return Boolean(state.access);
     return canAccessSection(section) && state.access.role === 'admin'
         && state.access.can_delete_sections.includes(section);
 }
@@ -320,6 +366,7 @@ function applyAdminPermissions() {
 function adminRequestSection(url) {
     const path = String(url).split('?')[0];
     if (/\/api\/admin\/team(?:\/|$)/.test(path)) return 'team';
+    if (/\/api\/admin\/tasks(?:\/|$)/.test(path)) return 'tasks';
     if (/\/api\/admin\/(?:users|coupons)(?:\/|$)/.test(path)) return 'users';
     if (/\/api\/admin\/enterprise(?:\/|$)/.test(path)) return 'enterprise';
     if (/\/api\/admin\/(?:growth|acquisition)(?:\/|$)/.test(path)) return 'analytics';
@@ -396,6 +443,7 @@ function clearPrivilegedState() {
     state.aiProfileId = null; state.aiProfileRequestId += 1;
     state.aiBilling.requestId += 1; state.aiBilling.data = null; state.aiBilling.loading = false; state.aiBilling.syncing = false;
     state.team = { members: [], sections: [], loading: false, saving: false, editingId: null };
+    clearTaskState();
     const cacheRefs = ['tableBody', 'enterpriseTableBody', 'financeTableBody', 'financeTimelineChart', 'financeBreakdownChart', 'financeContributorChart',
         'aiProfilesTableBody', 'aiProfileDetailBody', 'aiCoverage', 'aiReconciliation', 'aiDailyTableBody', 'aiTimelineChart', 'aiSourceChart', 'aiModelChart',
         'enterpriseCredentialResult', 'accountDetails', 'couponTableBody', 'teamTableBody', 'teamSummary', 'usersSummary', 'enterpriseSummary',
@@ -433,7 +481,7 @@ function applyAdminAccess(payload) {
     if (state.currentUser?.id !== payload.user.id || JSON.stringify(state.access) !== JSON.stringify(access)) clearPrivilegedState();
     state.currentUser = payload.user;
     state.access = access;
-    if (!canAccessSection(state.activeTab)) state.activeTab = ADMIN_SECTIONS.find(canAccessSection) || null;
+    if (!canAccessSection(state.activeTab)) state.activeTab = ADMIN_TABS.find(canAccessSection) || null;
     renderActiveTab(); applyAdminPermissions(); updateSessionBadge();
     return Boolean(state.activeTab);
 }
@@ -616,6 +664,939 @@ function handleTeamAction(event) {
     if (button.dataset.teamAction === 'revoke') void revokeTeamMember(button.dataset.userId);
 }
 
+// ---------------------------------------------------------------------------
+// Tasks — the team's own small task board (app/routers/admin_tasks.py).
+// Every console member can hand work to a teammate; the server decides who sees what.
+// ---------------------------------------------------------------------------
+
+function readTaskPrefs() {
+    try {
+        const raw = JSON.parse(localStorage.getItem(TASK_PREFS_KEY) || '{}');
+        return { scope: TASK_SCOPES.includes(raw.scope) ? raw.scope : 'mine', showClosed: raw.showClosed === true };
+    } catch { return { scope: 'mine', showClosed: false }; }
+}
+
+function saveTaskPrefs() {
+    try { localStorage.setItem(TASK_PREFS_KEY, JSON.stringify({ scope: state.tasks.scope, showClosed: state.tasks.showClosed })); } catch { /* per-viewer convenience only */ }
+}
+
+function freshTaskState() {
+    const prefs = readTaskPrefs();
+    return { items: [], members: [], me: null, canViewAll: false, closedTotal: 0, truncated: false,
+        loaded: false, loading: false, requestId: 0, scope: prefs.scope, search: '', person: '', showClosed: prefs.showClosed,
+        openId: null, detail: null, detailRequestId: 0, editing: false, saving: false, pendingOpenId: null, dragId: null };
+}
+
+function clearTaskState() {
+    const previous = state.tasks;
+    state.tasks = freshTaskState();
+    state.tasks.requestId = (previous?.requestId || 0) + 1;
+    state.tasks.detailRequestId = (previous?.detailRequestId || 0) + 1;
+    state.taskBadgeRequestId += 1;
+    if (refs.taskModal && !refs.taskModal.hidden) {
+        refs.taskModal.hidden = true;
+        if (!refs.couponModal || refs.couponModal.hidden) document.body?.classList?.remove('admin-modal-open');
+    }
+    if (refs.taskModalBody) refs.taskModalBody.innerHTML = '';
+    if (refs.taskBoard) refs.taskBoard.innerHTML = '';
+    if (refs.taskSearch) refs.taskSearch.value = '';
+    if (refs.taskHint) refs.taskHint.hidden = true;
+    if (refs.taskPerson) { refs.taskPerson.innerHTML = '<option value="">Everyone</option>'; refs.taskPerson.value = ''; }
+    setTaskError();
+    updateTaskScopeUi();  // counts back to 0 and the roster gone, not the last person's numbers
+    renderTaskBadge(0);
+}
+
+function setTaskError(message = '') {
+    if (!refs.taskError) return;
+    refs.taskError.textContent = message;
+    refs.taskError.hidden = !message;
+}
+
+function setTaskModalError(message = '') {
+    const line = refs.taskModalBody?.querySelector?.('[data-task-error]');
+    if (line) { line.textContent = message; line.hidden = !message; }
+    else if (message) showFlash(message, 'error');
+}
+
+function taskMe() {
+    return state.tasks.me ?? state.currentUser?.id ?? null;
+}
+
+function findTask(taskId) {
+    return state.tasks.items.find((task) => Number(task.id) === Number(taskId)) || null;
+}
+
+function upsertTask(task) {
+    if (!task?.id) return;
+    const index = state.tasks.items.findIndex((item) => Number(item.id) === Number(task.id));
+    if (index === -1) state.tasks.items.unshift(task); else state.tasks.items[index] = task;
+}
+
+function removeTask(taskId) {
+    state.tasks.items = state.tasks.items.filter((item) => Number(item.id) !== Number(taskId));
+}
+
+function taskInScope(task, scope = state.tasks.scope) {
+    const me = taskMe();
+    const assigneeId = task.assignee?.id ?? null;
+    if (scope === 'mine') return assigneeId === me;
+    if (scope === 'created') return (task.created_by?.id ?? null) === me && assigneeId !== me;
+    return true;
+}
+
+function taskMatchesFilters(task) {
+    const query = state.tasks.search.trim().toLowerCase();
+    if (query) {
+        const haystack = [task.title, task.description, task.assignee?.name, task.created_by?.name, `#${task.id}`];
+        if (!haystack.some((value) => String(value || '').toLowerCase().includes(query))) return false;
+    }
+    if (state.tasks.scope === 'all' && state.tasks.person) {
+        if (state.tasks.person === 'none') return !task.assignee;
+        return String(task.assignee?.id ?? '') === state.tasks.person;
+    }
+    return true;
+}
+
+function taskTime(value) {
+    const time = Date.parse(value || '');
+    return Number.isNaN(time) ? 0 : time;
+}
+
+function sortTasks(items, status) {
+    const recent = (a, b) => taskTime(b.status_changed_at || b.updated_at) - taskTime(a.status_changed_at || a.updated_at);
+    if (status === 'done' || status === 'closed') return [...items].sort(recent);
+    return [...items].sort((a, b) => ((TASK_PRIORITY_RANK[a.priority] ?? 9) - (TASK_PRIORITY_RANK[b.priority] ?? 9))
+        || String(a.due_date || '9999-12-31').localeCompare(String(b.due_date || '9999-12-31'))
+        || (taskTime(b.updated_at) - taskTime(a.updated_at)));
+}
+
+function formatTaskDate(iso) {
+    const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(String(iso || ''));
+    if (!match) return '';
+    const [year, month, day] = match.slice(1).map(Number);
+    const options = { day: 'numeric', month: 'short', timeZone: 'UTC' };
+    if (year !== new Date().getFullYear()) options.year = 'numeric';
+    return new Date(Date.UTC(year, month - 1, day)).toLocaleDateString(undefined, options);
+}
+
+function taskDueInfo(task) {
+    if (!task.due_date) return null;
+    const label = formatTaskDate(task.due_date);
+    if (['done', 'closed'].includes(task.status)) return { text: `Due ${label}`, tone: '' };
+    const today = localIsoDate();
+    if (task.due_date < today) return { text: `Overdue · ${label}`, tone: 'is-overdue' };
+    if (task.due_date === today) return { text: 'Due today', tone: 'is-today' };
+    return { text: `Due ${label}`, tone: '' };
+}
+
+function formatRelativeTime(value) {
+    const time = taskTime(value);
+    if (!time) return '';
+    const seconds = Math.round((Date.now() - time) / 1000);
+    if (seconds < 45) return 'just now';
+    if (seconds < 3600) return `${Math.max(1, Math.round(seconds / 60))}m ago`;
+    if (seconds < 86400) return `${Math.round(seconds / 3600)}h ago`;
+    if (seconds < 7 * 86400) return `${Math.round(seconds / 86400)}d ago`;
+    const date = new Date(time);
+    const options = { day: 'numeric', month: 'short' };
+    if (date.getFullYear() !== new Date().getFullYear()) options.year = 'numeric';
+    return date.toLocaleDateString(undefined, options);
+}
+
+function taskPersonName(person, { you = 'You' } = {}) {
+    if (!person) return 'Former member';
+    return Number(person.id) === Number(taskMe()) ? you : (person.name || person.email || 'Teammate');
+}
+
+function taskInitials(person) {
+    const name = String(person?.name || person?.email || '?').trim();
+    const parts = name.split(/[\s._-]+/).filter(Boolean);
+    return ((parts[0]?.[0] || '?') + (parts.length > 1 ? parts[parts.length - 1][0] : '')).toUpperCase();
+}
+
+function taskAvatar(person) {
+    if (!person) return '<span class="tasks-avatar is-empty" aria-hidden="true">?</span>';
+    const hue = (Math.abs(Number(person.id) || 0) * 47) % 360;
+    return `<span class="tasks-avatar" style="--tasks-avatar-hue:${hue}" aria-hidden="true">${escapeHtml(taskInitials(person))}</span>`;
+}
+
+function updateTaskScopeUi() {
+    const counts = { mine: 0, created: 0, all: 0 };
+    state.tasks.items.forEach((task) => {
+        if (task.status === 'closed') return;
+        TASK_SCOPES.forEach((scope) => { if (taskInScope(task, scope)) counts[scope] += 1; });
+    });
+    refs.taskScopes?.querySelectorAll?.('[data-task-scope]').forEach((button) => {
+        const active = button.dataset.taskScope === state.tasks.scope;
+        button.classList.toggle('is-active', active);
+        button.setAttribute('aria-pressed', String(active));
+        const count = button.querySelector?.('[data-scope-count]');
+        if (count) count.textContent = String(counts[button.dataset.taskScope] ?? 0);
+    });
+    if (refs.taskScopeAllLabel) refs.taskScopeAllLabel.textContent = state.tasks.canViewAll ? 'All team tasks' : 'All my tasks';
+    if (refs.taskPersonWrap) refs.taskPersonWrap.hidden = state.tasks.scope !== 'all';
+    if (refs.taskShowClosed) refs.taskShowClosed.checked = state.tasks.showClosed;
+}
+
+function renderTaskPersonFilter() {
+    if (!refs.taskPerson) return;
+    const current = state.tasks.person;
+    const options = ['<option value="">Everyone</option>', '<option value="none">Unassigned</option>']
+        .concat(state.tasks.members.map((member) => `<option value="${escapeHtml(member.id)}">${escapeHtml(taskPersonName(member, { you: `${member.name} (you)` }))}</option>`));
+    refs.taskPerson.innerHTML = options.join('');
+    const stillValid = !current || current === 'none' || state.tasks.members.some((member) => String(member.id) === current);
+    state.tasks.person = stillValid ? current : '';
+    refs.taskPerson.value = state.tasks.person;
+}
+
+function renderTaskCard(task) {
+    const due = taskDueInfo(task);
+    const mine = state.tasks.scope === 'mine';
+    const person = mine ? task.created_by : task.assignee;
+    const personLabel = mine
+        ? `From ${taskPersonName(task.created_by, { you: 'you' })}`
+        : (task.assignee ? taskPersonName(task.assignee) : 'Unassigned');
+    const priority = TASK_PRIORITY_LABELS[task.priority] || task.priority;
+    const status = TASK_STATUS_LABELS[task.status] || task.status;
+    const label = `${task.title}. ${status}, ${priority} priority${due ? `, ${due.text}` : ''}. ${personLabel}.`;
+    return `<div class="tasks-card priority-${escapeHtml(task.priority)}" role="button" tabindex="0" data-task-id="${escapeHtml(task.id)}"
+            draggable="${task.can_edit ? 'true' : 'false'}" aria-label="${escapeHtml(label)}">
+        <div class="tasks-card-top"><span class="tasks-card-id">#${escapeHtml(task.id)}</span><span class="tasks-priority priority-${escapeHtml(task.priority)}">${escapeHtml(priority)}</span></div>
+        <p class="tasks-card-title">${escapeHtml(task.title)}</p>
+        <div class="tasks-card-foot">
+            <span class="tasks-card-person">${person || !mine ? taskAvatar(person) : ''}<span>${escapeHtml(personLabel)}</span></span>
+            <span class="tasks-card-signals">${due ? `<span class="tasks-due ${due.tone}">${escapeHtml(due.text)}</span>` : ''}${task.note_count ? `<span class="tasks-note-count" title="${escapeHtml(task.note_count)} note${task.note_count === 1 ? '' : 's'}"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 12a8 8 0 0 1-11.6 7.1L4 20l1-4.6A8 8 0 1 1 21 12Z"/></svg>${escapeHtml(task.note_count)}</span>` : ''}</span>
+        </div>
+    </div>`;
+}
+
+function renderTaskBoard() {
+    if (!refs.taskBoard) return;
+    updateTaskScopeUi();
+    if (!state.tasks.loaded) return;
+    const visible = state.tasks.items.filter((task) => taskInScope(task) && taskMatchesFilters(task));
+    const columns = TASK_STATUSES.filter((column) => column.key !== 'closed' || state.tasks.showClosed);
+    refs.taskBoard.classList.toggle('show-closed', state.tasks.showClosed);
+    refs.taskBoard.innerHTML = columns.map((column) => {
+        const items = sortTasks(visible.filter((task) => task.status === column.key), column.key);
+        const closedNote = column.key === 'closed' && state.tasks.closedTotal > state.tasks.items.filter((task) => task.status === 'closed').length
+            ? `<p class="tasks-column-note">Showing the latest closed tasks.</p>` : '';
+        return `<section class="tasks-column" data-status="${column.key}" aria-label="${escapeHtml(column.label)}">
+            <header class="tasks-column-head"><span class="tasks-status-dot status-${column.key}" aria-hidden="true"></span><h3>${escapeHtml(column.label)}</h3><span class="tasks-column-count">${items.length}</span></header>
+            <div class="tasks-column-body" data-drop-status="${column.key}">${items.map(renderTaskCard).join('') || '<p class="tasks-column-empty">No tasks</p>'}${closedNote}</div>
+        </section>`;
+    }).join('');
+    renderTaskHint(visible);
+}
+
+function renderTaskHint(visible) {
+    if (!refs.taskHint) return;
+    let text = '';
+    const filtered = Boolean(state.tasks.search.trim() || (state.tasks.scope === 'all' && state.tasks.person));
+    const openVisible = visible.filter((task) => task.status !== 'closed').length;
+    if (state.tasks.truncated) text = 'Showing the 500 most recently updated open tasks.';
+    else if (!openVisible && filtered) text = 'No tasks match these filters.';
+    else if (!openVisible && state.tasks.scope === 'mine') text = 'Nothing is assigned to you right now. Tasks a teammate gives you will appear under Pending.';
+    else if (!openVisible && state.tasks.scope === 'created') text = 'You haven’t handed out any open tasks. Use New task to assign one to a teammate.';
+    else if (!openVisible) text = 'No open tasks yet. Use New task to assign one to a teammate.';
+    refs.taskHint.textContent = text;
+    refs.taskHint.hidden = !text;
+}
+
+function renderTaskBadge(count) {
+    const total = Math.max(0, Number(count) || 0);
+    if (refs.tasksNavBadge) {
+        refs.tasksNavBadge.hidden = total === 0;
+        refs.tasksNavBadge.textContent = total > 99 ? '99+' : String(total);
+    }
+    refs.tasksTabBtn?.setAttribute('aria-label', total ? `Tasks, ${total} open assigned to you` : 'Tasks');
+}
+
+function updateTaskBadgeFromItems() {
+    if (!state.tasks.loaded) return;
+    const me = taskMe();
+    renderTaskBadge(state.tasks.items.filter((task) => task.assignee?.id === me && TASK_OPEN_STATUSES.includes(task.status)).length);
+}
+
+async function refreshTaskBadge() {
+    if (!canAccessSection('tasks') || !await ensureAdminProtection({ silent: true })) return;
+    const requestId = ++state.taskBadgeRequestId;
+    try {
+        const response = await adminFetch(`${API_BASE}/api/admin/tasks/summary`, { headers: buildAuthHeaders(), credentials: 'same-origin' });
+        const payload = await response.json().catch(() => ({}));
+        if (requestId !== state.taskBadgeRequestId || !response.ok) return;
+        renderTaskBadge(payload.assigned_open);
+    } catch { /* the badge is a hint; the board is the record */ }
+}
+
+async function loadTasks({ quiet = false } = {}) {
+    if (!canAccessSection('tasks') || !await ensureAdminProtection({ silent: quiet })) return;
+    const requestId = ++state.tasks.requestId;
+    state.tasks.loading = true;
+    if (!quiet) setTaskError();
+    if (!state.tasks.loaded && refs.taskBoard) refs.taskBoard.innerHTML = '<p class="tasks-loading">Loading tasks…</p>';
+    try {
+        const response = await adminFetch(`${API_BASE}/api/admin/tasks`, { headers: buildAuthHeaders(), credentials: 'same-origin' });
+        const payload = await response.json().catch(() => ({}));
+        if (requestId !== state.tasks.requestId) return;
+        if (!response.ok) {
+            setTaskError(normalizeErrorMessage(payload, 'Could not load tasks.'));
+            if (!state.tasks.loaded && refs.taskBoard) refs.taskBoard.innerHTML = '';
+            return;
+        }
+        state.tasks.items = Array.isArray(payload.tasks) ? payload.tasks : [];
+        state.tasks.members = Array.isArray(payload.members) ? payload.members : [];
+        state.tasks.me = payload.me ?? state.currentUser?.id ?? null;
+        state.tasks.canViewAll = Boolean(payload.can_view_all);
+        state.tasks.closedTotal = Number(payload.closed_total) || 0;
+        state.tasks.truncated = Boolean(payload.truncated);
+        state.tasks.loaded = true;
+        setTaskError();
+        renderTaskPersonFilter();
+        renderTaskBoard();
+        updateTaskBadgeFromItems();
+        const pending = state.tasks.pendingOpenId;
+        if (pending) { state.tasks.pendingOpenId = null; void openTaskDetail(pending); }
+    } catch {
+        if (requestId === state.tasks.requestId) setTaskError('Could not load tasks. Please retry.');
+    } finally {
+        if (requestId === state.tasks.requestId) state.tasks.loading = false;
+    }
+}
+
+function setTaskScope(scope) {
+    if (!TASK_SCOPES.includes(scope) || state.tasks.scope === scope) return;
+    state.tasks.scope = scope;
+    saveTaskPrefs();
+    renderTaskBoard();
+}
+
+// ---- Task modal: create form and detail view --------------------------------
+
+function taskOptions(items, selected) {
+    return items.map((item) => `<option value="${escapeHtml(item.key)}" ${item.key === selected ? 'selected' : ''}>${escapeHtml(item.label)}</option>`).join('');
+}
+
+function taskAssigneeOptions(selectedId, current = null) {
+    const selected = selectedId === null || selectedId === undefined ? '' : String(selectedId);
+    const me = taskMe();
+    const members = [...state.tasks.members].sort((a, b) => (Number(b.id) === Number(me)) - (Number(a.id) === Number(me)));
+    const options = [`<option value="" ${selected === '' ? 'selected' : ''}>Unassigned</option>`];
+    if (current && !members.some((member) => String(member.id) === String(current.id))) {
+        // Keep showing who has it even after they lost console access, so it can be reassigned.
+        options.push(`<option value="${escapeHtml(current.id)}" selected disabled>${escapeHtml(current.name)} (no console access)</option>`);
+    }
+    members.forEach((member) => {
+        const label = Number(member.id) === Number(me) ? `Me (${member.name})` : member.name;
+        options.push(`<option value="${escapeHtml(member.id)}" ${String(member.id) === selected ? 'selected' : ''}>${escapeHtml(label)}</option>`);
+    });
+    return options.join('');
+}
+
+function showTaskModal({ returnTaskId = null } = {}) {
+    if (!refs.taskModal) return;
+    if (refs.taskModal.hidden) {
+        state.tasks.returnFocus = document.activeElement || null;
+        state.tasks.returnTaskId = returnTaskId;
+    }
+    refs.taskModal.hidden = false;
+    state.tasks.openedAt = Date.now();
+    document.body?.classList?.add('admin-modal-open');
+    // Keyboard and screen-reader focus stay in the dialog while it is open.
+    const shell = document.querySelector?.('.admin-shell');
+    if (shell) shell.inert = true;
+}
+
+function focusTaskDialog() {
+    refs.taskModal?.querySelector?.('[role="dialog"]')?.focus?.({ preventScroll: true });
+}
+
+function closeTaskModal() {
+    state.tasks.openId = null;
+    state.tasks.detail = null;
+    state.tasks.editing = false;
+    state.tasks.detailRequestId += 1;
+    clearTaskHash();
+    if (!refs.taskModal || refs.taskModal.hidden) return;
+    refs.taskModal.hidden = true;
+    if (refs.taskModalBody) refs.taskModalBody.innerHTML = '';
+    if (!refs.couponModal || refs.couponModal.hidden) document.body?.classList?.remove('admin-modal-open');
+    const shell = document.querySelector?.('.admin-shell');
+    if (shell) shell.inert = false;
+    // The board re-renders while a task is open, so find the card again by id.
+    const card = state.tasks.returnTaskId ? refs.taskBoard?.querySelector?.(`[data-task-id="${Number(state.tasks.returnTaskId)}"]`) : null;
+    const focusTarget = card || (state.tasks.returnFocus?.isConnected ? state.tasks.returnFocus : refs.taskNewBtn);
+    state.tasks.returnFocus = null; state.tasks.returnTaskId = null;
+    focusTarget?.focus?.({ preventScroll: true });
+}
+
+// Which control had focus, so a re-render after saving can put the user back there.
+function taskFocusKey(element) {
+    if (!element || !refs.taskModalBody?.contains?.(element)) return null;
+    if (element.dataset?.taskField) return `[data-task-field="${element.dataset.taskField}"]`;
+    if (element.closest?.('[data-task-form="note"]')) return '[data-task-form="note"] textarea';
+    if (element.dataset?.taskAction) return `[data-task-action="${element.dataset.taskAction}"]`;
+    return null;
+}
+
+function taskModalHasDraft() {
+    const body = refs.taskModalBody;
+    if (!body?.querySelector) return false;
+    const note = body.querySelector('[data-task-form="note"] textarea');
+    if (note && note.value.trim()) return true;
+    if (state.tasks.editing || body.querySelector('[data-task-typing]')) return true;
+    const create = body.querySelector('[data-task-form="create"]');
+    return Boolean(create && [...create.querySelectorAll('input[type="text"], textarea')].some((field) => field.value.trim()));
+}
+
+async function requestCloseTaskModal() {
+    if (state.tasks.saving) return;
+    if (taskModalHasDraft() && !(await confirmDialog('What you typed in this task hasn’t been saved.', { title: 'Discard your changes?', okText: 'Discard', cancelText: 'Keep editing' }))) return;
+    closeTaskModal();
+}
+
+function setTaskSaving(saving) {
+    state.tasks.saving = saving;
+    refs.taskModal?.querySelector?.('[role="dialog"]')?.setAttribute('aria-busy', String(saving));
+    refs.taskModalBody?.querySelectorAll?.('input, select, textarea, button').forEach((control) => {
+        control.disabled = saving || Boolean(control.hasAttribute?.('data-task-locked'));
+    });
+}
+
+async function openTaskCreate() {
+    if (!canWriteSection('tasks') || state.tasks.saving) return;
+    if (!state.tasks.loaded) { await loadTasks(); if (!state.tasks.loaded) return; }
+    state.tasks.openId = null; state.tasks.detail = null; state.tasks.editing = false;
+    state.tasks.detailRequestId += 1;
+    const me = taskMe();
+    const others = state.tasks.members.filter((member) => Number(member.id) !== Number(me));
+    // With one teammate (today's two-founder team) the obvious assignee is preselected.
+    const defaultAssignee = others.length === 1 ? others[0].id : '';
+    if (refs.taskModalEyebrow) refs.taskModalEyebrow.textContent = 'New task';
+    if (refs.taskModalTitle) refs.taskModalTitle.textContent = 'Assign a task';
+    refs.taskModalBody.innerHTML = `<form class="tasks-form" data-task-form="create" novalidate>
+        <label class="tasks-field"><span>Title</span><input type="text" name="title" maxlength="200" required placeholder="What needs to be done?" autocomplete="off"></label>
+        <label class="tasks-field"><span>Details <span class="tasks-optional">(optional)</span></span><textarea name="description" rows="4" maxlength="5000" placeholder="Context, links, and what “done” looks like"></textarea></label>
+        <div class="tasks-form-grid">
+            <label class="tasks-field"><span>Assign to</span><select name="assignee_user_id">${taskAssigneeOptions(defaultAssignee)}</select></label>
+            <label class="tasks-field"><span>Priority</span><select name="priority">${taskOptions(TASK_PRIORITIES, 'medium')}</select></label>
+            <label class="tasks-field"><span>Due date <span class="tasks-optional">(optional)</span></span><input type="date" name="due_date" min="2000-01-01" max="2100-12-31"></label>
+        </div>
+        <p class="tasks-error" data-task-error role="alert" hidden></p>
+        <div class="tasks-form-actions"><button type="button" class="ghost-btn small-btn" data-task-action="cancel">Cancel</button><button type="submit" class="primary-btn small-btn">Create task</button></div>
+    </form>`;
+    showTaskModal();
+    refs.taskModalBody.querySelector?.('input[name="title"]')?.focus();
+}
+
+function readTaskCreateForm(form) {
+    const field = (name) => form.querySelector(`[name="${name}"]`);
+    const title = (field('title')?.value || '').trim();
+    if (!title) throw new Error('Give the task a title.');
+    const assignee = field('assignee_user_id')?.value || '';
+    return {
+        title,
+        description: (field('description')?.value || '').trim() || null,
+        assignee_user_id: assignee ? Number(assignee) : null,
+        priority: TASK_PRIORITY_LABELS[field('priority')?.value] ? field('priority').value : 'medium',
+        due_date: field('due_date')?.value || null
+    };
+}
+
+async function submitTaskCreate(form) {
+    if (state.tasks.saving || !canWriteSection('tasks')) return;
+    let payload;
+    try { payload = readTaskCreateForm(form); } catch (error) { setTaskModalError(error.message); form.querySelector('[name="title"]')?.focus(); return; }
+    if (!await ensureAdminProtection({ silent: false })) return;
+    setTaskModalError(); setTaskSaving(true);
+    try {
+        const response = await adminFetch(`${API_BASE}/api/admin/tasks`, {
+            method: 'POST', headers: buildAuthHeaders({ 'Content-Type': 'application/json' }), credentials: 'same-origin', body: JSON.stringify(payload)
+        });
+        const result = await response.json().catch(() => ({}));
+        if (!response.ok || !result.task) { setTaskModalError(normalizeErrorMessage(result, 'Could not create the task.')); return; }
+        upsertTask(result.task);
+        // Show the task where it now lives, so creating one never looks like nothing happened.
+        if (!taskInScope(result.task)) { state.tasks.scope = taskInScope(result.task, 'mine') ? 'mine' : taskInScope(result.task, 'created') ? 'created' : 'all'; saveTaskPrefs(); }
+        closeTaskModal();
+        renderTaskBoard(); updateTaskBadgeFromItems();
+        const assignee = result.task.assignee;
+        showFlash(assignee && Number(assignee.id) !== Number(taskMe()) ? `Task assigned to ${assignee.name}. They’ll get an email.` : 'Task created.', 'success');
+    } catch { setTaskModalError('Could not create the task. Please retry.'); }
+    finally { setTaskSaving(false); }
+}
+
+async function openTaskDetail(taskId) {
+    const id = Number(taskId);
+    if (!id || !canAccessSection('tasks') || !await ensureAdminProtection({ silent: false })) return;
+    state.tasks.openId = id; state.tasks.detail = null; state.tasks.editing = false;
+    const requestId = ++state.tasks.detailRequestId;
+    const cached = findTask(id);
+    if (refs.taskModalEyebrow) refs.taskModalEyebrow.textContent = `Task #${id}`;
+    if (refs.taskModalTitle) refs.taskModalTitle.textContent = cached?.title || 'Loading task…';
+    if (refs.taskModalBody) refs.taskModalBody.innerHTML = '<p class="tasks-loading">Loading task…</p>';
+    const wasOpen = refs.taskModal && !refs.taskModal.hidden;
+    showTaskModal({ returnTaskId: id });
+    if (!wasOpen) focusTaskDialog();
+    setTaskHash(id);
+    try {
+        const response = await adminFetch(`${API_BASE}/api/admin/tasks/${encodeURIComponent(id)}`, { headers: buildAuthHeaders(), credentials: 'same-origin' });
+        const payload = await response.json().catch(() => ({}));
+        if (requestId !== state.tasks.detailRequestId || state.tasks.openId !== id) return;
+        if (!response.ok) {
+            if (response.status === 404) { removeTask(id); renderTaskBoard(); updateTaskBadgeFromItems(); }
+            if (refs.taskModalTitle) refs.taskModalTitle.textContent = 'Task unavailable';
+            const message = response.status === 404 ? 'This task was deleted, or it isn’t shared with you.' : normalizeErrorMessage(payload, 'Could not load this task.');
+            if (refs.taskModalBody) refs.taskModalBody.innerHTML = `<p class="tasks-error">${escapeHtml(message)}</p>`;
+            return;
+        }
+        applyTaskDetail(payload);
+    } catch {
+        if (requestId === state.tasks.detailRequestId && refs.taskModalBody) refs.taskModalBody.innerHTML = '<p class="tasks-error">Could not load this task. Please retry.</p>';
+    }
+}
+
+function applyTaskDetail(payload, { keepNote = true, endEdit = false } = {}) {
+    if (!payload?.visible || !payload.task) {
+        const id = state.tasks.openId;
+        if (id) removeTask(id);
+        closeTaskModal(); renderTaskBoard(); updateTaskBadgeFromItems();
+        return false;
+    }
+    state.tasks.detail = { task: payload.task, timeline: Array.isArray(payload.timeline) ? payload.timeline : [] };
+    if (endEdit) state.tasks.editing = false;
+    upsertTask(payload.task);
+    renderTaskBoard(); updateTaskBadgeFromItems();
+    renderTaskDetail({ keepNote, keepEdit: !endEdit });
+    return true;
+}
+
+function describeTaskEvent(entry) {
+    const strong = (value) => `<strong>${escapeHtml(value || '—')}</strong>`;
+    const meId = String(taskMe());
+    switch (entry.kind) {
+    case 'created':
+        if (!entry.to) return 'created this task';
+        return `created this task and assigned it to ${entry.to === meId ? strong('you') : strong(entry.to_label)}`;
+    case 'status': return `moved it from ${strong(entry.from_label)} to ${strong(entry.to_label)}`;
+    case 'assignee':
+        if (!entry.to) return `unassigned ${strong(entry.from_label)}`;
+        if (!entry.from) return `assigned it to ${entry.to === meId ? strong('you') : strong(entry.to_label)}`;
+        return `reassigned it from ${strong(entry.from_label)} to ${entry.to === meId ? strong('you') : strong(entry.to_label)}`;
+    case 'priority': return `changed the priority from ${strong(entry.from_label)} to ${strong(entry.to_label)}`;
+    case 'due_date': return entry.to ? `set the due date to ${strong(entry.to_label)}` : 'removed the due date';
+    case 'edited': {
+        const fields = String(entry.to || '').split(',').filter(Boolean).map((field) => escapeHtml(field));
+        return `edited the ${fields.join(' and ') || 'task'}`;
+    }
+    default: return 'updated this task';
+    }
+}
+
+function renderTaskTimelineEntry(entry) {
+    const who = taskPersonName(entry.author);
+    const when = `<time datetime="${escapeHtml(entry.created_at || '')}" title="${escapeHtml(formatDateTime(entry.created_at))} UTC">${escapeHtml(formatRelativeTime(entry.created_at))}</time>`;
+    if (entry.kind === 'note') {
+        return `<li class="tasks-entry tasks-entry-note">${taskAvatar(entry.author)}<div class="tasks-entry-bubble">
+            <div class="tasks-entry-head"><strong>${escapeHtml(who)}</strong>${when}${entry.can_delete ? `<button type="button" class="tasks-link-btn" data-task-action="delete-note" data-note-id="${escapeHtml(entry.id)}">Delete</button>` : ''}</div>
+            <p>${escapeHtml(entry.body)}</p></div></li>`;
+    }
+    return `<li class="tasks-entry tasks-entry-event"><span class="tasks-entry-dot status-${escapeHtml(entry.kind === 'status' ? entry.to : 'event')}" aria-hidden="true"></span><p><strong>${escapeHtml(who)}</strong> ${describeTaskEvent(entry)} · ${when}</p></li>`;
+}
+
+function renderTaskDetail({ keepNote = true, keepEdit = true } = {}) {
+    const detail = state.tasks.detail;
+    if (!detail || !refs.taskModalBody) return;
+    const { task, timeline } = detail;
+    // A status change made while a note or an edit is half-written must not wipe it.
+    const sameTask = refs.taskModalBody.dataset?.taskId === String(task.id);
+    const draftNote = keepNote && sameTask ? refs.taskModalBody.querySelector?.('[data-task-form="note"] textarea')?.value || '' : '';
+    const editForm = keepEdit && sameTask && state.tasks.editing ? refs.taskModalBody.querySelector?.('[data-task-form="edit"]') : null;
+    const draftEdit = editForm ? { title: editForm.querySelector('[name="title"]')?.value, description: editForm.querySelector('[name="description"]')?.value } : null;
+    const wasEditing = Boolean(refs.taskModalBody.querySelector?.('[data-task-form="edit"]'));
+    const editable = Boolean(task.can_edit);
+    const lock = editable ? '' : 'disabled data-task-locked';
+    if (refs.taskModalEyebrow) refs.taskModalEyebrow.textContent = `Task #${task.id} · ${TASK_STATUS_LABELS[task.status] || task.status}`;
+    if (refs.taskModalTitle) refs.taskModalTitle.textContent = task.title;
+    const description = state.tasks.editing
+        ? `<form class="tasks-form" data-task-form="edit" novalidate>
+            <label class="tasks-field"><span>Title</span><input type="text" name="title" maxlength="200" required value="${escapeHtml(task.title)}" autocomplete="off"></label>
+            <label class="tasks-field"><span>Details</span><textarea name="description" rows="5" maxlength="5000">${escapeHtml(task.description)}</textarea></label>
+            <div class="tasks-form-actions"><button type="button" class="ghost-btn small-btn" data-task-action="cancel-edit">Cancel</button><button type="submit" class="primary-btn small-btn">Save</button></div>
+        </form>`
+        : (task.description ? `<p class="tasks-description">${escapeHtml(task.description)}</p>` : '<p class="tasks-muted">No details yet.</p>');
+    const due = taskDueInfo(task);
+    const assigneeGone = task.assignee && !task.assignee.has_access;
+    refs.taskModalBody.innerHTML = `<div class="tasks-detail">
+        <div class="tasks-detail-main">
+            <section class="tasks-detail-section">
+                <div class="tasks-section-head"><h4>Details</h4>${editable && !state.tasks.editing ? '<button type="button" class="tasks-link-btn" data-task-action="edit">Edit</button>' : ''}</div>
+                ${description}
+            </section>
+            <section class="tasks-detail-section">
+                <div class="tasks-section-head"><h4>Notes &amp; activity</h4><span class="tasks-muted">${Number(task.note_count) || 0} note${Number(task.note_count) === 1 ? '' : 's'}</span></div>
+                ${editable ? `<form class="tasks-note-form" data-task-form="note" novalidate>
+                    <label class="tasks-sr-only" for="adminTaskNoteInput">Add a note</label>
+                    <textarea id="adminTaskNoteInput" name="body" rows="3" maxlength="4000" placeholder="Add a note: progress, blockers, what’s left"></textarea>
+                    <div class="tasks-note-actions"><span class="tasks-muted">Ctrl / ⌘ + Enter to post</span><button type="submit" class="primary-btn small-btn">Add note</button></div>
+                </form>` : ''}
+                <ol class="tasks-timeline">${timeline.map(renderTaskTimelineEntry).join('') || '<li class="tasks-muted">No activity yet.</li>'}</ol>
+            </section>
+        </div>
+        <aside class="tasks-detail-side" aria-label="Task details">
+            <label class="tasks-prop"><span>Status</span><select data-task-field="status" ${lock}>${taskOptions(TASK_STATUSES, task.status)}</select></label>
+            <label class="tasks-prop"><span>Assignee</span><select data-task-field="assignee_user_id" ${lock}>${taskAssigneeOptions(task.assignee?.id ?? '', task.assignee)}</select></label>
+            ${assigneeGone ? '<p class="tasks-warn">This person no longer has console access. Reassign the task.</p>' : ''}
+            <label class="tasks-prop"><span>Priority</span><select data-task-field="priority" ${lock}>${taskOptions(TASK_PRIORITIES, task.priority)}</select></label>
+            <label class="tasks-prop"><span>Due date</span><input type="date" data-task-field="due_date" value="${escapeHtml(task.due_date || '')}" min="2000-01-01" max="2100-12-31" ${lock}></label>
+            ${due?.tone ? `<p class="tasks-due ${due.tone}">${escapeHtml(due.text)}</p>` : ''}
+            <dl class="tasks-facts">
+                <div><dt>Created by</dt><dd>${escapeHtml(taskPersonName(task.created_by))}</dd></div>
+                <div><dt>Created</dt><dd title="${escapeHtml(formatDateTime(task.created_at))} UTC">${escapeHtml(formatRelativeTime(task.created_at))}</dd></div>
+                <div><dt>Last update</dt><dd title="${escapeHtml(formatDateTime(task.updated_at))} UTC">${escapeHtml(formatRelativeTime(task.updated_at))}</dd></div>
+            </dl>
+            <p class="tasks-error" data-task-error role="alert" hidden></p>
+            ${task.can_delete ? '<button type="button" class="table-btn danger tasks-delete-btn" data-task-action="delete">Delete task</button>' : ''}
+        </aside>
+    </div>`;
+    if (refs.taskModalBody.dataset) refs.taskModalBody.dataset.taskId = String(task.id);
+    const noteField = refs.taskModalBody.querySelector?.('[data-task-form="note"] textarea');
+    if (noteField && draftNote) noteField.value = draftNote;
+    const edit = refs.taskModalBody.querySelector?.('[data-task-form="edit"]');
+    if (edit && draftEdit) {
+        if (typeof draftEdit.title === 'string') edit.querySelector('[name="title"]').value = draftEdit.title;
+        if (typeof draftEdit.description === 'string') edit.querySelector('[name="description"]').value = draftEdit.description;
+    }
+    if (edit && !wasEditing) edit.querySelector('[name="title"]')?.focus();
+    else if (state.tasks.focusKey) refs.taskModalBody.querySelector?.(state.tasks.focusKey)?.focus?.({ preventScroll: true });
+    state.tasks.focusKey = null;
+}
+
+async function patchTask(taskId, body, { endEdit = false } = {}) {
+    if (state.tasks.saving) return false;
+    if (!await ensureAdminProtection({ silent: false })) return false;
+    const id = Number(taskId);
+    state.tasks.focusKey = taskFocusKey(document.activeElement);
+    setTaskSaving(true); setTaskModalError(); setTaskError();
+    try {
+        const response = await adminFetch(`${API_BASE}/api/admin/tasks/${encodeURIComponent(id)}`, {
+            method: 'PATCH', headers: buildAuthHeaders({ 'Content-Type': 'application/json' }), credentials: 'same-origin', body: JSON.stringify(body)
+        });
+        const payload = await response.json().catch(() => ({}));
+        if (!response.ok) {
+            const message = response.status === 404 ? 'This task was deleted, or it isn’t shared with you any more.' : normalizeErrorMessage(payload, 'Could not save the change.');
+            if (response.status === 404) { removeTask(id); renderTaskBoard(); updateTaskBadgeFromItems(); }
+            if (state.tasks.openId === id) setTaskModalError(message); else setTaskError(message);
+            return false;
+        }
+        if (!payload.visible || !payload.task) {
+            removeTask(id);
+            if (state.tasks.openId === id) closeTaskModal();
+            renderTaskBoard(); updateTaskBadgeFromItems();
+            showFlash('Task handed off. It has left your board.', 'success');
+            return true;
+        }
+        if (state.tasks.openId === id) applyTaskDetail(payload, { endEdit });
+        else { upsertTask(payload.task); renderTaskBoard(); updateTaskBadgeFromItems(); }
+        return true;
+    } catch {
+        if (state.tasks.openId === id) setTaskModalError('Could not save the change. Please retry.'); else setTaskError('Could not save the change. Please retry.');
+        return false;
+    } finally { setTaskSaving(false); }
+}
+
+async function askOnHoldNote() {
+    const reason = await promptDialog('Add a short note so everyone knows what it’s waiting on.', {
+        title: 'Put this task on hold?', okText: 'Put on hold', placeholder: 'Waiting on… (optional)'
+    });
+    return reason === null ? null : reason.trim();
+}
+
+// A pick with the mouse (or the date picker) saves at once. Typing a date, or arrowing
+// through a select, fires `change` on every keystroke — those save on Enter or on leaving
+// the field, so "15" is never saved as the 1st and no year is ever saved as 0002.
+function handleTaskFieldChange(event) {
+    const control = event.target.closest?.('[data-task-field]');
+    if (!control || control.dataset.taskTyping) return;
+    void commitTaskField(control);
+}
+
+function handleTaskFieldKeydown(event) {
+    const control = event.target.closest?.('[data-task-field]');
+    if (!control) return;
+    if (event.key === 'Enter') { event.preventDefault(); delete control.dataset.taskTyping; void commitTaskField(control); return; }
+    if (!['Tab', 'Escape', 'Shift', 'Control', 'Alt', 'Meta'].includes(event.key)) control.dataset.taskTyping = '1';
+}
+
+function handleTaskFieldBlur(event) {
+    const control = event.target.closest?.('[data-task-field]');
+    if (!control?.dataset.taskTyping) return;
+    delete control.dataset.taskTyping;
+    void commitTaskField(control);
+}
+
+async function commitTaskField(control) {
+    const detail = state.tasks.detail;
+    if (!control || !detail || state.tasks.saving) return;
+    const task = detail.task;
+    const field = control.dataset.taskField;
+    const current = field === 'assignee_user_id' ? (task.assignee?.id ?? null) : (task[field] ?? null);
+    let value = control.value;
+    if (field === 'assignee_user_id') value = value ? Number(value) : null;
+    if (field === 'due_date') value = value || null;
+    const restore = () => { control.value = current === null ? '' : String(current); };
+    if (value === current) return;
+    if (field === 'due_date' && (control.validity?.badInput || (value && !/^(20\d\d|2100)-\d\d-\d\d$/.test(value)))) {
+        restore();
+        setTaskModalError('Enter a full due date between 2000 and 2100, or clear the field.');
+        return;
+    }
+    const body = { [field]: value };
+    if (field === 'status' && value === 'on_hold') {
+        const reason = await askOnHoldNote();
+        if (reason === null) { restore(); return; }
+        if (reason) body.note = reason;
+    }
+    const me = Number(taskMe());
+    if (field === 'assignee_user_id' && !state.tasks.canViewAll && Number(task.created_by?.id) !== me && value !== me) {
+        const member = state.tasks.members.find((item) => Number(item.id) === value);
+        const message = value ? `${member?.name || 'Your teammate'} will own this task, and it will leave your board.` : 'This task will be unassigned, and it will leave your board.';
+        if (!(await confirmDialog(message, { title: 'Hand this task off?', okText: value ? 'Reassign' : 'Unassign', danger: false }))) { restore(); return; }
+    }
+    if (!(await patchTask(task.id, body))) restore();
+}
+
+async function moveTaskStatus(taskId, status) {
+    const task = findTask(taskId);
+    if (!task || !task.can_edit || task.status === status || !TASK_STATUS_LABELS[status] || state.tasks.saving) return;
+    const body = { status };
+    if (status === 'on_hold') {
+        const reason = await askOnHoldNote();
+        if (reason === null) return;
+        if (reason) body.note = reason;
+    }
+    const previous = task.status;
+    task.status = status;  // move the card now; the server's copy replaces it on success
+    renderTaskBoard();
+    if (!(await patchTask(task.id, body))) {
+        const stale = findTask(task.id);
+        if (stale && stale.status === status) { stale.status = previous; renderTaskBoard(); }
+    }
+}
+
+async function submitTaskEdit(form) {
+    const task = state.tasks.detail?.task;
+    if (!task || state.tasks.saving) return;
+    const title = (form.querySelector('[name="title"]')?.value || '').trim();
+    const description = (form.querySelector('[name="description"]')?.value || '').trim();
+    if (!title) { setTaskModalError('Give the task a title.'); return; }
+    const body = {};
+    if (title !== task.title) body.title = title;
+    if (description !== (task.description || '')) body.description = description || null;
+    if (!Object.keys(body).length) { state.tasks.editing = false; renderTaskDetail({ keepEdit: false }); return; }
+    await patchTask(task.id, body, { endEdit: true });
+}
+
+async function submitTaskNote(form) {
+    const task = state.tasks.detail?.task;
+    const field = form.querySelector('textarea');
+    const body = (field?.value || '').trim();
+    if (!task || state.tasks.saving) return;
+    if (!body) { field?.focus(); return; }
+    if (!await ensureAdminProtection({ silent: false })) return;
+    state.tasks.focusKey = '[data-task-form="note"] textarea';
+    setTaskSaving(true); setTaskModalError();
+    try {
+        const response = await adminFetch(`${API_BASE}/api/admin/tasks/${encodeURIComponent(task.id)}/notes`, {
+            method: 'POST', headers: buildAuthHeaders({ 'Content-Type': 'application/json' }), credentials: 'same-origin', body: JSON.stringify({ body })
+        });
+        const payload = await response.json().catch(() => ({}));
+        if (!response.ok) { setTaskModalError(normalizeErrorMessage(payload, 'Could not add the note.')); return; }
+        if (state.tasks.openId === Number(task.id)) applyTaskDetail(payload, { keepNote: false });
+    } catch { setTaskModalError('Could not add the note. Please retry.'); }
+    finally { setTaskSaving(false); }
+}
+
+async function deleteTaskNote(noteId) {
+    const task = state.tasks.detail?.task;
+    if (!task || state.tasks.saving) return;
+    if (!(await confirmDialog('This note will be removed from the task for everyone.', { title: 'Delete this note?', okText: 'Delete note' }))) return;
+    if (!await ensureAdminProtection({ silent: false })) return;
+    state.tasks.focusKey = '[data-task-form="note"] textarea';
+    setTaskSaving(true); setTaskModalError();
+    try {
+        const response = await adminFetch(`${API_BASE}/api/admin/tasks/${encodeURIComponent(task.id)}/notes/${encodeURIComponent(noteId)}`, {
+            method: 'DELETE', headers: buildAuthHeaders(), credentials: 'same-origin'
+        });
+        const payload = await response.json().catch(() => ({}));
+        if (!response.ok) { setTaskModalError(normalizeErrorMessage(payload, 'Could not delete the note.')); return; }
+        if (state.tasks.openId === Number(task.id)) applyTaskDetail(payload);
+    } catch { setTaskModalError('Could not delete the note. Please retry.'); }
+    finally { setTaskSaving(false); }
+}
+
+async function deleteTask() {
+    const task = state.tasks.detail?.task;
+    if (!task?.can_delete || state.tasks.saving) return;
+    if (!(await confirmDialog(`“${task.title}” and all of its notes will be deleted for everyone. If the work is finished, close the task instead. Closed tasks keep their history.`, { title: 'Delete this task?', okText: 'Delete task' }))) return;
+    if (!await ensureAdminProtection({ silent: false })) return;
+    setTaskSaving(true); setTaskModalError();
+    try {
+        const response = await adminFetch(`${API_BASE}/api/admin/tasks/${encodeURIComponent(task.id)}`, {
+            method: 'DELETE', headers: buildAuthHeaders(), credentials: 'same-origin'
+        });
+        const payload = await response.json().catch(() => ({}));
+        if (!response.ok) { setTaskModalError(normalizeErrorMessage(payload, 'Could not delete the task.')); return; }
+        removeTask(task.id);
+        closeTaskModal(); renderTaskBoard(); updateTaskBadgeFromItems();
+        showFlash('Task deleted.', 'success');
+    } catch { setTaskModalError('Could not delete the task. Please retry.'); }
+    finally { setTaskSaving(false); }
+}
+
+// ---- Deep links: /admin_console#task-42 (used by task emails) ---------------
+
+function taskIdFromHash() {
+    try {
+        const match = /^#task-(\d{1,10})$/.exec(window.location?.hash || '');
+        return match ? Number(match[1]) : null;
+    } catch { return null; }
+}
+
+function setTaskHash(taskId) {
+    try { if (window.history?.replaceState && window.location?.hash !== `#task-${taskId}`) window.history.replaceState(null, '', `#task-${taskId}`); } catch { /* cosmetic */ }
+}
+
+function clearTaskHash() {
+    try {
+        if (window.history?.replaceState && /^#task-\d+$/.test(window.location?.hash || '')) {
+            window.history.replaceState(null, '', `${window.location.pathname}${window.location.search}`);
+        }
+    } catch { /* cosmetic */ }
+}
+
+function applyTaskDeepLink() {
+    let hash = '';
+    try { hash = window.location?.hash || ''; } catch { return false; }
+    const taskId = taskIdFromHash();
+    if ((!taskId && hash !== '#tasks') || !canAccessSection('tasks')) return false;
+    state.activeTab = 'tasks';
+    state.tasks.pendingOpenId = taskId;
+    renderActiveTab();
+    return true;
+}
+
+function handleTaskHashChange() {
+    if (!state.currentUser || !canAccessSection('tasks')) return;
+    const taskId = taskIdFromHash();
+    if (!taskId || taskId === state.tasks.openId) return;
+    if (state.activeTab !== 'tasks' || !state.tasks.loaded) {
+        state.tasks.pendingOpenId = taskId;
+        if (state.activeTab !== 'tasks') selectAdminTab('tasks'); else void loadTasks();
+    } else void openTaskDetail(taskId);
+}
+
+// ---- Events -------------------------------------------------------------------
+
+function clearTaskDropTargets() {
+    refs.taskBoard?.querySelectorAll?.('.is-drop-target').forEach((zone) => zone.classList.remove('is-drop-target'));
+}
+
+function bindTaskEvents() {
+    refs.tasksTabBtn?.addEventListener('click', () => selectAdminTab('tasks'));
+    refs.taskNewBtn?.addEventListener('click', () => void openTaskCreate());
+    refs.taskScopes?.addEventListener('click', (event) => {
+        const button = event.target.closest('[data-task-scope]');
+        if (button) setTaskScope(button.dataset.taskScope);
+    });
+    refs.taskSearch?.addEventListener('input', () => { state.tasks.search = refs.taskSearch.value || ''; renderTaskBoard(); });
+    refs.taskPerson?.addEventListener('change', () => { state.tasks.person = refs.taskPerson.value || ''; renderTaskBoard(); });
+    refs.taskShowClosed?.addEventListener('change', () => { state.tasks.showClosed = Boolean(refs.taskShowClosed.checked); saveTaskPrefs(); renderTaskBoard(); });
+    refs.taskBoard?.addEventListener('click', (event) => {
+        const card = event.target.closest('[data-task-id]');
+        if (card) void openTaskDetail(card.dataset.taskId);
+    });
+    refs.taskBoard?.addEventListener('keydown', (event) => {
+        const card = event.target.closest('[data-task-id]');
+        if (card && (event.key === 'Enter' || event.key === ' ')) { event.preventDefault(); void openTaskDetail(card.dataset.taskId); }
+    });
+    refs.taskBoard?.addEventListener('dragstart', (event) => {
+        const card = event.target.closest?.('[data-task-id][draggable="true"]');
+        if (!card || state.tasks.saving) { event.preventDefault(); return; }
+        state.tasks.dragId = Number(card.dataset.taskId);
+        card.classList.add('is-dragging');
+        try { event.dataTransfer.effectAllowed = 'move'; event.dataTransfer.setData('text/plain', String(state.tasks.dragId)); } catch { /* older browsers */ }
+    });
+    refs.taskBoard?.addEventListener('dragend', (event) => {
+        event.target.closest?.('[data-task-id]')?.classList.remove('is-dragging');
+        state.tasks.dragId = null;
+        clearTaskDropTargets();
+    });
+    refs.taskBoard?.addEventListener('dragover', (event) => {
+        const zone = event.target.closest?.('[data-drop-status]');
+        if (!zone || !state.tasks.dragId) return;
+        event.preventDefault();
+        try { event.dataTransfer.dropEffect = 'move'; } catch { /* older browsers */ }
+        if (!zone.classList.contains('is-drop-target')) { clearTaskDropTargets(); zone.classList.add('is-drop-target'); }
+    });
+    refs.taskBoard?.addEventListener('dragleave', (event) => {
+        const zone = event.target.closest?.('[data-drop-status]');
+        if (zone && !zone.contains(event.relatedTarget)) zone.classList.remove('is-drop-target');
+    });
+    refs.taskBoard?.addEventListener('drop', (event) => {
+        const zone = event.target.closest?.('[data-drop-status]');
+        const taskId = state.tasks.dragId;
+        clearTaskDropTargets();
+        if (!zone || !taskId) return;
+        event.preventDefault();
+        state.tasks.dragId = null;
+        void moveTaskStatus(taskId, zone.dataset.dropStatus);
+    });
+    refs.taskModalClose?.addEventListener('click', () => void requestCloseTaskModal());
+    // Backdrop closes only for a press that started on it, and not for the second click of
+    // the double-click that opened the task.
+    refs.taskModal?.addEventListener('mousedown', (event) => { state.tasks.backdropPress = event.target === refs.taskModal; });
+    refs.taskModal?.addEventListener('click', (event) => {
+        const pressed = state.tasks.backdropPress;
+        state.tasks.backdropPress = false;
+        if (event.target !== refs.taskModal || !pressed || Date.now() - (state.tasks.openedAt || 0) < 500) return;
+        void requestCloseTaskModal();
+    });
+    refs.taskModalBody?.addEventListener('submit', (event) => {
+        const form = event.target.closest('[data-task-form]');
+        if (!form) return;
+        event.preventDefault();
+        if (form.dataset.taskForm === 'create') void submitTaskCreate(form);
+        if (form.dataset.taskForm === 'edit') void submitTaskEdit(form);
+        if (form.dataset.taskForm === 'note') void submitTaskNote(form);
+    });
+    refs.taskModalBody?.addEventListener('change', (event) => {
+        if (event.target.closest('[data-task-field]')) handleTaskFieldChange(event);
+    });
+    refs.taskModalBody?.addEventListener('click', (event) => {
+        const button = event.target.closest('[data-task-action]');
+        if (!button || button.disabled) return;
+        const action = button.dataset.taskAction;
+        if (action === 'cancel') void requestCloseTaskModal();
+        if (action === 'edit') { state.tasks.editing = true; renderTaskDetail(); }
+        if (action === 'cancel-edit') { state.tasks.editing = false; renderTaskDetail({ keepEdit: false }); }
+        if (action === 'delete') void deleteTask();
+        if (action === 'delete-note') void deleteTaskNote(button.dataset.noteId);
+    });
+    refs.taskModalBody?.addEventListener('focusout', handleTaskFieldBlur);
+    refs.taskModalBody?.addEventListener('keydown', (event) => {
+        if (event.target.closest?.('[data-task-field]')) { handleTaskFieldKeydown(event); return; }
+        if (event.key !== 'Enter' || !(event.metaKey || event.ctrlKey)) return;
+        const form = event.target.closest?.('[data-task-form]');
+        if (!form) return;
+        event.preventDefault();
+        if (typeof form.requestSubmit === 'function') form.requestSubmit();
+        else form.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }));
+    });
+    window.addEventListener?.('hashchange', handleTaskHashChange);
+}
+
 function setDateColumnTimeZoneLabels() {
     if (refs.createdHeader) refs.createdHeader.textContent = `Created (${ADMIN_TIME_ZONE_LABEL})`;
     if (refs.lastLoginHeader) refs.lastLoginHeader.textContent = `Last Login (${ADMIN_TIME_ZONE_LABEL})`;
@@ -629,12 +1610,15 @@ function bindEvents() {
     refs.teamRole?.addEventListener('change', () => renderTeamSections(selectedTeamSections()));
     refs.teamCancel?.addEventListener('click', () => resetTeamForm());
     refs.teamTableBody?.addEventListener('click', handleTeamAction);
+    bindTaskEvents();
     document.addEventListener('visibilitychange', async () => {
         if (document.visibilityState !== 'visible' || !state.currentUser || state.team.saving) return;
         const revision = state.accessRevision;
         const allowed = await refreshCurrentAdminUser({ silent: true });
         if (!allowed) showAuth();
         else if (revision !== state.accessRevision) await loadActiveTab();
+        else if (state.activeTab === 'tasks') { if (!state.tasks.saving && !state.tasks.dragId) await loadTasks({ quiet: true }); }
+        else void refreshTaskBadge();
     });
     // Dynamic account, refund, and ledger controls receive the same permission rules.
     if (typeof MutationObserver !== 'undefined') {
@@ -712,11 +1696,12 @@ function bindEvents() {
     initAiRangeInputs();
     document.addEventListener('keydown', (event) => {
         if (event.key === 'Escape' && refs.couponModal && !refs.couponModal.hidden) closeCouponModal();
+        if (event.key === 'Escape' && refs.taskModal && !refs.taskModal.hidden) void requestCloseTaskModal();
     });
 }
 
 function adminTabButtons() {
-    return ADMIN_SECTIONS.map((key) => refs[`${key}TabBtn`]).filter((button) => button && !button.hidden);
+    return ADMIN_TABS.map((key) => refs[`${key}TabBtn`]).filter((button) => button && !button.hidden);
 }
 
 function updateSidebarAccessibility() {
@@ -810,6 +1795,7 @@ async function bootstrap() {
     await initializeTurnstile();
     const canAccess = await refreshCurrentAdminUser({ silent: true });
     if (canAccess) {
+        applyTaskDeepLink();
         showConsole();
         const verified = await ensureAdminProtection({ silent: true });
         if (verified) {
@@ -963,8 +1949,8 @@ function showConsole() {
 }
 
 function renderActiveTab() {
-    if (!canAccessSection(state.activeTab)) state.activeTab = ADMIN_SECTIONS.find(canAccessSection) || null;
-    ADMIN_SECTIONS.forEach((key) => {
+    if (!canAccessSection(state.activeTab)) state.activeTab = ADMIN_TABS.find(canAccessSection) || null;
+    ADMIN_TABS.forEach((key) => {
         const allowed = canAccessSection(key);
         const selected = allowed && state.activeTab === key;
         const button = refs[`${key}TabBtn`];
@@ -985,7 +1971,7 @@ function renderActiveTab() {
 
 async function handleTabSwitch(tabName) {
     const normalized = String(tabName || '').trim().toLowerCase();
-    if (!ADMIN_SECTIONS.includes(normalized) || !canAccessSection(normalized)) return;
+    if (!ADMIN_TABS.includes(normalized) || !canAccessSection(normalized)) return;
     if (state.activeTab === normalized) return;
 
     state.activeTab = normalized;
@@ -998,6 +1984,9 @@ async function handleTabSwitch(tabName) {
 
 async function loadActiveTab({ resetPage = false } = {}) {
     if (!canAccessSection(state.activeTab)) return;
+    if (state.activeTab === 'tasks') { await loadTasks(); return; }
+    // The board keeps its own badge current; every other tab refreshes it on load.
+    void refreshTaskBadge();
     if (state.activeTab === 'team') { await loadTeam(); return; }
     if (state.activeTab === 'enterprise') {
         await loadEnterpriseAccounts({ resetPage });
@@ -1326,6 +2315,7 @@ async function handleLoginSubmit(event) {
             return;
         }
 
+        applyTaskDeepLink();
         showConsole();
         refs.loginForm.reset();
         resetTurnstileWidget();

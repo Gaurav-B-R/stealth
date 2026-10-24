@@ -167,6 +167,46 @@ class AdminConsoleSession(Base):
     created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
 
 
+class AdminTeamTask(Base):
+    """A piece of work one Admin Console member hands another (console › Tasks).
+
+    Status keys live in app/routers/admin_tasks.py: pending → in_progress / on_hold →
+    done → closed. People are nullable so a deleted account de-links instead of
+    taking the team's shared history with it.
+    """
+    __tablename__ = "admin_team_tasks"
+
+    id = Column(Integer, primary_key=True, index=True)
+    title = Column(String(200), nullable=False)
+    description = Column(Text, nullable=True)
+    status = Column(String(16), nullable=False, default="pending", server_default="pending", index=True)
+    priority = Column(String(16), nullable=False, default="medium", server_default="medium")
+    assignee_user_id = Column(Integer, ForeignKey("users.id", ondelete="SET NULL"), nullable=True, index=True)
+    created_by_user_id = Column(Integer, ForeignKey("users.id", ondelete="SET NULL"), nullable=True, index=True)
+    due_date = Column(Date, nullable=True)
+    status_changed_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+    created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+    updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False)
+
+
+class AdminTeamTaskNote(Base):
+    """One entry on a task's timeline: a teammate's note, or a recorded change.
+
+    kind = note | created | status | assignee | priority | due_date | edited. Changes keep
+    the raw before/after keys (status keys, user ids, ISO dates); the API labels them.
+    """
+    __tablename__ = "admin_team_task_notes"
+
+    id = Column(Integer, primary_key=True, index=True)
+    task_id = Column(Integer, ForeignKey("admin_team_tasks.id", ondelete="CASCADE"), nullable=False, index=True)
+    author_user_id = Column(Integer, ForeignKey("users.id", ondelete="SET NULL"), nullable=True, index=True)
+    kind = Column(String(16), nullable=False, default="note", server_default="note")
+    body = Column(Text, nullable=True)
+    from_value = Column(String(255), nullable=True)
+    to_value = Column(String(255), nullable=True)
+    created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+
+
 class USUniversity(Base):
     __tablename__ = "us_universities"
     
