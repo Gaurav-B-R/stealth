@@ -46,6 +46,7 @@ _DELINK_USER_COLUMNS = [
     (models.AdminTeamTask, "assignee_user_id"),  # team tasks are shared work: keep, unassigned
     (models.AdminTeamTask, "created_by_user_id"),
     (models.AdminTeamTaskNote, "author_user_id"),
+    (models.AdminTeamTaskAttachment, "uploaded_by_user_id"),  # the file stays with the task
     (models.SubscriptionPayment, "user_id"),  # financial records kept for accounting/tax
     (models.GeminiUsageEvent, "user_id"),  # AI cost metering stays for spend analysis
     (models.EnterpriseOrganization, "dpa_accepted_by_user_id"),

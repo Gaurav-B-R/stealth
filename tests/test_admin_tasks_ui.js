@@ -50,13 +50,14 @@ function setup(fetchImpl, initial = access()) {
         document: { getElementById: get, createElement: () => element(), addEventListener() {},
             querySelectorAll() { return []; }, querySelector() { return null; }, body: element('body') },
         window: { matchMedia: () => ({ matches: false }), scrollTo() {} },
-        URLSearchParams, Blob, URL, setTimeout, clearTimeout, console: { error() {} },
+        URLSearchParams, Blob, File, FormData, URL, setTimeout, clearTimeout, console: { error() {} },
         fetch: async (url, options) => { requests.push({ url, options }); return fetchImpl ? fetchImpl(url, options) : jsonResponse({}); }
     });
     vm.runInContext(`${source}\n;globalThis.ui = { state, refs, applyAdminAccess, renderActiveTab, handleTabSwitch, loadActiveTab,
         canAccessSection, canWriteSection, canDeleteSection, adminFetch, clearPrivilegedState, showAuth,
         loadTasks, renderTaskBoard, taskInScope, openTaskDetail, renderTaskDetail, applyTaskDetail, patchTask, moveTaskStatus,
-        handleTaskFieldChange, handleTaskFieldKeydown, handleTaskFieldBlur, commitTaskField, readTaskCreateForm, refreshTaskBadge, renderTaskBadge, describeTaskEvent, renderTaskCard };
+        handleTaskFieldChange, handleTaskFieldKeydown, handleTaskFieldBlur, commitTaskField, readTaskCreateForm, refreshTaskBadge, renderTaskBadge, describeTaskEvent, renderTaskCard,
+        submitTaskCreate, queueTaskFiles, uploadToOpenTask, handleTaskPaste, closeTaskModal, removeTaskFile };
         confirmDialog = async () => true; promptDialog = async () => '';`, context);
     context.ui.state.authToken = 'test-cookie-token';
     if (initial) context.ui.applyAdminAccess(initial);
@@ -310,4 +311,199 @@ test('work handed back as Done is flagged "Ready to close" for the assigner only
     app.state.tasks.detail = { task: handedBack, timeline: [] };
     app.renderTaskDetail();
     assert.match(app.refs.taskModalBody.innerHTML, /Other marked this Done\. Close it, or move it back/);
+});
+
+// ---- Attachments ----------------------------------------------------------------
+
+const PNG = new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 1, 2, 3, 4]);
+const fileOf = (name, bytes = PNG, type = 'image/png') => new File([bytes], name, { type });
+const blobResponse = (blob) => ({ ok: true, status: 200, headers: { get() {} }, json: async () => ({}), blob: async () => blob });
+const tick = () => new Promise((done) => setTimeout(done, 0));
+const detailOf = (item, attachments = []) => ({ visible: true, task: item, attachments, timeline: [] });
+
+function createForm(title = 'Fix the export') {
+    const fields = { title: { value: title }, description: { value: '' }, assignee_user_id: { value: '5' },
+        priority: { value: 'medium' }, due_date: { value: '' } };
+    const submit = { textContent: 'Create task', isConnected: true };
+    return { submit, querySelector: (selector) => (selector.includes('submit') ? submit : fields[/name="([^"]+)"/.exec(selector)?.[1]] || null) };
+}
+
+function attachment(id, overrides = {}) {
+    return { id, filename: `file-${id}.png`, ext: 'png', is_image: true, size: PNG.length, size_label: '12 B',
+        url: `/api/admin/tasks/5/attachments/${id}`, uploaded_by: boss, created_at: '2026-10-24T09:00:00+00:00', can_delete: false, ...overrides };
+}
+
+test('cards show how many files a task has, and the timeline names them safely', () => {
+    const app = setup();
+    app.state.tasks.me = 17;
+    const card = app.renderTaskCard(task(8, { attachment_count: 3 }));
+    assert.match(card, /title="3 files"/);
+    assert.match(card, /3 files attached\./);
+    assert.doesNotMatch(app.renderTaskCard(task(9)), /files? attached/);
+    assert.equal(app.describeTaskEvent({ kind: 'attachment', to: 'a.png', to_label: '<b>a.png</b>' }), 'attached <strong>&lt;b&gt;a.png&lt;/b&gt;</strong>');
+    assert.equal(app.describeTaskEvent({ kind: 'attachment_removed', from: 'old.pdf', from_label: 'old.pdf' }), 'removed the file <strong>old.pdf</strong>');
+});
+
+test('the create form only queues files the server will accept, using the board’s limits', async () => {
+    const app = setup(() => jsonResponse(board([], { attachment_limits: { max_files: 2, max_file_bytes: 64, max_total_bytes: 100, extensions: ['png', 'pdf'] } })));
+    await app.loadTasks();
+    app.queueTaskFiles([fileOf('one.png'), fileOf('tool.exe'), fileOf('huge.pdf', new Uint8Array(65), 'application/pdf'),
+        fileOf('empty.png', new Uint8Array(0)), fileOf('two.pdf', new Uint8Array(40), 'application/pdf'), fileOf('three.png')]);
+    assert.deepEqual(plain(app.state.tasks.createFiles.map((item) => item.file.name)), ['one.png', 'two.pdf']);
+    assert.match(app.state.tasks.createFiles[0].preview, /^blob:/, 'images get a local preview');
+    assert.equal(app.state.tasks.createFiles[1].preview, '', 'other files do not');
+    app.closeTaskModal();
+    assert.equal(app.state.tasks.createFiles.length, 0, 'closing the dialog lets the queued files go');
+});
+
+test('a new task’s files upload one by one right after it is created', async () => {
+    const created = task(41, { assignee: boss, created_by: me });
+    const order = [];
+    const app = setup((url, options) => {
+        if (url === '/api/admin/tasks' && options?.method === 'POST') { order.push('task'); return jsonResponse(detailOf(created), 201); }
+        if (url === '/api/admin/tasks/41/attachments') {
+            const file = options.body.get('file');
+            order.push(file.name);
+            return jsonResponse(detailOf({ ...created, attachment_count: order.length - 1 }), 201);
+        }
+        return jsonResponse(board([]));
+    });
+    await app.loadTasks();
+    app.queueTaskFiles([fileOf('before.png'), fileOf('notes.txt', new Uint8Array([104, 105]), 'text/plain')]);
+    const form = createForm();
+    await app.submitTaskCreate(form);
+    assert.deepEqual(order, ['task', 'before.png', 'notes.txt']);
+    const upload = app.requests.find((request) => request.url.endsWith('/attachments'));
+    assert.equal(upload.options.method, 'POST');
+    assert.equal(upload.options.headers['Content-Type'], undefined, 'the browser sets the multipart boundary');
+    assert.equal(upload.options.headers['X-Admin-Console-Session'], 'required');
+    assert.equal(app.state.tasks.items.find((item) => item.id === 41).attachment_count, 2);
+    assert.equal(app.state.tasks.createFiles.length, 0);
+    assert.equal(app.state.tasks.saving, false);
+    assert.equal(app.refs.flash.textContent, 'Task assigned to Boss with 2 files. They’ll get an email.');
+});
+
+test('when a file fails after the task exists, the dialog moves to that task instead of offering Create again', async () => {
+    const created = task(42, { assignee: boss, created_by: me });
+    const app = setup((url, options) => {
+        if (url === '/api/admin/tasks' && options?.method === 'POST') return jsonResponse(detailOf(created), 201);
+        if (url.endsWith('/attachments')) return jsonResponse({ detail: 'Each file can be up to 25 MB.' }, 400);
+        if (url === '/api/admin/tasks/42') return jsonResponse(detailOf(created));
+        return jsonResponse(board([]));
+    });
+    await app.loadTasks();
+    app.queueTaskFiles([fileOf('screen.png')]);
+    const fileError = element('fileError');
+    app.refs.taskModalBody.querySelector = (selector) => (selector === '[data-task-file-error]' ? fileError : null);
+    await app.submitTaskCreate(createForm());
+    assert.equal(app.requests.filter((request) => request.url === '/api/admin/tasks' && request.options?.method === 'POST').length, 1);
+    assert.equal(app.state.tasks.openId, 42);
+    assert.match(app.refs.taskModalBody.innerHTML, /<h4 id="adminTaskFilesHeading">Attachments<\/h4>/);
+    assert.equal(fileError.textContent, 'Task created, but “screen.png” couldn’t be attached: Each file can be up to 25 MB. Add it again here.');
+    assert.equal(app.state.tasks.saving, false);
+});
+
+test('the detail view escapes file names, offers Remove only where allowed, and loads thumbnails through the console', async () => {
+    const blob = new Blob([PNG], { type: 'image/png' });
+    const app = setup((url) => (url.includes('/attachments/') ? blobResponse(blob) : jsonResponse({})));
+    app.state.tasks.me = 17;
+    app.state.tasks.openId = 5;
+    app.state.tasks.detail = { task: task(5), timeline: [], attachments: [
+        attachment(3, { filename: '<img src=x onerror=alert(1)>.png' }),
+        attachment(4, { filename: 'payouts.csv', ext: 'csv', is_image: false, uploaded_by: me, can_delete: true })] };
+    app.renderTaskDetail();
+    const body = app.refs.taskModalBody.innerHTML;
+    assert.doesNotMatch(body, /<img src=x/);
+    assert.match(body, /&lt;img src=x onerror=alert\(1\)&gt;\.png/);
+    assert.match(body, /data-task-action="preview-file" data-file-id="3"/);
+    assert.match(body, /data-task-action="download-file" data-file-id="4"/);
+    assert.deepEqual([...body.matchAll(/data-task-action="remove-file" data-file-id="(\d+)"/g)].map((match) => match[1]), ['4']);
+    assert.match(body, /<span class="tasks-file-badge" aria-hidden="true">csv<\/span>/);
+    await tick();
+    assert.deepEqual(app.requests.map((request) => request.url), ['/api/admin/tasks/5/attachments/3'], 'only images are fetched for thumbnails');
+    assert.equal(app.requests[0].options.headers['X-Admin-Console-Session'], 'required');
+    assert.match(app.state.tasks.fileUrls.get(3), /^blob:/);
+    app.closeTaskModal();
+    assert.equal(app.state.tasks.fileUrls.size, 0, 'previews are released with the dialog');
+});
+
+test('an empty task invites files when you can edit it, and says so plainly when you cannot', () => {
+    const app = setup();
+    app.state.tasks.me = 17;
+    app.state.tasks.detail = { task: task(6), timeline: [], attachments: [] };
+    app.renderTaskDetail();
+    assert.match(app.refs.taskModalBody.innerHTML, /data-task-action="pick-files">Choose files<\/button> or drop them here\. Paste a screenshot/);
+    assert.match(app.refs.taskModalBody.innerHTML, /data-task-file-input accept="[^"]*\.png[^"]*"/);
+    app.state.tasks.detail = { task: task(6, { can_edit: false }), timeline: [], attachments: [] };
+    app.renderTaskDetail();
+    assert.match(app.refs.taskModalBody.innerHTML, /No files attached\./);
+    assert.doesNotMatch(app.refs.taskModalBody.innerHTML, /data-task-file-input/);
+});
+
+test('files dropped on an open task upload at once and refresh it; refused files never leave the browser', async () => {
+    const uploaded = [];
+    const app = setup((url, options) => {
+        if (url === '/api/admin/tasks/5/attachments') {
+            uploaded.push(options.body.get('file').name);
+            return jsonResponse(detailOf(task(5, { attachment_count: 1 }), [attachment(11, { filename: uploaded[0] })]), 201);
+        }
+        return jsonResponse(board([task(5)]));
+    });
+    await app.loadTasks();
+    app.state.tasks.openId = 5;
+    app.state.tasks.detail = { task: task(5), timeline: [], attachments: [] };
+    await app.uploadToOpenTask([fileOf('bug.png'), fileOf('virus.exe')]);
+    assert.deepEqual(uploaded, ['bug.png']);
+    assert.equal(app.state.tasks.detail.attachments[0].filename, 'bug.png');
+    assert.equal(app.state.tasks.items[0].attachment_count, 1);
+    assert.equal(app.state.tasks.saving, false);
+});
+
+test('a pasted screenshot is attached and named; text pasted into a field stays text', () => {
+    const app = setup();
+    const form = element('createForm');
+    app.refs.taskModal.hidden = false;
+    app.refs.taskLightbox.hidden = true;
+    app.refs.taskModalBody.querySelector = (selector) => (selector === '[data-task-form="create"]' ? form : null);
+    const paste = ({ text = '', inField = true, files = [fileOf('image.png')] } = {}) => {
+        const event = { prevented: false, preventDefault() { this.prevented = true; },
+            target: { closest: () => (inField ? element('field') : null) },
+            clipboardData: { files, items: [], types: ['Files'], getData: () => text } };
+        app.handleTaskPaste(event);
+        return event;
+    };
+    const screenshot = paste();
+    assert.equal(screenshot.prevented, true);
+    assert.match(app.state.tasks.createFiles[0].file.name, /^Screenshot \d{4}-\d\d-\d\d at \d\d\.\d\d\.\d\d\.png$/);
+    // Copying cells from a spreadsheet brings a picture of them along: in a text field, paste the text.
+    const cells = paste({ text: 'A1\tB1' });
+    assert.equal(cells.prevented, false);
+    assert.equal(app.state.tasks.createFiles.length, 1);
+    assert.equal(paste({ text: 'A1\tB1', inField: false }).prevented, true);
+    assert.equal(paste({ files: [] }).prevented, false, 'plain text pastes are untouched');
+    assert.equal(paste({ files: [fileOf('diagram.png')] }).prevented, true);
+    assert.equal(app.state.tasks.createFiles.at(-1).file.name, 'diagram.png', 'real file names are kept');
+});
+
+test('removing a file asks first and refreshes the task', async () => {
+    const app = setup((url, options) => (options?.method === 'DELETE'
+        ? jsonResponse(detailOf(task(5), []))
+        : jsonResponse(board([task(5, { attachment_count: 1 })]))));
+    await app.loadTasks();
+    app.state.tasks.openId = 5;
+    app.state.tasks.detail = { task: task(5), timeline: [], attachments: [attachment(7, { can_delete: true })] };
+    vm.runInContext('confirmDialog = async () => false;', app.context);
+    await app.removeTaskFile(7);
+    assert.equal(app.requests.some((request) => request.options?.method === 'DELETE'), false);
+    vm.runInContext('confirmDialog = async () => true;', app.context);
+    await app.removeTaskFile(7);
+    const removal = app.requests.find((request) => request.options?.method === 'DELETE');
+    assert.equal(removal.url, '/api/admin/tasks/5/attachments/7');
+    assert.deepEqual(plain(app.state.tasks.detail.attachments), []);
+});
+
+test('the image preview lives outside the blurred task overlay and has its own close control', () => {
+    assert.match(html, /<div id="adminTaskLightbox" class="tasks-lightbox" role="dialog" aria-modal="true"[^>]*hidden>/);
+    assert.ok(html.indexOf('id="adminTaskLightbox"') > html.indexOf('id="adminTaskModalBody"'));
+    assert.match(html, /id="adminTaskLightboxClose"[^>]+aria-label="Close preview"/);
 });

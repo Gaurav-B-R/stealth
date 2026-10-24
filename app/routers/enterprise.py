@@ -981,15 +981,21 @@ _CURRENCY_SYMBOLS = {
 }
 
 
-def _org_display_currency(organization) -> dict:
-    """The portal's DISPLAY currency, derived from the company's country in Settings.
-    Billing stays in INR — this only converts what the UI shows, at the live exchange
-    rate (Frankfurter via /api/pricing/exchange-rates, 24h-cached, safe fallbacks).
-    India (or unset) → INR; unlisted countries → USD like the B2C pricing page."""
+def _org_display_currency(organization, request: Request | None = None, db: Session | None = None) -> dict:
+    """The portal's DISPLAY currency: the workspace's ONE billing currency itself
+    (billing.charge_currency_for_org, D-010), so a page can never show its prices in one
+    currency and "Worth …" credit values in another. It converts INR-denominated figures
+    (credit values, Finance) at the live exchange rate (Frankfurter via
+    /api/pricing/exchange-rates, 24h-cached, safe fallbacks). Deriving it from a separate
+    country map once showed a Japanese office "Worth ¥…" beside USD prices, an NP office "$"
+    beside its INR plans, and a London office with no country on file "1 credit = ₹10"."""
     from app.routers import pricing as pricing_fx
 
-    country_code = (getattr(organization, "country_code", None) or "").strip().upper()
-    code = pricing_fx._COUNTRY_TO_CURRENCY.get(country_code, "USD") if country_code else "INR"
+    try:
+        code = billing.charge_currency_for_org(db, organization, None, request=request)
+    except Exception:
+        logger.exception("Display-currency lookup failed (org_id=%s)", getattr(organization, "id", None))
+        code = "INR"
     if code == "INR":
         return {"code": "INR", "symbol": "₹", "rate_from_inr": 1.0, "source": "native", "provider_date": None}
 
@@ -1093,7 +1099,7 @@ def _build_enterprise_context(
             "created_at": organization.created_at,
             "country_code": organization.country_code,
             "state_region": organization.state_region,
-            "display_currency": _org_display_currency(organization),
+            "display_currency": _org_display_currency(organization, request, db),
             # After the first verified plan payment only Rilono staff can change the country
             # (it decides INR eligibility) — Settings shows it read-only with a support note.
             "billing_country_locked": (
@@ -6965,13 +6971,13 @@ def _resolve_charge_currency(
     db: Session | None = None,
     request: Request | None = None,
 ) -> str:
-    """Decide what currency to CHARGE (and quote) an organization in.
+    """Decide what currency to CHARGE (and quote) an organization in — its ONE currency.
 
-    A thin delegate to billing.charge_currency_for_org, which owns the whole rule: the buyer's
-    hint (validated strictly — an unknown or not-enabled code is a 400, never a silent
-    coercion) -> the currency they were last billed in -> their country -> INR, then CLAMPED
-    to the org's currency region. That clamp is why this must not be re-implemented here: an
-    org in the INR region is charged INR whatever it hints, and an org outside it can never be
+    A thin delegate to billing.charge_currency_for_org, which owns the whole rule (D-010): the
+    currency of the org's latest verified plan payment, else its country's, CLAMPED to its
+    currency region. A hint is validated strictly (unknown code: 400) and can only confirm
+    that currency (anything else: 409, "refresh"); there is no currency choice. The clamp is
+    why this must not be re-implemented here: an org outside the INR region can never be
     charged INR (₹1,499 against a $39 ladder would be a 60% discount for a London office).
 
     Pass `request` wherever there is one: when the org has no country on file, the request's
@@ -9163,15 +9169,14 @@ def enterprise_public_plans(
     the SAME numbers checkout charges, from the same code (app/money.py PRICE_BOOK +
     enterprise_billing.PLANS), so no page ever has to carry a price of its own.
 
-    One region's prices per visitor (billing.public_price_currency): a visitor in the INR
-    region sees INR whatever they ask for (non-Indian members with a US$ estimate); a visitor
-    anywhere else — or from an unknown country — sees their own ladder currency (else USD) and
-    never INR. Nothing in the response carries the other region's prices: `price_options` and
-    the packages' ladders are limited to `currencies`, this visitor's region.
+    One currency per visitor, their own (billing.public_price_currency): INR from the INR
+    region (non-Indian members with a US$ estimate); the visitor's country's ladder currency
+    (else USD) from anywhere else, including an unknown country. Nothing in the response
+    carries another currency's prices: `price_options` and the packages' ladders are limited
+    to `currencies`, which is just that one.
 
-    `currency` is a display HINT, honoured only within that region (the foreign ladders are
-    near-parity, so one over another discloses nothing). Anything else — another region's
-    currency, an unsupported code — is ignored rather than a 400.
+    `currency` is accepted for old clients and IGNORED — a visitor can't ask for another
+    country's prices. It is echoed back as `requested_currency`, never an error.
     """
     _enforce_rate_limit_or_429(
         request=request, scope="enterprise.public_plans",
@@ -9179,7 +9184,7 @@ def enterprise_public_plans(
     )
     hint = (currency or "").strip().upper()[:3] or None
     region_currencies = billing.public_price_currencies(request)
-    code = billing.public_price_currency(request, hint)
+    code = billing.public_price_currency(request)
     hint_supported = bool(hint) and money.is_chargeable(hint)
     country = billing.request_geo_country(request)
     # Same rule as the subscription state: the estimate is for the NON-Indian members of the
@@ -9198,8 +9203,8 @@ def enterprise_public_plans(
         "country_code": country,
         "inr_region": billing.is_inr_region(country),
         "show_usd_estimate": show_usd_estimate,
-        # The currencies this visitor's region is priced in. No full launch list: it would
-        # only tell a visitor which other regions exist to go price-shopping in.
+        # The one currency this visitor is priced in. No full launch list: it would only tell
+        # a visitor which other countries exist to go price-shopping in.
         "currencies": region_currencies,
         "billing_enabled": not billing.ENTERPRISE_FREE,
         "yearly_enabled": sell_yearly,
@@ -9240,33 +9245,24 @@ def enterprise_billing_plans(
 
 
 def _org_charge_currencies(organization, request: Request | None) -> list[str]:
-    """The launch currencies this org may actually be charged in — the region rule applied
-    to each (an INR-region org: ["INR"]; elsewhere: every ladder currency except INR; country
-    unknown: all of them). What a currency selector should offer, so a buyer can never pick
-    a currency checkout would then refuse or silently replace."""
-    # The same country charge_currency_for_org decides by (billing.org_billing_country): the
-    # org's own — unless it claims the INR region while the request's known geo country is
-    # outside it, or it is barred from INR — else the request's CDN geo country, else unknown
-    # (every launch currency, INR included, stays allowed).
-    country = billing.org_billing_country(organization, request)
-    return [
-        code for code in money.supported_charge_currencies()
-        if billing.region_charge_currency(code, country) == code
-    ]
+    """The currencies this org may be charged in: exactly one, its own
+    (billing.charge_currency_for_org). Kept as a list because the portal renders a currency
+    selector only when there is more than one — so it renders none, and no workspace is
+    shown another country's prices (D-010)."""
+    return [billing.charge_currency_for_org(None, organization, None, request=request)]
 
 
 def _billing_catalog_payload(db: Session, organization, request: Request | None) -> dict:
     """The tier cards + subscription block shared by /billing/plans and /billing/subscription.
 
-    Cards are priced in the currency this org is charged in (charge_currency_for_org: sticky
-    choice -> country -> INR, clamped to its currency region), and carry the `price_options`
-    ladder for a selector — only the currencies this org can be charged in, never the other
-    region's prices. `usd_estimate` is attached to INR cards only for
+    Cards are priced in this org's ONE currency (charge_currency_for_org, D-010: the currency
+    a running plan is billed in, else its country's, clamped to its region), and their
+    `price_options` carry only that currency — so the portal renders no currency selector. `usd_estimate` is attached to INR cards only for
     the non-Indian members of the INR region — the same flag the subscription state reports,
     so the chip and the cards never disagree about whether to show it."""
     org_currency = _resolve_charge_currency(None, organization, db=db, request=request)
     state = billing.build_subscription_state(db, organization.id, request=request)
-    charge_currencies = _org_charge_currencies(organization, request)
+    charge_currencies = [org_currency]   # the org's ONE currency (D-010)
     return {
         "plans": billing.public_plans_payload(
             org_currency, usd_estimate=bool(state.get("show_usd_estimate")),
@@ -9473,8 +9469,7 @@ def enterprise_billing_checkout(
     # would apply at once to the whole remaining year while its payment only buys time after
     # it. Before any gateway call, and before the 100%-off activation below.
     billing.enforce_no_tier_change_during_term_or_409(db, organization.id, plan["key"])
-    # The buyer's selected currency (validated strictly; falls back to the org's sticky
-    # choice, then country, then INR) and clamped to the org's currency region, then by
+    # The org's ONE currency (D-010; a hint may only confirm it, else 409), then
     # resolve_plan_currency so price and currency still come from the same PRICE_BOOK entry.
     # Reading billing.CURRENCY here instead would let a misconfigured
     # ENTERPRISE_PLAN_CURRENCY create a USD order for a rupee amount.
@@ -9493,11 +9488,11 @@ def enterprise_billing_checkout(
         raise HTTPException(status_code=400, detail="This plan is not available for online checkout.")
 
     def _remember_billing_currency():
-        # Sticky: later wallet displays, coupon previews and checkouts follow this choice
-        # (same rule as the credit top-up path). Called only on the success paths, right
-        # before their commit — NOT up here: _ensure_razorpay_plan_id commits mid-request,
-        # and setting the org field early would persist the choice for a checkout that
-        # then failed to create anything.
+        # A record of the currency last checked out in. It no longer DECIDES anything —
+        # billing.own_currency reads verified payments, not this field (D-010) — but admin
+        # views show it. Called only on the success paths, right before their commit — NOT up
+        # here: _ensure_razorpay_plan_id commits mid-request, and setting the org field early
+        # would record a checkout that then failed to create anything.
         if (organization.billing_currency or "").strip().upper() != plan_currency:
             organization.billing_currency = plan_currency
 
@@ -9545,7 +9540,10 @@ def enterprise_billing_checkout(
             "subscription": _serialize_subscription_state(
                 billing.build_subscription_state(db, organization.id, request=request)
             ),
-            "wallet": credits.wallet_state(db, organization.id),
+            "wallet": credits.wallet_state(
+                db, organization.id,
+                currency=_resolve_charge_currency(None, organization, db=db, request=request),
+            ),
         }
 
     if not _razorpay_enabled():
@@ -9887,7 +9885,10 @@ def enterprise_billing_verify(
         return {
             "message": "This payment has already been applied.",
             "subscription": _serialize_subscription_state(billing.build_subscription_state(db, organization.id, request=request)),
-            "wallet": credits.wallet_state(db, organization.id),
+            "wallet": credits.wallet_state(
+                db, organization.id,
+                currency=_resolve_charge_currency(None, organization, db=db, request=request),
+            ),
         }
 
     # The signature proves only that "order|payment" (or "payment|subscription") came from
@@ -10003,7 +10004,10 @@ def enterprise_billing_verify(
         "message": message,
         "credits_granted": granted,
         "subscription": _serialize_subscription_state(billing.build_subscription_state(db, organization.id, request=request)),
-        "wallet": credits.wallet_state(db, organization.id),
+        "wallet": credits.wallet_state(
+                db, organization.id,
+                currency=_resolve_charge_currency(None, organization, db=db, request=request),
+            ),
     }
 
 
@@ -10046,19 +10050,16 @@ def enterprise_credits_wallet(
 ):
     _, organization, role = _require_enterprise_membership(db=db, user=current_user, request=request, require_capability="credits.view")
     org_currency = _resolve_charge_currency(None, organization, db=db, request=request)
+    usage = credits.usage_breakdown(db, organization.id, include_by_member=role.ctx.is_org_scope)
     return {
         "permissions": _enterprise_permissions_for_role(role),
         "wallet": credits.wallet_state(db, organization.id, currency=org_currency),
-        "usage": credits.usage_breakdown(
-            db, organization.id, include_by_member=role.ctx.is_org_scope,
-        ),
-        # Priced in the currency this org is charged in (its region applied), with the full
-        # ladder on each package so the top-up modal can offer a currency selector without a
-        # second round-trip — limited to the currencies this org can actually be charged in.
-        "packages": credits.packages_payload(
-            org_currency, currencies=_org_charge_currencies(organization, request),
-        ),
-        "charge_currencies": _org_charge_currencies(organization, request),
+        # Credit values in ₹ are the INR unit of account — not for a workspace billed in
+        # another currency (D-010); the portal converts the numeric fields instead.
+        "usage": usage if org_currency == "INR" else credits.without_rupee_strings(usage),
+        # Priced in this org's ONE currency (D-010), so the top-up modal renders no selector.
+        "packages": credits.packages_payload(org_currency, currencies=[org_currency]),
+        "charge_currencies": [org_currency],
         # D-011: shown in the top-up modal when the pack is priced in rupees.
         "inr_payment_rule": (
             billing.DOMESTIC_ONLY_RULE
@@ -10224,17 +10225,17 @@ def enterprise_credits_analytics(
     clamped by the resolver rather than rejected — a date picker mid-edit should
     not 400 the whole tab."""
     _, organization, role = _require_enterprise_membership(db=db, user=current_user, request=request, require_capability="credits.view")
+    org_currency = _resolve_charge_currency(None, organization, db=db, request=request)
+    analytics = credits.spend_analytics(
+        db, organization.id, days=days, start=start, end=end, bucket=bucket,
+        include_by_member=role.ctx.is_org_scope,
+        ctx=role.ctx,
+    )
     return {
         "permissions": _enterprise_permissions_for_role(role),
-        "wallet": credits.wallet_state(
-            db, organization.id,
-            currency=_resolve_charge_currency(None, organization, db=db, request=request),
-        ),
-        "analytics": credits.spend_analytics(
-            db, organization.id, days=days, start=start, end=end, bucket=bucket,
-            include_by_member=role.ctx.is_org_scope,
-            ctx=role.ctx,
-        ),
+        "wallet": credits.wallet_state(db, organization.id, currency=org_currency),
+        # No ₹ credit-value strings outside INR (D-010) — see /credits/wallet.
+        "analytics": analytics if org_currency == "INR" else credits.without_rupee_strings(analytics),
     }
 
 
@@ -10443,7 +10444,9 @@ def enterprise_credits_payments(
                     money.format_money(amt, code)
                     for code, amt in sorted(collected_by_currency.items())
                 )
-                or money.format_money(0, "INR")
+                # Nothing bought yet: zero in this workspace's own currency, never "₹0" to a
+                # workspace billed in another one (D-010).
+                or money.format_money(0, _resolve_charge_currency(None, organization, db=db, request=request))
             ),
             "credits_purchased": credits_bought,
         },
@@ -10698,7 +10701,7 @@ def enterprise_credits_topup_checkout(
         domestic_only=domestic_only,
         status="created",
     ))
-    # Make the currency choice sticky so the next top-up doesn't re-guess from country.
+    # Record the currency last checked out in (display only; billing.own_currency decides).
     if getattr(organization, "billing_currency", None) != currency:
         organization.billing_currency = currency
     db.commit()
@@ -11693,6 +11696,10 @@ def enterprise_ai_chat(
             history=history,
             ctx=role.ctx,
             cost_budget_usd=budget["cost_budget_usd"],
+            # Resolved HERE, with the request, exactly as /billing/plans resolves it — the
+            # assistant has no request of its own, and without the geo country it would
+            # quote an INR-claiming office browsing from London in rupees (D-010).
+            billing_currency=_resolve_charge_currency(None, organization, db=db, request=request),
         )
     except Exception:
         logger.exception("Enterprise AI chat failed (org_id=%s)", organization.id)

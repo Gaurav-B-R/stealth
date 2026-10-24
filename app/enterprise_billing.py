@@ -67,7 +67,7 @@ from typing import Any, Optional
 
 from fastapi import HTTPException
 from sqlalchemy import func, or_
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, object_session
 
 from app import enterprise_catalog as catalog
 from app import models
@@ -702,43 +702,34 @@ def request_geo_country(request) -> Optional[str]:
 
 
 # ---------------------------------------------------------------------------
-# Public (anonymous) price lists: one region's prices per visitor
+# Public (anonymous) price lists: one currency per visitor, their own
 # ---------------------------------------------------------------------------
 #
 # The plan books are not near-parity: the INR column is less than half the foreign ladders
-# (see money.PRICE_BOOK), and the foreign ladders are near-parity with each other. So an
-# anonymous visitor is shown ONE region's prices — the region they are browsing from — and
-# never the other region's. A US consultancy never sees ₹1,499 beside its $39; an Indian one
-# never sees the dollar ladder. Everything public that states an Enterprise price (the
-# server-rendered marketing pages, GET /enterprise/public/plans, the /pricing card) goes
-# through these two functions.
+# (see money.PRICE_BOOK). So an anonymous visitor is shown exactly ONE currency's prices —
+# their own country's — and never another country's: a US consultancy never sees ₹1,499
+# beside its $39, nor £29 or A$59 beside it either (D-010). Everything public that states an
+# Enterprise price (the server-rendered marketing pages, GET /enterprise/public/plans, the
+# /pricing card) goes through these two functions. Signed-in workspaces follow the same
+# one-currency rule through charge_currency_for_org.
 #
 # Unlike charge_currency_for_org, an UNKNOWN country here is quoted outside the INR region
 # (USD): behind the CDN that is a Tor exit or an unlocatable IP, not an Indian office, and a
 # price list is display-only — checkout still applies its own rule to the org.
 
-def public_price_currencies(request) -> list[str]:
-    """The currencies an anonymous visitor's price list may be written in: ["INR"] from the
-    INR region, otherwise every non-INR launch currency (all near-parity, so offering one
-    over another discloses nothing)."""
+def public_price_currency(request) -> str:
+    """The one currency an anonymous visitor's price list is written in: INR from the INR
+    region, the visitor's country's ladder currency elsewhere (USD when we don't price it),
+    USD when the country is unknown. There is no visitor choice."""
     country = request_geo_country(request)
     if country and country in INR_REGION_COUNTRIES:
-        return ["INR"]
-    return [c for c in money.supported_charge_currencies() if c != "INR"]
-
-
-def public_price_currency(request, hint: str | None = None) -> str:
-    """The one currency an anonymous visitor's price list is written in: `hint` when it is
-    one of public_price_currencies(request), else the visitor's own (INR in the INR region,
-    their country's ladder currency elsewhere, USD when the country is unknown)."""
-    allowed = public_price_currencies(request)
-    code = (hint or "").strip().upper()
-    if code in allowed:
-        return code
-    if allowed == ["INR"]:
         return "INR"
-    country = request_geo_country(request)
     return _ladder_currency_for_country(country) if country else "USD"
+
+
+def public_price_currencies(request) -> list[str]:
+    """The currencies an anonymous visitor's price list may carry: only their own."""
+    return [public_price_currency(request)]
 
 
 def _price_options_in(product: str, currencies) -> list[dict]:
@@ -783,15 +774,16 @@ def billing_country_for(
 
 
 def charge_currency_for_org(db: Session, organization, hint: str | None, request=None) -> str:
-    """Decide what currency to CHARGE (and quote) an organization in.
+    """Decide what currency to CHARGE (and quote) an organization in — its ONE currency.
 
-    Order: validate the buyer's hint strictly (an unknown or not-enabled code is a 400,
-    never a silent coercion) -> candidate = hint, else the stored/country fallback
-    (fallback_charge_currency) -> clamp to the org's currency region
-    (region_charge_currency). The country is billing_country_for: the org's own
-    `country_code`, unless it claims the INR region while the request's geo country is
-    known and outside it (then the geo country); when the org has none, the request's CDN
-    geo country; when both are unknown, INR stays allowed.
+    The org's own currency is own_currency: the currency a running plan is billed in
+    (billed_currency_pin), else its country's, clamped to its region (region_charge_currency).
+    A buyer's hint is validated strictly (an unknown or not-enabled code is a 400, never a
+    silent coercion) and must equal that currency, else 409 — there is no currency choice.
+    The country is billing_country_for: the org's own `country_code`, unless it claims the
+    INR region while the request's geo country is known and outside it (then the geo
+    country); when the org has none, the request's CDN geo country; when both are unknown,
+    INR stays allowed.
 
     `organization` may be the model or its id. Used for plan checkout, credit top-up
     checkout and every displayed quote, so the price a buyer sees is the price they pay.
@@ -814,7 +806,76 @@ def charge_currency_for_org(db: Session, organization, hint: str | None, request
                 ),
             )
     country = org_billing_country(org, request)
-    candidate = code or fallback_charge_currency(getattr(org, "billing_currency", None), country)
+    # ONE currency per workspace (D-010): see own_currency. It is not a buyer's choice —
+    # offering £29 and A$59 beside a US office's $39 is showing it other countries' prices. A
+    # hint can only confirm it: the portal sends the currency it displayed, so a different
+    # one means a page rendered before this rule (or a hand-made request), and charging it
+    # would bill a price nobody showed.
+    session = db if db is not None else (object_session(org) if org is not None else None)
+    org_id = getattr(org, "id", None)
+    pinned = billed_currency_pin(session, org_id) if (session is not None and org_id) else None
+    own = own_currency(pinned, country)
+    if code and code != own:
+        raise HTTPException(
+            status_code=409,
+            detail=f"This workspace is billed in {own}. Refresh the page to see your prices in {own}.",
+        )
+    return own
+
+
+_DEAD_MANDATE_STATES = frozenset({"cancelled", "completed", "expired"})
+
+
+def billed_currency_pin(db: Session, organization_id) -> Optional[str]:
+    """The currency a workspace is CURRENTLY being billed in, or None.
+
+    Its latest verified (or partially refunded) plan payment's currency — but only while
+    that plan is still running: its paid period hasn't ended, or a Razorpay mandate is live
+    (a mandate keeps charging the currency it was opened in). A fully refunded payment, or a
+    plan that lapsed long ago, pins nothing: a workspace whose old payment was in another
+    country's currency (possible under the pre-D-010 selector, or after support changed its
+    country) goes back to its own country's currency instead of being stuck on it."""
+    if db is None or not organization_id:
+        return None
+    S = models.EnterpriseSubscription
+    with db.no_autoflush:
+        sub = (
+            db.query(S.current_period_end, S.razorpay_subscription_id, S.mandate_status)
+            .filter(S.organization_id == int(organization_id))
+            .first()
+        )
+    if not sub:
+        return None
+    end = sub[0]
+    if end is not None and getattr(end, "tzinfo", None) is not None:
+        end = end.replace(tzinfo=None)
+    period_running = end is not None and end > datetime.utcnow()
+    mandate_live = bool(sub[1]) and (sub[2] or "").strip().lower() not in _DEAD_MANDATE_STATES
+    if not (period_running or mandate_live):
+        return None
+    P = models.EnterpriseSubscriptionPayment
+    with db.no_autoflush:
+        row = (
+            db.query(P.currency)
+            .filter(P.organization_id == int(organization_id), P.status.in_(("verified", "partially_refunded")))
+            .order_by(P.id.desc())
+            .first()
+        )
+    return row[0] if row else None
+
+
+def own_currency(billed_currency: str | None, country: str | None) -> str:
+    """A workspace's ONE currency (D-010): the currency it is currently billed in
+    (billed_currency_pin — a running plan keeps the currency it was bought in), else its
+    country's, then clamped to its currency region.
+
+    Deliberately NOT the stored `billing_currency`: that was written at checkout CREATION,
+    including when the old currency selector offered every ladder, so a US office that once
+    opened (or abandoned) a GBP checkout would otherwise be pinned to another country's
+    prices. charge_currency_for_org, the subscription quote and the portal's display
+    currency all decide through here, so one page can't show two currencies."""
+    code = (billed_currency or "").strip().upper()
+    candidate = code if money.is_chargeable(code) else fallback_charge_currency(None, country)
     return region_charge_currency(candidate, country)
 
 
@@ -1836,7 +1897,6 @@ def _build_subscription_state(
     org_row = (
         db.query(
             models.EnterpriseOrganization.created_at,
-            models.EnterpriseOrganization.billing_currency,
             models.EnterpriseOrganization.country_code,
             models.EnterpriseOrganization.inr_barred_at,
         )
@@ -1850,9 +1910,9 @@ def _build_subscription_state(
     # US$-estimate flag all match what /billing/plans shows and checkout charges. Ignoring
     # the request here once quoted a London office with no country on file in INR while its
     # cards (and its checkout) were in GBP.
-    inr_barred = bool(org_row and org_row[3] is not None)
+    inr_barred = bool(org_row and org_row[2] is not None)
     org_country = billing_country_for(
-        org_row[2] if org_row else None, request, inr_barred=inr_barred,
+        org_row[1] if org_row else None, request, inr_barred=inr_barred,
     )
     grandfathered = is_grandfathered(sub, org_created_at)
     files = _file_limit_state(sub, clients_used, max_clients)
@@ -1863,22 +1923,30 @@ def _build_subscription_state(
         # them while the platform was free keeps working while it picks a tier.
         can_add_client = True
         can_add_seat = True
-    # Quote in the currency this org is ACTUALLY billed in: its latest verified plan payment
-    # (a Razorpay mandate keeps charging the currency it was opened in), else the sticky
-    # choice / country fallback — then clamped to the org's currency region, the same rule
-    # checkout applies (charge_currency_for_org), so the chip never shows a price in a
-    # currency checkout would refuse. The reported `currency` below comes from the quote so
-    # the two can never disagree.
-    latest_payment = _latest_plan_payment(db, organization_id)
-    billed_currency = latest_payment[0] if latest_payment else None
-    if billed_currency and money.is_chargeable(billed_currency):
-        candidate = money.normalize_currency(billed_currency, strict=False)
+    # Quote in the org's ONE currency (own_currency: its latest verified plan payment, else
+    # its country's, clamped to its region) — the same rule checkout applies
+    # (charge_currency_for_org), so the chip and the cards never show two currencies and
+    # the chip never shows a price checkout would refuse. The reported `currency` below
+    # comes from the quote so the two can never disagree.
+    latest_payment = _latest_plan_payment(db, organization_id)   # also reports billing_cycle
+    org_own = own_currency(billed_currency_pin(db, organization_id), org_country)
+    if plan.get("price_product"):
+        quote_currency = resolve_plan_currency(plan_key, org_own)
+        quote = checkout_quote(plan_key, quote_currency)
     else:
-        candidate = fallback_charge_currency(org_row[1] if org_row else None, org_country)
-    quote_currency = resolve_plan_currency(plan_key, region_charge_currency(candidate, org_country))
-    quote = checkout_quote(plan_key, quote_currency)
+        # A free plan (the trial) has no price book entry, so checkout_quote would fall back
+        # to INR and a US trial's payload would read "₹0" (the same trap public_plans_payload's
+        # free card avoids). Free is free in the org's own currency, untaxed (D-010).
+        quote = {
+            **money.quote_with_tax(0, org_own),
+            "list_minor": 0,
+            "list_display": money.format_money(0, org_own),
+            "tax_label": None,
+            "tax_percent": 0.0,
+            "tax_note": "",
+        }
     yearly_quote = (
-        checkout_quote(plan_key, quote_currency, billing_cycle="yearly")
+        checkout_quote(plan_key, quote["currency"], billing_cycle="yearly")
         if plan.get("price_product") else None
     )
 

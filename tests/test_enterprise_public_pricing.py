@@ -397,11 +397,11 @@ def test_cache_busters_are_bumped_for_the_changed_assets():
     # At least these bumps: later changes bump them again (yyyymmdd + letter versions
     # compare as strings).
     for page, asset, minimum in (
-        (enterprise, "enterprise.js", "20261022b"),
-        (enterprise, "enterprise.css", "20261022a"),
-        (student_app, "app.js", "20261022b"),
-        (console, "admin_console.js", "20261023a"),
-        (console, "admin_console.css", "20261023a"),
+        (enterprise, "enterprise.js", "20261024b"),
+        (enterprise, "enterprise.css", "20261024b"),
+        (student_app, "app.js", "20261024a"),
+        (console, "admin_console.js", "20261024a"),
+        (console, "admin_console.css", "20261024a"),
     ):
         match = re.search(rf"/static/{re.escape(asset)}\?v=(\w+)", page)
         assert match and match.group(1) >= minimum, asset
