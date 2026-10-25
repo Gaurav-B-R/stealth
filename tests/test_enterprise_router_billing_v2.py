@@ -691,6 +691,7 @@ def test_yearly_checkout_refused_while_yearly_is_not_on_sale(ctx):
 
 
 def test_checkout_records_the_capped_coupon_percent(ctx, monkeypatch):
+    monkeypatch.setattr(enterprise_coupons, "MAX_PERCENT_OFF", Decimal("15"))
     monkeypatch.setattr(enterprise, "AUTO_RENEW", False)
     set_plan(ctx, "sandbox")
     add_coupon(ctx, "LEGACY50", "50")       # saved before the cap existed
@@ -890,7 +891,6 @@ def test_first_charge_of_a_new_mandate_by_webhook_still_applies_and_replaces_the
 
 
 def test_fully_covered_activation_cancels_a_live_mandate(ctx, monkeypatch):
-    monkeypatch.setattr(enterprise_coupons, "MAX_PERCENT_OFF", Decimal("100"))
     set_plan(ctx, "sandbox")
     mandate, _ = _buy_monthly_mandate(ctx, "starter")
     add_coupon(ctx, "COMPTEAM", "100")
@@ -979,7 +979,6 @@ def test_a_month_stacked_on_a_yearly_term_keeps_the_lock(ctx):
 
 def test_fully_covered_yearly_plan_activates_for_a_year(ctx, monkeypatch):
     monkeypatch.setattr(billing, "YEARLY_ENABLED", True)
-    monkeypatch.setattr(enterprise_coupons, "MAX_PERCENT_OFF", Decimal("100"))
     set_plan(ctx, "sandbox")
     add_coupon(ctx, "COMP100", "100")
     before = datetime.utcnow()
@@ -995,6 +994,105 @@ def test_fully_covered_yearly_plan_activates_for_a_year(ctx, monkeypatch):
     assert billing._as_naive(sub.current_period_end) - before > timedelta(days=364)
     row = ctx.db.query(models.EnterpriseSubscriptionPayment).filter_by(organization_id=ctx.org.id).one()
     assert row.billing_cycle == "yearly" and Decimal(str(row.coupon_percent_off)) == Decimal("100")
+
+
+@pytest.mark.parametrize("country,currency", [("IN", "INR"), ("GB", "GBP")])
+def test_hundred_percent_code_restores_an_expired_trial_without_a_gateway(ctx, monkeypatch, country, currency):
+    """The default discount range covers the entire plan, including GST, in any region."""
+    ctx.org.country_code = country
+    ctx.db.commit()
+    expire_trial(ctx)
+    add_coupon(ctx, "COMP100", "100", "billing")
+    monkeypatch.setattr(enterprise, "_razorpay_enabled", lambda: False)
+    before = datetime.utcnow()
+
+    preview = ctx.client.post("/api/enterprise/coupons/validate", json={
+        "code": "comp100", "context": "billing", "plan": "starter", "currency": currency,
+    })
+    assert preview.status_code == 200, preview.text
+    assert preview.json()["percent_off"] == 100
+    assert preview.json()["free"] is True
+    assert preview.json()["amount_paise"] == 0
+    assert preview.json()["currency"] == currency
+
+    response = ctx.client.post("/api/enterprise/billing/checkout", json={
+        "plan": "starter", "billing_cycle": "monthly", "coupon_code": "comp100", "currency": currency,
+    })
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert body["action"] == "activated" and body["free"] is True
+    assert body["subscription"]["plan"] == "starter"
+    assert body["subscription"]["ai_paused"] is False
+    assert ctx.rzp.calls == []
+    ctx.db.expire_all()
+    sub = _sub_row(ctx)
+    assert sub.status == "active" and sub.razorpay_subscription_id is None
+    assert billing._as_naive(sub.current_period_end) - before > timedelta(days=29)
+    payment = ctx.db.query(models.EnterpriseSubscriptionPayment).filter_by(organization_id=ctx.org.id).one()
+    assert payment.status == "verified" and payment.currency == currency
+    assert (payment.amount_paise, payment.subtotal_paise, payment.tax_paise, payment.base_amount_paise) == (0, 0, 0, 0)
+    assert payment.original_amount_paise == billing.plan_price_minor("starter", currency, "monthly")
+    assert payment.coupon_code == "COMP100" and payment.coupon_percent_off == Decimal("100")
+    assert enterprise_coupons.redemptions_used(ctx.db, ctx.org.id, "COMP100") == 1
+    wallet = ctx.db.query(models.EnterpriseCreditWallet).filter_by(organization_id=ctx.org.id).one()
+    assert wallet.plan_credits_remaining == billing.get_plan("starter")["included_credits"]
+
+
+@pytest.mark.parametrize("first_context,second_context", [("billing", "credits"), ("credits", "billing")])
+def test_free_redemptions_share_the_limit_between_plans_and_topups(ctx, monkeypatch, first_context, second_context):
+    set_plan(ctx, "starter")
+    add_coupon(ctx, "ONCE100", "100")
+    coupon = ctx.db.query(models.EnterpriseCoupon).filter_by(organization_id=ctx.org.id, code="ONCE100").one()
+    coupon.max_redemptions = 1
+    ctx.db.commit()
+    monkeypatch.setattr(enterprise, "_razorpay_enabled", lambda: False)
+    purchases = {
+        "billing": ("/api/enterprise/billing/checkout", {"plan": "starter", "coupon_code": "ONCE100"}, "activated"),
+        "credits": ("/api/enterprise/credits/topup/checkout", {"package": "starter", "coupon_code": "ONCE100"}, "granted"),
+    }
+    endpoint, payload, action = purchases[first_context]
+    first = ctx.client.post(endpoint, json=payload)
+    assert first.status_code == 200 and first.json()["action"] == action, first.text
+    assert enterprise_coupons.redemptions_used(ctx.db, ctx.org.id, "ONCE100") == 1
+
+    preview = ctx.client.post("/api/enterprise/coupons/validate", json={
+        "code": "ONCE100", "context": second_context, "plan": "starter", "package": "starter",
+    })
+    assert preview.status_code == 400 and "redemption limit" in preview.json()["detail"]
+    endpoint, payload, _ = purchases[second_context]
+    second = ctx.client.post(endpoint, json=payload)
+    assert second.status_code == 400 and "redemption limit" in second.json()["detail"]
+    assert enterprise_coupons.redemptions_used(ctx.db, ctx.org.id, "ONCE100") == 1
+    assert ctx.rzp.calls == []
+
+
+@pytest.mark.parametrize("restriction,expected", [
+    ("other_account", "Invalid discount code for this account"),
+    ("inactive", "no longer active"),
+    ("credits_only", "only applies to credit top-ups"),
+])
+def test_full_discount_preserves_account_activation_and_scope_guards(ctx, restriction, expected):
+    expire_trial(ctx)
+    coupon_org_id = ctx.org.id
+    if restriction == "other_account":
+        other = models.EnterpriseOrganization(company_name="Other", subdomain_slug="other", created_by_user_id=ctx.owner.id)
+        ctx.db.add(other)
+        ctx.db.flush()
+        coupon_org_id = other.id
+    ctx.db.add(models.EnterpriseCoupon(
+        organization_id=coupon_org_id, code="RESTRICTED100", percent_off=Decimal("100"),
+        is_active=restriction != "inactive", applies_to="credits" if restriction == "credits_only" else "all",
+    ))
+    ctx.db.commit()
+    for endpoint, payload in [
+        ("/api/enterprise/coupons/validate", {"code": "RESTRICTED100", "context": "billing", "plan": "starter"}),
+        ("/api/enterprise/billing/checkout", {"coupon_code": "RESTRICTED100", "plan": "starter"}),
+    ]:
+        response = ctx.client.post(endpoint, json=payload)
+        assert response.status_code == 400 and expected in response.json()["detail"], response.text
+    assert ctx.db.query(models.EnterpriseSubscriptionPayment).count() == 0
+    assert _sub_row(ctx).plan == "sandbox"
+    assert ctx.rzp.calls == []
 
 
 def test_payment_history_labels_the_cycle(ctx):
@@ -1054,7 +1152,8 @@ def test_already_captured_topup_is_credited_even_while_paused(ctx):
     assert wallet.balance_credits >= 100
 
 
-def test_topup_records_the_capped_coupon_percent(ctx):
+def test_topup_records_the_capped_coupon_percent(ctx, monkeypatch):
+    monkeypatch.setattr(enterprise_coupons, "MAX_PERCENT_OFF", Decimal("15"))
     set_plan(ctx, "starter")
     add_coupon(ctx, "BIG40", "40")
     body = ctx.client.post(

@@ -1115,10 +1115,10 @@ def checkout_quote(
         # Deliberately the coupon module's own function rather than the same arithmetic
         # written again here. The two differ in association — (a·b)/c versus a·(b/c) — and
         # with Decimal that can round apart by one minor unit on some percentages. The
-        # checkout endpoint VALIDATES the coupon through apply_to_amount_or_400 and then
-        # CHARGES what this returns, so a one-paise divergence between them is a real
-        # (if small) mismatch between the amount approved and the amount taken. It is also
-        # where the coupon cap (ENTERPRISE_COUPON_MAX_PERCENT) is applied.
+        # coupon preview and checkout both use this arithmetic, so a one-paise divergence
+        # between them would be a mismatch between the amount shown and the amount taken.
+        # The default maximum allows a 100% discount, with zero tax and nothing to charge;
+        # an explicitly configured lower coupon cap is applied here too.
         from app import enterprise_coupons
 
         applied_percent = min(

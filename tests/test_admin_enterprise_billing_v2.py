@@ -582,11 +582,12 @@ def test_trial_extension_is_bounded(ctx):
 # Coupon cap on admin create/update
 # ---------------------------------------------------------------------------
 
-def test_admin_cannot_create_or_raise_a_coupon_above_the_cap(ctx):
+def test_admin_cannot_create_or_raise_a_coupon_above_the_configured_cap(ctx, monkeypatch):
+    monkeypatch.setattr(enterprise_coupons, "MAX_PERCENT_OFF", Decimal("15"))
     org_id = _org(ctx)
     cap = enterprise_coupons.max_percent_off()
     above = ctx.client.post(f"{ACCOUNTS}/{org_id}/coupons", json={"code": "BIG", "percent_off": float(cap) + 5})
-    assert above.status_code == 400 and "at most" in above.json()["detail"]
+    assert above.status_code == 400 and "between 1 and 15%" in above.json()["detail"]
     assert ctx.db.query(models.EnterpriseCoupon).count() == 0
 
     at_cap = ctx.client.post(f"{ACCOUNTS}/{org_id}/coupons", json={"code": "OK", "percent_off": float(cap)})
@@ -606,6 +607,7 @@ def test_admin_cannot_create_or_raise_a_coupon_above_the_cap(ctx):
 
 
 def test_promo_email_for_a_legacy_code_advertises_the_capped_percent(ctx, monkeypatch):
+    monkeypatch.setattr(enterprise_coupons, "MAX_PERCENT_OFF", Decimal("15"))
     org_id = _org(ctx)
     # Saved before the cap existed (bypasses the admin create validation).
     coupon = models.EnterpriseCoupon(organization_id=org_id, code="LAUNCH50", percent_off=Decimal("50"),
@@ -620,6 +622,55 @@ def test_promo_email_for_a_legacy_code_advertises_the_capped_percent(ctx, monkey
     assert response.status_code == 200, response.text
     cap = enterprise_coupons.max_percent_off()
     assert [m["percent_display"] for m in sent] == [enterprise_coupons.format_percent_off(cap) + "%"]
+
+
+def test_admin_can_create_list_update_and_email_a_full_discount(ctx, monkeypatch):
+    org_id = _org(ctx)
+    created = ctx.client.post(f"{ACCOUNTS}/{org_id}/coupons", json={
+        "code": "COMP100", "percent_off": 100, "applies_to": "billing", "max_redemptions": 1,
+    })
+    assert created.status_code == 200, created.text
+    coupon = created.json()["coupon"]
+    assert coupon["percent_off"] == coupon["effective_percent_off"] == coupon["max_percent_off"] == 100
+    assert coupon["above_cap"] is False
+    assert coupon["applies_to"] == "billing" and coupon["max_redemptions"] == 1
+
+    listed = ctx.client.get(f"{ACCOUNTS}/{org_id}/coupons")
+    assert listed.status_code == 200, listed.text
+    assert listed.json()["coupons"] == [coupon]
+
+    for percent in (25, 100):
+        updated = ctx.client.patch(f"{ACCOUNTS}/{org_id}/coupons/{coupon['id']}",
+                                   json={"percent_off": percent})
+        assert updated.status_code == 200, updated.text
+        assert updated.json()["coupon"]["effective_percent_off"] == percent
+
+    sent = []
+    monkeypatch.setattr(admin.email_service, "send_enterprise_discount_promo_email",
+                        lambda **kwargs: sent.append(kwargs) or True)
+    emailed = ctx.client.post(f"{ACCOUNTS}/{org_id}/coupons/{coupon['id']}/send-email",
+                              json={"email": "owner@acme-visas.example"})
+    assert emailed.status_code == 200, emailed.text
+    assert [m["percent_display"] for m in sent] == ["100%"]
+
+
+@pytest.mark.parametrize("percent", [0, 0.99, -1, 100.001, 101, 150])
+def test_admin_rejects_out_of_range_discounts_without_changing_codes(ctx, percent):
+    org_id = _org(ctx)
+    rejected = ctx.client.post(f"{ACCOUNTS}/{org_id}/coupons",
+                               json={"code": "BAD", "percent_off": percent})
+    assert rejected.status_code == 400, rejected.text
+    assert ctx.db.query(models.EnterpriseCoupon).count() == 0
+
+    created = ctx.client.post(f"{ACCOUNTS}/{org_id}/coupons",
+                              json={"code": "VALID", "percent_off": 100})
+    assert created.status_code == 200, created.text
+    coupon_id = created.json()["coupon"]["id"]
+    rejected = ctx.client.patch(f"{ACCOUNTS}/{org_id}/coupons/{coupon_id}",
+                                json={"percent_off": percent})
+    assert rejected.status_code == 400, rejected.text
+    ctx.db.expire_all()
+    assert ctx.db.get(models.EnterpriseCoupon, coupon_id).percent_off == Decimal("100")
 
 
 # ---------------------------------------------------------------------------

@@ -1343,6 +1343,53 @@ body.admin-modal-open {
     padding: 1.25rem 1.5rem 1.5rem;
 }
 
+#adminCouponModal .admin-modal {
+    display: flex;
+    flex-direction: column;
+    max-height: 90vh;
+}
+
+#adminCouponModal .admin-modal-head,
+.account-modal-sections {
+    flex-shrink: 0;
+}
+
+#adminCouponModal .admin-modal-body {
+    overflow-y: auto;
+}
+
+.account-modal-sections {
+    display: flex;
+    gap: 0.5rem;
+    padding: 0.75rem 1.5rem;
+    border-bottom: 1px solid var(--line);
+}
+
+.account-modal-section {
+    padding: 0.55rem 0.8rem;
+    border: 1px solid transparent;
+    border-radius: 9px;
+    background: transparent;
+    color: var(--ink-soft);
+    font: inherit;
+    font-size: 0.85rem;
+    font-weight: 600;
+    cursor: pointer;
+}
+
+.account-modal-section.active {
+    background: rgba(99, 102, 241, 0.1);
+    color: var(--brand-a);
+    border-color: rgba(99, 102, 241, 0.25);
+}
+
+.coupon-help {
+    margin: 0 0 1rem;
+    color: var(--ink-soft);
+    font-size: 0.85rem;
+    line-height: 1.5;
+}
+
 .coupon-form {
     margin-bottom: 1.25rem;
 }

@@ -214,6 +214,11 @@ const refs = {
     couponModalTitle: document.getElementById('adminCouponModalTitle'),
     couponModalSubtitle: document.getElementById('adminCouponModalSubtitle'),
     couponModalCloseBtn: document.getElementById('adminCouponModalCloseBtn'),
+    accountModalBody: document.getElementById('adminAccountModalBody'),
+    accountDetailsTab: document.getElementById('adminAccountDetailsTab'),
+    accountDiscountTab: document.getElementById('adminAccountDiscountTab'),
+    accountDetailsPane: document.getElementById('adminAccountDetailsPane'),
+    accountDiscountPane: document.getElementById('adminAccountDiscountPane'),
     couponForm: document.getElementById('adminCouponForm'),
     couponCodeInput: document.getElementById('adminCouponCodeInput'),
     couponPercentInput: document.getElementById('adminCouponPercentInput'),
@@ -2221,6 +2226,8 @@ function bindEvents() {
     refs.enterpriseCredentialResult?.addEventListener('click', handleCredentialResultClick);
     refs.enterpriseTableBody?.addEventListener('click', handleEnterpriseTableActionClick);
     refs.couponModalCloseBtn?.addEventListener('click', closeCouponModal);
+    refs.accountDetailsTab?.addEventListener('click', () => setAccountModalSection('details'));
+    refs.accountDiscountTab?.addEventListener('click', () => setAccountModalSection('discounts'));
     refs.couponModal?.addEventListener('click', (event) => {
         if (event.target === refs.couponModal) closeCouponModal();
     });
@@ -3828,9 +3835,14 @@ function renderEnterpriseTable() {
                 </td>
                 <td>${escapeHtml(formatDateTime(account.created_at))}</td>
                 <td>
+                    <div class="row-actions">
                     <button type="button" class="table-btn" data-action="manage-coupons"
                         data-org-id="${escapeHtml(String(account.organization_id))}"
                         data-company="${escapeHtml(companyName)}">Manage</button>
+                    <button type="button" class="table-btn" data-action="discount-codes"
+                        data-org-id="${escapeHtml(String(account.organization_id))}"
+                        data-company="${escapeHtml(companyName)}">Discount codes</button>
+                    </div>
                 </td>
             </tr>
         `;
@@ -6111,11 +6123,23 @@ const COUPON_APPLIES_LABELS = {
 };
 
 async function handleEnterpriseTableActionClick(event) {
-    const button = event.target.closest('[data-action="manage-coupons"]');
+    const button = event.target.closest('[data-action="manage-coupons"], [data-action="discount-codes"]');
     if (!button || button.disabled || state.enterpriseLoading) return;
     const orgId = Number(button.dataset.orgId || 0);
     if (!Number.isFinite(orgId) || orgId <= 0) return;
-    openCouponModal(orgId, String(button.dataset.company || 'this account'));
+    await openCouponModal(orgId, String(button.dataset.company || 'this account'),
+        button.dataset.action === 'discount-codes' ? 'discounts' : 'details');
+}
+
+function setAccountModalSection(section) {
+    const discounts = section === 'discounts';
+    if (refs.accountModalBody) refs.accountModalBody.scrollTop = 0;
+    if (refs.accountDetailsPane) refs.accountDetailsPane.hidden = discounts;
+    if (refs.accountDiscountPane) refs.accountDiscountPane.hidden = !discounts;
+    [[refs.accountDetailsTab, !discounts], [refs.accountDiscountTab, discounts]].forEach(([button, active]) => {
+        button?.classList.toggle('active', active);
+        button?.setAttribute('aria-pressed', String(active));
+    });
 }
 
 function setCouponFormError(message) {
@@ -6129,7 +6153,7 @@ function setCouponFormError(message) {
     refs.couponFormError.hidden = false;
 }
 
-async function openCouponModal(orgId, company) {
+async function openCouponModal(orgId, company, section = 'details') {
     if (!canAccessSection('enterprise')) return;
     state.couponOrg = { id: orgId, company };
     state.couponList = [];
@@ -6144,7 +6168,9 @@ async function openCouponModal(orgId, company) {
     }
     renderCouponTableMessage('Loading discount codes...');
     if (refs.couponModal) refs.couponModal.hidden = false;
+    setAccountModalSection(section);
     document.body.classList.add('admin-modal-open');
+    (section === 'discounts' ? refs.accountDiscountTab : refs.accountDetailsTab)?.focus();
     await Promise.all([loadAccountDetails(), loadCoupons()]);
 }
 

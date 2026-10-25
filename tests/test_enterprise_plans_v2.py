@@ -1,10 +1,10 @@
 """The 2026-10-22 B2B pricing model: plan catalog, open files + grace, effective limits,
 tier features, the shared AI-paused gate, the currency-region rule, yearly billing, the
-coupon cap and the schema patch.
+coupon discounts and the schema patch.
 
 Each test pins a rule whose failure costs money or locks a customer out: an expired trial
 that keeps spending AI, an org outside India buying at the INR price, a close→add→reopen
-loophole, a 100%-off coupon, a lapsed org keeping its Branch Packs.
+loophole, a fully covered purchase failing to activate, a lapsed org keeping its Branch Packs.
 """
 
 from datetime import datetime, timedelta
@@ -747,11 +747,29 @@ def test_seat_limit_uses_effective_limits(db):
 
 
 # ---------------------------------------------------------------------------
-# Coupon cap
+# Coupon discounts
 # ---------------------------------------------------------------------------
 
-def test_coupon_cap_at_creation_and_application():
-    assert coupons.max_percent_off() == Decimal("15")
+def test_coupon_supports_up_to_100_percent_by_default():
+    assert coupons.max_percent_off() == Decimal("100")
+    assert coupons.validate_percent_off_for_admin("100") == Decimal("100")
+    assert coupons.validate_percent_off_for_admin("99.99") == Decimal("99.99")
+    assert coupons.validate_percent_off_for_admin("1") == Decimal("1")
+    assert coupons.effective_percent_off(Decimal("100")) == Decimal("100")
+    assert coupons.compute_discounted_amount_paise(100_000, Decimal("100")) == 0
+    assert coupons.compute_discounted_amount_paise(100_000, Decimal("50")) == 50_000
+    assert coupons.compute_discounted_amount_paise(100_000, Decimal("99.99")) == 10
+
+
+@pytest.mark.parametrize("percent", ("0", "0.999", "-1", "100.001", "101", "150", "NaN", "Infinity", "-Infinity", "abc", None))
+def test_admin_coupon_percentage_rejects_invalid_input(percent):
+    with pytest.raises(HTTPException) as exc:
+        coupons.validate_percent_off_for_admin(percent)
+    assert exc.value.status_code == 400
+
+
+def test_explicit_coupon_cap_at_creation_and_application(monkeypatch):
+    monkeypatch.setattr(coupons, "MAX_PERCENT_OFF", Decimal("15"))
     assert coupons.validate_percent_off_for_admin("15") == Decimal("15")
     assert coupons.validate_percent_off_for_admin(10) == Decimal("10")
     for too_much in ("15.01", 20, "100", 150):
@@ -768,7 +786,21 @@ def test_coupon_cap_at_creation_and_application():
     assert coupons.parse_percent_off("100") == Decimal("100")
 
 
-def test_checkout_quote_applies_and_reports_the_capped_discount():
+@pytest.mark.parametrize("currency", ("INR", "USD", "GBP", "CAD", "AUD"))
+@pytest.mark.parametrize("billing_cycle", ("monthly", "yearly"))
+def test_checkout_quote_reports_fully_covered_purchase(currency, billing_cycle, monkeypatch):
+    monkeypatch.setattr(billing, "YEARLY_ENABLED", True)
+    quote = billing.checkout_quote("starter", currency, discount_percent=Decimal("100"), billing_cycle=billing_cycle)
+    assert quote["discount_percent"] == 100.0
+    assert quote["list_minor"] > 0
+    assert quote["discount_minor"] == quote["list_minor"]
+    assert quote["subtotal_minor"] == 0
+    assert quote["tax_minor"] == 0
+    assert quote["total_minor"] == 0
+
+
+def test_checkout_quote_applies_and_reports_an_explicit_lower_cap(monkeypatch):
+    monkeypatch.setattr(coupons, "MAX_PERCENT_OFF", Decimal("15"))
     quote = billing.checkout_quote("starter", "INR", discount_percent=Decimal("100"))
     assert quote["discount_percent"] == 15.0
     assert quote["subtotal_minor"] == 127_415   # ₹1,499 − 15%, half-up
@@ -777,14 +809,35 @@ def test_checkout_quote_applies_and_reports_the_capped_discount():
 
 
 def test_coupon_cap_env_parsing(monkeypatch):
+    monkeypatch.delenv("ENTERPRISE_COUPON_MAX_PERCENT", raising=False)
+    assert coupons._max_percent_from_env() == Decimal("100")
     monkeypatch.setenv("ENTERPRISE_COUPON_MAX_PERCENT", "25")
     assert coupons._max_percent_from_env() == Decimal("25")
-    for junk in ("0", "101", "abc", "-3"):
+    monkeypatch.setenv("ENTERPRISE_COUPON_MAX_PERCENT", "100")
+    assert coupons._max_percent_from_env() == Decimal("100")
+    for junk in ("", "0", "101", "abc", "-3", "NaN", "Infinity"):
         monkeypatch.setenv("ENTERPRISE_COUPON_MAX_PERCENT", junk)
-        assert coupons._max_percent_from_env() == Decimal("15")
+        assert coupons._max_percent_from_env() == Decimal("100")
 
 
-def test_coupon_serialize_flags_codes_above_the_cap(db):
+def test_coupon_serialize_reports_the_full_discount(db):
+    row = models.EnterpriseCoupon(
+        organization_id=db.info["org_id"], code="LAUNCH100", percent_off=Decimal("100"),
+        is_active=True, applies_to="all",
+    )
+    db.add(row)
+    db.commit()
+    out = coupons.serialize(db, row)
+    assert out["percent_off"] == 100.0
+    assert out["percent_display"] == "100%"
+    assert out["effective_percent_off"] == 100.0
+    assert out["effective_percent_display"] == "100%"
+    assert out["max_percent_off"] == 100.0
+    assert out["above_cap"] is False
+
+
+def test_coupon_serialize_flags_codes_above_an_explicit_cap(db, monkeypatch):
+    monkeypatch.setattr(coupons, "MAX_PERCENT_OFF", Decimal("15"))
     row = models.EnterpriseCoupon(
         organization_id=db.info["org_id"], code="LAUNCH100", percent_off=Decimal("100"),
         is_active=True, applies_to="all",

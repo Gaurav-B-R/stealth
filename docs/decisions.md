@@ -119,7 +119,7 @@ Status legend:
 
     A plan change inside a live period only tops the allowance up to the new tier.
   - **Monthly AI reading allowance.** Free upload reading uses one read per 15 pages, from a per-plan allowance stored on the wallet. If the allowance is used up, the document is stored "not read", with a "Read now" action for later. A paid document check never uses reads.
-  - **Coupons are capped** at `ENTERPRISE_COUPON_MAX_PERCENT` (15). Admins can't create a code above the cap, and a legacy code above it is applied at the cap.
+  - **Account discounts support 1–100%** (updated by the owner, 2026-10-25). Admin Console → Enterprise Accounts → Discount codes creates an account-specific code for plan billing, credit top-ups, or both. A 100% discount activates the plan or grants the top-up without a payment gateway. `ENTERPRISE_COUPON_MAX_PERCENT` defaults to 100; an explicitly configured lower cap still limits creation and checkout.
   - **One source of truth for public prices.** `GET /api/enterprise/public/plans` and server-rendered `{{ENT_*}}` tokens in the static marketing pages both come from `money.PRICE_BOOK` and `billing.PLANS`.
 - Alternatives rejected:
   - *Keep the 2026-08 allowances and only raise action prices.* Rejected: the included credits were still worth less than they cost to serve. The allowance was the loss, not the action price.

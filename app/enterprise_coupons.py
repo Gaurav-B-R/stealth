@@ -11,8 +11,9 @@ Redemptions are counted live from *verified* payment rows that carry the code
 (EnterpriseCreditPayment / EnterpriseSubscriptionPayment), so there is no
 mutable counter to keep in sync.
 
-Every discount is capped at MAX_PERCENT_OFF (ENTERPRISE_COUPON_MAX_PERCENT, default 15):
-admins cannot save a code above it, and a legacy code above it is applied at the cap.
+Discount codes support 1–100% off, including fully covered purchases. Deployments may
+set a lower maximum with ENTERPRISE_COUPON_MAX_PERCENT; saved and applied discounts
+both respect that explicit limit.
 """
 from __future__ import annotations
 
@@ -40,7 +41,7 @@ logger = logging.getLogger(__name__)
 
 def _max_percent_from_env() -> Decimal:
     raw = os.getenv("ENTERPRISE_COUPON_MAX_PERCENT", "").strip()
-    default = Decimal("15")
+    default = Decimal("100")
     if not raw:
         return default
     try:
@@ -52,18 +53,8 @@ def _max_percent_from_env() -> Decimal:
     return value.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
 
 
-# The most any coupon may take off, in percent (owner decision, 2026-10-22: 15).
-#
-# Two live 100%-off codes were found in production while the B2B prices were re-cut. On a
-# plan sold below ₹1,500 a deep percentage discount is not a promotion, it is the product
-# given away — and because a recurring mandate is created for the DISCOUNTED amount, a
-# launch coupon quietly becomes the permanent price. So the cap is enforced twice:
-#   * at CREATION/EDIT (validate_percent_off_for_admin): an admin cannot save a code above
-#     it — a 400 that names the cap, so nobody believes they issued 50% off;
-#   * at APPLICATION (effective_percent_off / compute_discounted_amount_paise): a code
-#     that already exists above the cap is honoured AT the cap, never more, and logged.
-#     Rejecting it instead would break checkout for a customer holding a code we issued.
-# ENTERPRISE_COUPON_MAX_PERCENT=100 restores the uncapped behaviour.
+# Admins can issue a fully covered purchase by default. An explicitly configured lower
+# cap still applies at creation and checkout so a deployment's policy stays consistent.
 MAX_PERCENT_OFF = _max_percent_from_env()
 
 
@@ -89,14 +80,12 @@ def format_percent_off(percent_off: Decimal | int | float) -> str:
 def parse_percent_off(raw_value: Any) -> Decimal:
     """Coerce a percent discount into the allowed 1–100 band.
 
-    Out-of-range numbers clamp (150 → 100, 0.5 → 1) rather than raise, so both
-    admin input and legacy stored rows normalize the same way; only non-numeric
-    values are a 400.
+    Legacy stored values outside the range clamp (150 → 100, 0.5 → 1); invalid
+    non-numeric values are a 400. New admin input uses strict validation below.
 
-    This is the STORED value's normal form and deliberately ignores the business cap
-    (MAX_PERCENT_OFF): the admin console must still be able to show that a legacy row says
-    100%. Use validate_percent_off_for_admin when SAVING a code and effective_percent_off
-    when APPLYING one."""
+    This stored value's normal form ignores an explicitly configured lower cap so the
+    console can still show the saved percentage. Use validate_percent_off_for_admin
+    when saving a code and effective_percent_off when applying one."""
     try:
         value = Decimal(str(raw_value)).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
     except (InvalidOperation, ValueError, TypeError):
@@ -107,19 +96,22 @@ def parse_percent_off(raw_value: Any) -> Decimal:
 
 
 def validate_percent_off_for_admin(raw_value: Any) -> Decimal:
-    """Parse a percent an admin is CREATING or EDITING a code with, refusing anything above
-    the cap with a 400 (rather than silently saving a smaller number than they typed)."""
-    value = parse_percent_off(raw_value)
+    """Validate new admin input without silently clamping or rounding it into range."""
+    try:
+        value = Decimal(str(raw_value))
+    except (InvalidOperation, ValueError, TypeError):
+        raise HTTPException(status_code=400, detail="Discount percentage is invalid.")
+    if not value.is_finite():
+        raise HTTPException(status_code=400, detail="Discount percentage is invalid.")
     cap = max_percent_off()
-    if value > cap:
+    if value < Decimal("1") or value > cap:
         raise HTTPException(
             status_code=400,
             detail=(
-                f"Discount codes can be at most {format_percent_off(cap)}% off. "
-                f"Use {format_percent_off(cap)} or less."
+                f"Discount codes must be between 1 and {format_percent_off(cap)}% off."
             ),
         )
-    return value
+    return value.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
 
 
 def effective_percent_off(raw_value: Any) -> Decimal:

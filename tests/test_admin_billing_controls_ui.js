@@ -147,7 +147,8 @@ function setup({ fetchImpl, grant = access(), confirmAnswer = true } = {}) {
     vm.runInContext(`${source}
 ;globalThis.ui = { state, refs, applyAdminAccess, adminFetch, renderAccountDetails, loadAccountDetails,
     billingMajorToMinor, readOfflinePaymentForm, readOverridesForm, buildBillingControlsBlock, buildPlanPaymentsBlock,
-    renderCouponTable };`, context);
+    renderCouponTable, renderEnterpriseTable, handleEnterpriseTableActionClick, openCouponModal,
+    setAccountModalSection, handleCouponCreateSubmit };`, context);
     context.__confirm = async (message, opts) => {
         confirms.push({ message, opts: plain(opts || {}) });
         return confirmAnswer;
@@ -185,6 +186,64 @@ function fill(app, values) {
 const writes = (app) => app.requests.filter((r) => r.method !== 'GET');
 
 // ---------------------------------------------------------------------------
+
+test('enterprise accounts expose a direct Discount codes action with the account identity', () => {
+    const app = setup();
+    app.state.enterpriseAccounts = [{ organization_id: ORG_ID, company_name: 'Acme <Visas>' }];
+    app.renderEnterpriseTable();
+    assert.match(app.refs.enterpriseTableBody.innerHTML,
+        /data-action="discount-codes"\s+data-org-id="42"\s+data-company="Acme &lt;Visas&gt;">Discount codes<\/button>/);
+});
+
+test('Discount codes opens its own section while account details are still loading', async () => {
+    let finishDetails;
+    const app = setup({ fetchImpl: (url) => {
+        if (url === DETAILS_URL) return new Promise((resolve) => { finishDetails = () => resolve(jsonResponse(details())); });
+        return jsonResponse({ coupons: [] });
+    } });
+    const loading = app.handleEnterpriseTableActionClick({ target: { closest: () => ({
+        disabled: false, dataset: { action: 'discount-codes', orgId: String(ORG_ID), company: 'Acme Visas' }
+    }) } });
+    assert.equal(app.refs.couponModal.hidden, false);
+    assert.equal(app.refs.accountDiscountPane.hidden, false);
+    assert.equal(app.refs.accountDetailsPane.hidden, true);
+    assert.equal(app.refs.accountDiscountTab.getAttribute('aria-pressed'), 'true');
+    assert.match(app.refs.accountDetails.innerHTML, /Loading account details/);
+    // Let the protection check finish, then complete the unrelated details request.
+    await new Promise((resolve) => setImmediate(resolve));
+    finishDetails();
+    await loading;
+    assert.equal(app.refs.accountDiscountPane.hidden, false, 'loading details must not displace the discount form');
+    app.refs.accountModalBody.scrollTop = 500;
+    app.setAccountModalSection('details');
+    assert.equal(app.refs.accountModalBody.scrollTop, 0, 'switching sections starts at its first field');
+    assert.equal(app.refs.accountDetailsPane.hidden, false);
+    assert.equal(app.refs.accountDiscountPane.hidden, true);
+    assert.equal(app.refs.accountDetailsTab.getAttribute('aria-pressed'), 'true');
+});
+
+test('opening Manage returns to account details after viewing discounts', async () => {
+    const app = setup({ fetchImpl: server() });
+    app.setAccountModalSection('discounts');
+    await app.openCouponModal(ORG_ID, 'Acme Visas');
+    assert.equal(app.refs.accountDetailsPane.hidden, false);
+    assert.equal(app.refs.accountDiscountPane.hidden, true);
+});
+
+test('the account discount form sends 100% unchanged and refreshes its code list', async () => {
+    const app = setup({ fetchImpl: (url, options = {}) => {
+        if (options.method === 'POST') return jsonResponse({ coupon: { code: 'FREE100', percent_off: 100 } });
+        return jsonResponse({ coupons: [{ id: 1, code: 'FREE100', percent_off: 100, is_active: true }] });
+    } });
+    fill(app, { adminCouponCodeInput: 'FREE100', adminCouponPercentInput: '100',
+        adminCouponAppliesInput: 'billing', adminCouponMaxInput: '1', adminCouponNoteInput: '' });
+    await app.handleCouponCreateSubmit({ preventDefault() {} });
+    assert.deepEqual(writes(app), [{ url: `${BASE}/coupons`, method: 'POST', body: {
+        code: 'FREE100', percent_off: 100, applies_to: 'billing', is_active: true, max_redemptions: 1, note: null
+    } }]);
+    assert.match(app.refs.couponTableBody.innerHTML, /FREE100/);
+    assert.match(app.refs.couponTableBody.innerHTML, /100%/);
+});
 
 test('billingMajorToMinor converts once, in the currency\'s own minor unit, and refuses typos', () => {
     const app = setup();

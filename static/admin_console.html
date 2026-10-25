@@ -7,7 +7,7 @@
     <title>Rilono Admin Console</title>
     <meta name="robots" content="noindex,nofollow">
     <link rel="icon" type="image/png" href="/static/logo.png">
-    <link rel="stylesheet" href="/static/admin_console.css?v=20261024a">
+    <link rel="stylesheet" href="/static/admin_console.css?v=20261025a">
     <script src="https://challenges.cloudflare.com/turnstile/v0/api.js?render=explicit" async defer></script>
 </head>
 
@@ -789,12 +789,19 @@
                 <button type="button" id="adminCouponModalCloseBtn" class="admin-modal-close" aria-label="Close">&times;</button>
             </div>
 
-            <div class="admin-modal-body">
-                <div id="adminAccountDetails" class="account-details">
-                    <p class="account-details-status">Loading account details…</p>
-                </div>
-
+            <div class="account-modal-sections" role="group" aria-label="Account sections">
+                <button type="button" id="adminAccountDetailsTab" class="account-modal-section active" aria-controls="adminAccountDetailsPane" aria-pressed="true">Account details</button>
+                <button type="button" id="adminAccountDiscountTab" class="account-modal-section" aria-controls="adminAccountDiscountPane" aria-pressed="false">Discount codes</button>
+            </div>
+            <div id="adminAccountModalBody" class="admin-modal-body">
+                <section id="adminAccountDetailsPane" aria-labelledby="adminAccountDetailsTab">
+                    <div id="adminAccountDetails" class="account-details">
+                        <p class="account-details-status">Loading account details…</p>
+                    </div>
+                </section>
+                <section id="adminAccountDiscountPane" aria-labelledby="adminAccountDiscountTab" hidden>
                 <h4 class="account-section-title">Discount codes</h4>
+                <p id="adminCouponHelp" class="coupon-help">Create a code for this account with 1–100% off. A 100% code covers the full price of the selected plan or credit top-up.</p>
                 <form id="adminCouponForm" data-admin-write="enterprise" class="coupon-form">
                     <div class="coupon-form-grid">
                         <label class="coupon-field">
@@ -803,7 +810,7 @@
                         </label>
                         <label class="coupon-field coupon-field-narrow">
                             <span>% off</span>
-                            <input type="number" id="adminCouponPercentInput" placeholder="10" min="1" max="100" step="0.01" required>
+                            <input type="number" id="adminCouponPercentInput" placeholder="10" min="1" max="100" step="0.01" aria-describedby="adminCouponHelp" required>
                         </label>
                         <label class="coupon-field">
                             <span>Applies to</span>
@@ -845,6 +852,7 @@
                         </tbody>
                     </table>
                 </div>
+                </section>
             </div>
         </div>
     </div>
@@ -890,7 +898,7 @@
         </div>
     </div>
 
-    <script src="/static/admin_console.js?v=20261024a"></script>
+    <script src="/static/admin_console.js?v=20261025a"></script>
 </body>
 
 </html>
