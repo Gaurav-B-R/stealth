@@ -55,6 +55,9 @@ build/
 # Scratch working files (banner candidates, crops, sources — never served)
 /tmp/
 
+# Local-only working files, generated media, and task deliverables
+/local_working/
+
 # Local sandbox document storage (rilono-local preview / e2e sandbox)
 _docs_local/
 
